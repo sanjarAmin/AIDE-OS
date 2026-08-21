@@ -31,13 +31,14 @@ emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu swiftshader_in
 :core:common         Result types, dispatchers, logging
 :core:fs             Project storage and the file tree
 :core:ui             Design system, theme, adaptive phone/tablet layout
+:engine:api          The BuildSystem contract; knows nothing of any toolchain
 :toolchain:native    aapt2 in jniLibs, and the harness that execs it
 :spike:kotlinc       Throwaway. Proves kotlinc + Compose run on ART.
 :spike:jvmtools      Throwaway. Proves ECJ, D8 and apksig run on ART.
 tools/               Scripts that produce the toolchains, and their FINDINGS.
 ```
 
-`docs/PLAN.md` lists 22 modules. Five exist. Do not create the rest
+`docs/PLAN.md` lists 22 modules. Six exist. Do not create the rest
 speculatively — each arrives with the milestone that needs it.
 
 ## Conventions

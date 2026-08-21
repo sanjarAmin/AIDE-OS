@@ -100,10 +100,10 @@ Convert `:app` into a thin Compose shell over a multi-module Gradle build. Add t
 :lsp:kotlin             Kotlin Analysis API
 :lsp:clangd             clangd over pipe transport
 
-:build:api              BuildSystem interface, BuildRequest/BuildResult, progress event stream
-:build:fast             ECJ/kotlinc -> D8 -> aapt2 -> apksig -> PackageInstaller
-:build:gradle           Gradle Tooling API bridge into the rootfs
-:build:deps             Maven resolution (maven-resolver), AAR extraction, artifact cache
+:engine:api             BuildSystem interface, BuildRequest/BuildResult, progress event stream
+:engine:fast            ECJ/kotlinc -> D8 -> aapt2 -> apksig -> PackageInstaller
+:engine:gradle          Gradle Tooling API bridge into the rootfs
+:engine:deps            Maven resolution (maven-resolver), AAR extraction, artifact cache
 
 :toolchain:native       jniLibs packaging for aapt2/clang/lld, exec harness, W^X handling
 :toolchain:manager      Component download, checksum verification, install, version pinning
@@ -283,4 +283,7 @@ and committed. The plan is otherwise as originally written.
    recorded inline.
 8. **Immediate Next Steps** — rewritten to reflect what is done, plus a new
    prerequisite: verify ECJ, D8/R8 and apksig actually run on ART before
-   designing `:build:fast` around the assumption that they do.
+   designing the fast engine around the assumption that they do. Done — R2b.
+9. **`:build:*` renamed `:engine:*`** — a source directory named `build/` is the
+   root project's own Gradle output directory. `gradlew clean` would delete it
+   and `.gitignore` would hide it. Naming only; the plan's structure is intact.

@@ -31,6 +31,11 @@ include(":core:common")
 include(":core:fs")
 include(":core:ui")
 
+// The build engine. Named :engine rather than the plan's :build because a
+// source directory called build/ is the root project's Gradle output directory:
+// gradlew clean would delete it and .gitignore would hide it.
+include(":engine:api")
+
 // Bundled native executables (aapt2 today, clang later) and the exec harness.
 include(":toolchain:native")
 
