@@ -15,6 +15,7 @@
             <option value="$PROJECT_DIR$/core/fs" />
             <option value="$PROJECT_DIR$/core/ui" />
             <option value="$PROJECT_DIR$/spike" />
+            <option value="$PROJECT_DIR$/spike/jvmtools" />
             <option value="$PROJECT_DIR$/spike/kotlinc" />
             <option value="$PROJECT_DIR$/toolchain" />
             <option value="$PROJECT_DIR$/toolchain/native" />

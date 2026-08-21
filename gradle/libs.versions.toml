@@ -9,6 +9,16 @@ lifecycle = "2.11.0"
 navigation = "2.9.8"
 composeBom = "2026.02.01"
 
+# Build engine. r8 and apksig track the AGP line; they are the same code the
+# desktop toolchain runs, just executed on ART.
+# 3.38.0 is the newest ECJ that runs on Android. 3.40.0 added a source-level
+# check built on java.lang.Runtime.Version, which Android has no equivalent of
+# and which cannot be shimmed -- the platform forbids defining classes in
+# java.*. See tools/ecj/FINDINGS.md.
+ecj = "3.38.0"
+r8 = "9.3.19"
+apksig = "9.3.1"
+
 # Third party
 koin = "4.1.0"
 coroutines = "1.10.2"
@@ -38,6 +48,10 @@ androidx-compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-te
 androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
 androidx-compose-material3-window-size = { group = "androidx.compose.material3", name = "material3-window-size-class" }
 androidx-compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
+
+ecj = { group = "org.eclipse.jdt", name = "ecj", version.ref = "ecj" }
+r8 = { group = "com.android.tools", name = "r8", version.ref = "r8" }
+apksig = { group = "com.android.tools.build", name = "apksig", version.ref = "apksig" }
 
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 

@@ -36,3 +36,6 @@ include(":toolchain:native")
 
 // Spike R2 -- Kotlin compiler + Compose plugin on ART. Not part of the app.
 include(":spike:kotlinc")
+
+// Spike R2b -- ECJ, D8 and apksig on ART. Not part of the app.
+include(":spike:jvmtools")

@@ -18,6 +18,7 @@ local.properties
 /.idea/workspace.xml
 /.idea/navEditor.xml
 /.idea/assetWizardSettings.xml
+/.idea/deviceManager.xml
 /.idea/deploymentTargetSelector.xml
 
 # Spike inputs: ~100 MB of third-party jars, and the dex archive built from
@@ -26,3 +27,4 @@ local.properties
 # ignored: they take an AOSP checkout and a full build to reproduce.
 /spike/kotlinc/src/androidTest/assets/*.jar
 /spike/kotlinc/src/androidTest/assets/*.zip
+/spike/jvmtools/src/androidTest/assets/*.jar

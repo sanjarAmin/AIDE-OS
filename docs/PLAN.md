@@ -13,6 +13,7 @@
 |---|---|---|
 | ✅ | Spike R1 — aapt2 on-device | Resolved. `tools/aapt2/FINDINGS.md` |
 | ✅ | Spike R2 — kotlinc + Compose on ART | Resolved. `tools/kotlinc/FINDINGS.md` |
+| ✅ | Spike R2b — ECJ, D8, apksig on ART | Resolved. `tools/ecj/FINDINGS.md` |
 | ✅ | License | GPLv3 |
 | 🟡 | **M0** Skeleton | Built: `:app`, `:core:{common,fs,ui}`, `:toolchain:native`. 5 of 22 planned modules. |
 | ⬜ | **M1** Editor | Not started |
@@ -250,9 +251,11 @@ M0–M5 is the real v1.0. Everything from M6 on is expansion.
 4. **M0 skeleton** — module structure, version catalog, Compose shell. Substantially done.
 5. **M2** — the make-or-break milestone, and the current target. Both risks that gated it are closed.
 
-Before building `:build:fast`, verify the remaining "pure JVM, therefore fine on
-ART" assumptions — ECJ, D8/R8 and apksig. That assumption is exactly what cost
-spike R2 a full session, and it is far cheaper to test than to design around.
+~~Before building `:build:fast`, verify the remaining "pure JVM, therefore fine
+on ART" assumptions — ECJ, D8/R8 and apksig.~~ Done: spike R2b. All three run,
+but not for free — ECJ is pinned to 3.38.0, needs a `SourceVersion` runtime
+shim, and needs `platform-stubs.jar` on the compile classpath before it will
+accept a lambda. `tools/ecj/FINDINGS.md`.
 
 
 ---
