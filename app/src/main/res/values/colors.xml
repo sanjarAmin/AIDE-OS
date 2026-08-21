@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Painted behind the window before Compose draws, so the cold-start frame
+         matches the theme instead of flashing the opposite one. -->
+    <color name="aide_window_background">#FFFFFFFF</color>
+</resources>
