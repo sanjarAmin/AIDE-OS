@@ -35,6 +35,7 @@ include(":core:ui")
 // source directory called build/ is the root project's Gradle output directory:
 // gradlew clean would delete it and .gitignore would hide it.
 include(":engine:api")
+include(":engine:fast")
 
 // Bundled native executables (aapt2 today, clang later) and the exec harness.
 include(":toolchain:native")

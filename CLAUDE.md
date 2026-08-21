@@ -21,7 +21,7 @@ The SDK's tools are not on `PATH` either — `~/Android/Sdk/platform-tools/adb`,
 x86_64) and boots headless in about 40 seconds:
 
 ```sh
-emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
+emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu host
 ```
 
 ## Layout

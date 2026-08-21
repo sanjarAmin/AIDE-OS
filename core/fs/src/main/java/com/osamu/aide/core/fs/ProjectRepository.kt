@@ -61,6 +61,10 @@ class FileProjectRepository(
                 lastOpenedAt = System.currentTimeMillis(),
             )
             writeDescriptor(project)
+            // A project with a descriptor and no sources is not something the
+            // user can do anything with, and not something the build engine can
+            // act on. Creating one means creating something that builds.
+            ProjectTemplate.write(project)
             project
         }
     }

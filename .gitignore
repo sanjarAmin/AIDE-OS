@@ -28,3 +28,4 @@ local.properties
 /spike/kotlinc/src/androidTest/assets/*.jar
 /spike/kotlinc/src/androidTest/assets/*.zip
 /spike/jvmtools/src/androidTest/assets/*.jar
+/engine/fast/src/androidTest/assets/android.jar
