@@ -60,6 +60,11 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
 
+    // Test-only. The engine is handed an android.jar and does not care where it
+    // came from; this is here so one test can prove the two halves compose --
+    // that a downloaded platform really drives a build.
+    androidTestImplementation(project(":toolchain:manager"))
+
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.kotlinx.coroutines.test)

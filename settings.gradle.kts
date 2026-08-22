@@ -40,6 +40,9 @@ include(":engine:fast")
 // Bundled native executables (aapt2 today, clang later) and the exec harness.
 include(":toolchain:native")
 
+// Components too large to bundle: downloaded, verified, installed on device.
+include(":toolchain:manager")
+
 // Spike R2 -- Kotlin compiler + Compose plugin on ART. Not part of the app.
 include(":spike:kotlinc")
 

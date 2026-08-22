@@ -15,9 +15,9 @@
 | ✅ | Spike R2 — kotlinc + Compose on ART | Resolved. `tools/kotlinc/FINDINGS.md` |
 | ✅ | Spike R2b — ECJ, D8, apksig on ART | Resolved. `tools/ecj/FINDINGS.md` |
 | ✅ | License | GPLv3 |
-| 🟡 | **M0** Skeleton | Built: `:app`, `:core:{common,fs,ui}`, `:toolchain:native`, `:engine:{api,fast}`. 7 of 22 planned modules. |
+| 🟡 | **M0** Skeleton | Built: `:app`, `:core:{common,fs,ui}`, `:toolchain:{native,manager}`, `:engine:{api,fast}`. 8 of 22 planned modules. |
 | ⬜ | **M1** Editor | Not started |
-| 🟡 | **M2** First APK ⭐ | **Current target.** Source to installed app works end to end; one thing stands between it and done. |
+| 🟢 | **M2** First APK ⭐ | **The thesis holds.** Source to installed app works end to end on a device, from a platform the device downloaded itself. What remains is a screen to drive it from. |
 
 **M2 in detail.** All six stages exist in `:engine:fast` and run on a device:
 aapt2 compile → aapt2 link → ECJ → D8 → package → apksig, behind
@@ -28,12 +28,15 @@ platform accepts into an install session, and that `pm install` installs with
 its launcher activity intact — in well under the 10 s budget, which is an
 assertion rather than an aspiration.
 
-What is left before M2 can be called done:
+`:toolchain:manager` closes the last gap: it downloads the pinned Android SDK
+platform from Google's repository, verifies its SHA-1, and extracts
+`android.jar` into app storage, gated on the user accepting the Android SDK
+Terms. `DownloadedPlatformBuildTest` then builds a project against exactly that
+— nothing staged by hand.
 
-- **`:toolchain:manager`.** Nothing puts the 43 MB `android.jar` on a real
-  device; the tests stage a copy out of `androidTest/assets`, which is not in
-  git. This is the only thing standing between the pipeline and a device that is
-  not this developer's, and it is the next thing to build.
+What M2 does not yet have is a way for a person to do any of it: there is no
+build screen, because there is no editor. That is M1, and it is what makes the
+engine reachable rather than merely correct.
 
 `engine/fast/FINDINGS.md` records what the pipeline cost to assemble — the
 install-time constraints that no stage reports, and what is deliberately not

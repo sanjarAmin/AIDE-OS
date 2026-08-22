@@ -126,9 +126,12 @@ matrix in `docs/PLAN.md` is what settles that.
 
 ## 9. Things known missing
 
-- **Nothing puts `android.jar` on a real device.** The instrumented tests stage
-  a 43 MB copy out of `androidTest/assets`, which is not in git. `:toolchain:manager`
-  is the module that fixes this and it does not exist.
+- **The bundled tests stage `android.jar` by hand.** They read a 27 MB copy out
+  of `androidTest/assets`, which is not in git and only exists on a machine that
+  put it there. `:toolchain:manager` now delivers the real thing, and
+  `DownloadedPlatformBuildTest` builds a project with it -- but that test is
+  opt-in, so the everyday suite still depends on the staged copy. Keep it in
+  step with the pin in `ToolchainComponent.ANDROID_PLATFORM`.
 - **No incrementality.** `BuildWorkspace.prepare()` deletes the tree every
   build, deliberately: reusing a workspace from a cancelled build is how you get
   an APK containing the previous run's classes. Incrementality belongs at the
