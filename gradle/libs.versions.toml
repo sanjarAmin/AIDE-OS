@@ -19,6 +19,17 @@ ecj = "3.38.0"
 r8 = "9.3.19"
 apksig = "9.3.1"
 
+# Editor. Both are LGPL-2.1 and are consumed unmodified, as Maven artifacts;
+# see R6 in docs/PLAN.md for the obligation that imposes and the relink path.
+sora = "0.23.6"
+# Must be the group sora's language-treesitter binds to -- io.github.itsaky
+# publishes a differently-versioned build of the same project, and grammars from
+# one do not load against the core of the other. 4.3.2 also lifts sora's
+# transitive 4.3.1 so there is exactly one native core in the APK.
+treeSitter = "4.3.2"
+
+desugarJdkLibs = "2.1.5"
+
 # Third party
 koin = "4.1.0"
 coroutines = "1.10.2"
@@ -52,6 +63,19 @@ androidx-compose-material-icons-extended = { group = "androidx.compose.material"
 ecj = { group = "org.eclipse.jdt", name = "ecj", version.ref = "ecj" }
 r8 = { group = "com.android.tools", name = "r8", version.ref = "r8" }
 apksig = { group = "com.android.tools.build", name = "apksig", version.ref = "apksig" }
+
+desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugarJdkLibs" }
+
+sora-bom = { group = "io.github.Rosemoe.sora-editor", name = "bom", version.ref = "sora" }
+sora-editor = { group = "io.github.Rosemoe.sora-editor", name = "editor" }
+sora-language-treesitter = { group = "io.github.Rosemoe.sora-editor", name = "language-treesitter" }
+
+# The grammars are prebuilt native libraries; nothing here compiles tree-sitter.
+tree-sitter = { group = "com.itsaky.androidide.treesitter", name = "android-tree-sitter", version.ref = "treeSitter" }
+tree-sitter-java = { group = "com.itsaky.androidide.treesitter", name = "tree-sitter-java", version.ref = "treeSitter" }
+tree-sitter-kotlin = { group = "com.itsaky.androidide.treesitter", name = "tree-sitter-kotlin", version.ref = "treeSitter" }
+tree-sitter-xml = { group = "com.itsaky.androidide.treesitter", name = "tree-sitter-xml", version.ref = "treeSitter" }
+tree-sitter-json = { group = "com.itsaky.androidide.treesitter", name = "tree-sitter-json", version.ref = "treeSitter" }
 
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 

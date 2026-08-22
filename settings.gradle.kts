@@ -31,6 +31,9 @@ include(":core:common")
 include(":core:fs")
 include(":core:ui")
 
+// The code editor: sora-editor wrapped for Compose, plus tree-sitter grammars.
+include(":editor")
+
 // The build engine. Named :engine rather than the plan's :build because a
 // source directory called build/ is the root project's Gradle output directory:
 // gradlew clean would delete it and .gitignore would hide it.

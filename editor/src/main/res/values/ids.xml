@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Which document a CodeEditor currently holds. Kept as a view tag so the
+        Compose host can tell "the same file recomposed" from "a different file
+        opened" without owning state that outlives the view.
+    -->
+    <item name="aide_editor_document" type="id" />
+</resources>
