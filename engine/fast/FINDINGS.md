@@ -1,8 +1,8 @@
 # `:engine:fast` — what building an APK on the device actually costs
 
 Written while assembling the six-stage pipeline (aapt2 compile → aapt2 link →
-ECJ → D8 → package → apksig) and getting it to produce an archive the platform
-will install. Everything here was learned by hitting it. The toolchain-level
+ECJ → D8 → package → apksig) and getting the platform to install what it
+produced. Everything here was learned by hitting it. The toolchain-level
 findings live elsewhere and are not repeated: `tools/aapt2/FINDINGS.md` for the
 native binary and W^X, `tools/ecj/FINDINGS.md` for the compiler's three
 obstacles, `tools/kotlinc/FINDINGS.md` for the Kotlin front end.
@@ -76,7 +76,41 @@ offset, so an instant fixed in UTC lands on a different DOS date per device —
 and in any zone behind UTC, on a date before 1980, which zip cannot encode and
 the writer silently clamps.
 
-## 7. What the stages cost
+## 7. Installing: three separate walls, none of them the APK
+
+`REQUEST_INSTALL_PACKAGES` in the manifest is necessary and not sufficient. It
+is a *special* permission — not requested at run time, but toggled by the user
+in Settings — and an app installed from a file manager, F-Droid or a direct APK
+starts without it. Since those are AIDE-OS's distribution channels (R5 in
+`docs/PLAN.md`), the first install a user attempts will be refused. `ApkInstaller`
+checks `canRequestPackageInstalls()` and returns an intent to the right Settings
+page rather than reporting a failure.
+
+In a test the toggle cannot be granted the usual way; `appops set <pkg>
+REQUEST_INSTALL_PACKAGES allow` is how the platform's own tests do it.
+
+**`pm install` cannot read the app's own storage.** Staging the APK to
+`getExternalFilesDir()` and installing from there fails with an SELinux denial —
+`/storage` is FUSE-backed and system_server is denied any read of a fuse file.
+The tool says so and names the way round it: copy to `/data/local/tmp` first.
+The app cannot write there and shell cannot read the app's private cache, so
+the file takes two hops.
+
+**Package visibility hides the result.** From Android 11 an app cannot see
+packages it did not install, so `getPackageInfo` on the freshly installed
+package throws `NameNotFoundException` in a test that installed it through
+shell. The test APK declares `QUERY_ALL_PACKAGES`; the app needs no equivalent,
+because installing through `PackageInstaller` grants the installer visibility of
+what it installed.
+
+One test-harness trap worth writing down: `UiAutomation.executeShellCommand`
+passes the string to `Runtime.exec`, which tokenises on whitespace and does not
+honour quotes — so `sh -c '... 2>&1'` arrives as a dozen separate arguments and
+silently does nothing useful. It also returns stdout only, and `pm install`
+reports every refusal on stderr, so a failure arrives as an empty string.
+`executeShellCommandRwe` (API 31+) returns both.
+
+## 8. What the stages cost
 
 Measured on the `aideos_test` AVD (API 34, x86_64), template Java project,
 second build in the process so compiler class loading is already paid:
@@ -90,7 +124,7 @@ The budget is an assertion in `FastBuildSystemTest`, not an aspiration. The
 number above is an emulator on a desktop and is not a phone; the manual device
 matrix in `docs/PLAN.md` is what settles that.
 
-## 8. Things known missing
+## 9. Things known missing
 
 - **Nothing puts `android.jar` on a real device.** The instrumented tests stage
   a 43 MB copy out of `androidTest/assets`, which is not in git. `:toolchain:manager`
@@ -104,5 +138,3 @@ matrix in `docs/PLAN.md` is what settles that.
   by name rather than building one silently missing every Kotlin class.
 - **No dependencies.** No AAR, no Maven resolution, so no AndroidX. The project
   template uses only framework classes for exactly this reason.
-- **No install.** The pipeline stops at a signed APK; handing it to
-  `PackageInstaller` is not written.

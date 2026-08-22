@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        Test-only, and never merged into the app.
+
+        From Android 11 an app cannot see packages it did not install. The
+        install tests put the built APK on the device through `pm install`,
+        which makes shell the installer and not this process, so PackageManager
+        reports the package as not found without this. The app itself needs no
+        equivalent: installing through PackageInstaller grants the installer
+        visibility of what it installed.
+    -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+
+</manifest>

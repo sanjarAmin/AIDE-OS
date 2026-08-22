@@ -17,21 +17,23 @@
 | ✅ | License | GPLv3 |
 | 🟡 | **M0** Skeleton | Built: `:app`, `:core:{common,fs,ui}`, `:toolchain:native`, `:engine:{api,fast}`. 7 of 22 planned modules. |
 | ⬜ | **M1** Editor | Not started |
-| 🟡 | **M2** First APK ⭐ | **Current target.** The pipeline is closed and the APK verifies; two things stand between it and done. |
+| 🟡 | **M2** First APK ⭐ | **Current target.** Source to installed app works end to end; one thing stands between it and done. |
 
 **M2 in detail.** All six stages exist in `:engine:fast` and run on a device:
 aapt2 compile → aapt2 link → ECJ → D8 → package → apksig, behind
-`BuildSystem.build()`. The end-to-end test builds the project template into an
-APK that apksig verifies and that the platform's own package parser reads, in
-well under the 10 s budget — which is an assertion, not an aspiration.
+`BuildSystem.build()`, with `ApkInstaller` handing the result to
+PackageInstaller. The instrumented tests build the project template into an APK
+that apksig verifies, that the platform's own package parser reads, that the
+platform accepts into an install session, and that `pm install` installs with
+its launcher activity intact — in well under the 10 s budget, which is an
+assertion rather than an aspiration.
 
 What is left before M2 can be called done:
 
 - **`:toolchain:manager`.** Nothing puts the 43 MB `android.jar` on a real
-  device; the tests stage a copy out of `androidTest/assets`. This is the last
-  thing standing between the pipeline and a device that is not this developer's.
-- **PackageInstaller.** The pipeline stops at a signed APK. The milestone's
-  criterion is "builds *and installs*".
+  device; the tests stage a copy out of `androidTest/assets`, which is not in
+  git. This is the only thing standing between the pipeline and a device that is
+  not this developer's, and it is the next thing to build.
 
 `engine/fast/FINDINGS.md` records what the pipeline cost to assemble — the
 install-time constraints that no stage reports, and what is deliberately not
