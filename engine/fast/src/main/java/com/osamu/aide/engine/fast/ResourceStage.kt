@@ -76,6 +76,12 @@ internal class ResourceStage(private val runner: NativeToolRunner) {
             // Lets a project overlay resources it did not itself declare, which
             // is how AAR resources will merge in once :engine:deps exists.
             add("--auto-add-overlay")
+            // Assets go in here rather than in the packaging stage so that they
+            // land in the APK under aapt2's own compression rules -- it already
+            // knows which extensions must not be deflated.
+            if (layout.assetsDir.isDirectory) {
+                add("-A"); add(layout.assetsDir.absolutePath)
+            }
             if (debuggable) add("--debug-mode")
             if (compiledResources.isFile) add(compiledResources.absolutePath)
         }
