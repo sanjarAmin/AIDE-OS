@@ -22,6 +22,13 @@ class BuildWorkspace(val root: File) {
     val unsignedApk: File get() = File(root, "unsigned.apk")
     val outputApk: File get() = File(root, "app-debug.apk")
 
+    /** The `R.java` aapt2 generated. An input to the Java compiler, not a source. */
+    fun generatedJavaSources(): List<File> = generatedJava
+        .walkTopDown()
+        .filter { it.isFile && it.extension == "java" }
+        .sortedBy { it.invariantSeparatorsPath }
+        .toList()
+
     /**
      * Clears and recreates the tree.
      *
@@ -30,13 +37,6 @@ class BuildWorkspace(val root: File) {
      * last run's classes, and that is a far worse failure than a slow build.
      * Incrementality belongs at the stage level, keyed on input hashes.
      */
-    /** The `R.java` aapt2 generated. An input to the Java compiler, not a source. */
-    fun generatedJavaSources(): List<File> = generatedJava
-        .walkTopDown()
-        .filter { it.isFile && it.extension == "java" }
-        .sortedBy { it.invariantSeparatorsPath }
-        .toList()
-
     fun prepare() {
         root.deleteRecursively()
         listOf(compiledResources, generatedJava, classes, dex).forEach { it.mkdirs() }
