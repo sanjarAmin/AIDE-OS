@@ -7,7 +7,7 @@
 
 ## Status
 
-*As of 2026-08-21.*
+*As of 2026-08-22.*
 
 | | Milestone | State |
 |---|---|---|
@@ -15,9 +15,27 @@
 | ✅ | Spike R2 — kotlinc + Compose on ART | Resolved. `tools/kotlinc/FINDINGS.md` |
 | ✅ | Spike R2b — ECJ, D8, apksig on ART | Resolved. `tools/ecj/FINDINGS.md` |
 | ✅ | License | GPLv3 |
-| 🟡 | **M0** Skeleton | Built: `:app`, `:core:{common,fs,ui}`, `:toolchain:native`. 5 of 22 planned modules. |
+| 🟡 | **M0** Skeleton | Built: `:app`, `:core:{common,fs,ui}`, `:toolchain:native`, `:engine:{api,fast}`. 7 of 22 planned modules. |
 | ⬜ | **M1** Editor | Not started |
-| ⬜ | **M2** First APK ⭐ | **Current target** |
+| 🟡 | **M2** First APK ⭐ | **Current target.** The pipeline is closed and the APK verifies; two things stand between it and done. |
+
+**M2 in detail.** All six stages exist in `:engine:fast` and run on a device:
+aapt2 compile → aapt2 link → ECJ → D8 → package → apksig, behind
+`BuildSystem.build()`. The end-to-end test builds the project template into an
+APK that apksig verifies and that the platform's own package parser reads, in
+well under the 10 s budget — which is an assertion, not an aspiration.
+
+What is left before M2 can be called done:
+
+- **`:toolchain:manager`.** Nothing puts the 43 MB `android.jar` on a real
+  device; the tests stage a copy out of `androidTest/assets`. This is the last
+  thing standing between the pipeline and a device that is not this developer's.
+- **PackageInstaller.** The pipeline stops at a signed APK. The milestone's
+  criterion is "builds *and installs*".
+
+`engine/fast/FINDINGS.md` records what the pipeline cost to assemble — the
+install-time constraints that no stage reports, and what is deliberately not
+built yet.
 
 Three constraints came out of R2 that `:build:fast` has to honour, rather than
 rediscover:
