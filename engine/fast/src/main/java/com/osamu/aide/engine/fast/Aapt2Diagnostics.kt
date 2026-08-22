@@ -41,20 +41,9 @@ object Aapt2Diagnostics {
                 else -> DiagnosticSeverity.INFO
             },
             message = match.groups["message"]?.value.orEmpty(),
-            file = group("file")?.let { relativise(File(it), projectRoot) },
+            file = group("file")?.let { ProjectPaths.relativise(File(it), projectRoot) },
             line = group("line")?.toIntOrNull() ?: Diagnostic.UNKNOWN,
             column = group("column")?.toIntOrNull() ?: Diagnostic.UNKNOWN,
         )
-    }
-
-    /**
-     * aapt2 reports absolute paths under the app's private storage. Those are
-     * both unreadable on a phone screen and meaningless to the user, so they are
-     * cut back to the project.
-     */
-    private fun relativise(file: File, projectRoot: File): File {
-        val path = file.invariantSeparatorsPath
-        val prefix = projectRoot.invariantSeparatorsPath.trimEnd('/') + "/"
-        return if (path.startsWith(prefix)) File(path.removePrefix(prefix)) else file
     }
 }
