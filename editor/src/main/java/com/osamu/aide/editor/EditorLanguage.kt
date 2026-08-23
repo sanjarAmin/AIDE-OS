@@ -70,13 +70,20 @@ class EditorLanguages(private val context: Context) {
         language = language.language(),
         highlightScmSource = query(language, "highlights.scm"),
         // Blocks, brackets and locals are separate queries the grammars do not
-        // ship. Empty is legal and costs only the features built on them --
-        // code folding markers and scope-aware highlighting -- neither of which
-        // is worth blocking syntax colouring on.
-        codeBlocksScmSource = "",
-        bracketsScmSource = "",
-        localsScmSource = "",
+        // ship, and the features built on them -- folding markers, bracket
+        // matching, scope-aware highlighting -- are not worth blocking syntax
+        // colouring on. They cannot be left empty though: the binding rejects a
+        // blank query outright, so these are comments, which compile to no
+        // patterns and mean the same thing.
+        codeBlocksScmSource = NO_PATTERNS,
+        bracketsScmSource = NO_PATTERNS,
+        localsScmSource = NO_PATTERNS,
     )
+
+    private companion object {
+        /** A query with nothing in it. Blank is rejected; a comment is not. */
+        const val NO_PATTERNS = "; intentionally empty"
+    }
 
     private fun query(language: EditorLanguage, name: String): String = context.assets
         .open("treesitter/${language.queryDirectory}/$name")
