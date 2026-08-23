@@ -95,20 +95,42 @@ sealed interface WorkspaceEvent {
     ) : WorkspaceEvent
 }
 
+/** One open tab. */
+data class OpenFile(
+    val document: SourceDocument,
+    val isDirty: Boolean = false,
+) {
+    val file: File get() = document.file
+    val name: String get() = document.name
+}
+
 data class WorkspaceUiState(
     val projectName: String = "",
+    val projectRoot: File? = null,
     /** Flattened visible tree: only expanded directories contribute children. */
     val visibleNodes: List<FileNode> = emptyList(),
     val expandedPaths: Set<String> = emptySet(),
-    val selectedFile: File? = null,
-    /** The open file, or null while it is being read or could not be. */
-    val document: SourceDocument? = null,
+    /** Open tabs, in the order they were opened. */
+    val openFiles: List<OpenFile> = emptyList(),
+    /** Which tab is showing. Null when nothing is open. */
+    val activeFile: File? = null,
+    /** Set while a file is being read, so the pane can say so. */
+    val openingFile: File? = null,
     val documentError: String? = null,
-    val isDocumentDirty: Boolean = false,
+    val isSearchOpen: Boolean = false,
     val build: BuildUiState = BuildUiState(),
     val isBuildPanelOpen: Boolean = false,
     val platform: PlatformUiState? = null,
-)
+) {
+    val active: OpenFile? get() = openFiles.firstOrNull { it.file == activeFile }
+
+    /** What the file tree highlights: the open tab, or the file being read. */
+    val selectedFile: File? get() = activeFile ?: openingFile
+
+    val isDocumentDirty: Boolean get() = active?.isDirty == true
+
+    val hasUnsavedChanges: Boolean get() = openFiles.any { it.isDirty }
+}
 
 class WorkspaceViewModel(
     private val dispatchers: DispatcherProvider,
@@ -129,11 +151,12 @@ class WorkspaceViewModel(
     private var project: Project? = null
 
     /**
-     * What the editor widget currently holds, when it differs from what was
+     * What the editor holds for each open file, when it differs from what was
      * read off disk. Kept here rather than in the state because every keystroke
-     * would otherwise recompose the whole workspace.
+     * would otherwise recompose the whole workspace; the state carries only the
+     * dirty flag, which changes once per file rather than once per character.
      */
-    private var pendingText: String? = null
+    private val pendingText = mutableMapOf<File, String>()
 
     private var descriptorJob: Job? = null
     private var buildJob: Job? = null
@@ -150,8 +173,10 @@ class WorkspaceViewModel(
         if (rootNode?.file == projectDir) return
         val root = FileNode(projectDir, isDirectory = true, depth = 0)
         rootNode = root
+        pendingText.clear()
         _state.value = WorkspaceUiState(
             projectName = projectDir.name,
+            projectRoot = projectDir,
             expandedPaths = setOf(projectDir.absolutePath),
         )
         rebuildTree()
@@ -186,63 +211,139 @@ class WorkspaceViewModel(
         rebuildTree()
     }
 
-    /** Opens [file] in the editor, saving whatever was open before it. */
+    /** Opens [file] in a tab, or brings its tab to the front if it is open. */
     fun openDocument(file: File) {
-        if (_state.value.document?.file == file) return
+        if (_state.value.openFiles.any { it.file == file }) {
+            selectDocument(file)
+            return
+        }
         viewModelScope.launch {
-            saveIfDirty()
-            _state.update {
-                it.copy(
-                    selectedFile = file,
-                    document = null,
-                    documentError = null,
-                    isDocumentDirty = false,
-                )
-            }
-            pendingText = null
+            _state.update { it.copy(openingFile = file, documentError = null) }
 
             when (val result = documents.open(file)) {
-                is AppResult.Success -> _state.update { it.copy(document = result.value) }
-                is AppResult.Failure ->
-                    _state.update { it.copy(documentError = result.error.message) }
+                is AppResult.Success -> _state.update {
+                    it.copy(
+                        // Guard against two opens racing: whichever read
+                        // finishes second must not append a duplicate tab.
+                        openFiles = if (it.openFiles.any { open -> open.file == file }) {
+                            it.openFiles
+                        } else {
+                            it.openFiles + OpenFile(result.value)
+                        },
+                        activeFile = file,
+                        openingFile = null,
+                    )
+                }
+                is AppResult.Failure -> _state.update {
+                    it.copy(openingFile = null, documentError = result.error.message)
+                }
+            }
+        }
+    }
+
+    fun selectDocument(file: File) {
+        if (_state.value.activeFile == file) return
+        _state.update { it.copy(activeFile = file, documentError = null) }
+    }
+
+    /**
+     * Closes a tab, saving it first.
+     *
+     * Saving rather than prompting: there is no separate "discard" story yet,
+     * and losing an edit to a stray tap on a small × is far worse than a save
+     * the user did not explicitly ask for. Undo still lives in the file.
+     */
+    fun closeDocument(file: File) {
+        viewModelScope.launch {
+            saveIfDirty(file)
+            pendingText -= file
+
+            _state.update { current ->
+                val remaining = current.openFiles.filterNot { it.file == file }
+                val nextActive = when {
+                    current.activeFile != file -> current.activeFile
+                    // The neighbour to the left, which is where the eye already
+                    // is after closing something.
+                    else -> {
+                        val index = current.openFiles.indexOfFirst { it.file == file }
+                        remaining.getOrNull((index - 1).coerceAtLeast(0))?.file
+                    }
+                }
+                current.copy(
+                    openFiles = remaining,
+                    activeFile = nextActive,
+                    documentError = null,
+                )
             }
         }
     }
 
     /**
      * Called by the editor widget on every content change, including the one it
-     * causes itself when a document is first set -- which is why identical text
-     * is not an edit.
+     * causes itself when a buffer is set -- which is why identical text is not
+     * an edit.
      */
     fun onTextChanged(text: String) {
-        val document = _state.value.document ?: return
-        if (pendingText == null && text == document.text) return
-        pendingText = text
-        if (!_state.value.isDocumentDirty) {
-            _state.update { it.copy(isDocumentDirty = true) }
-        }
+        val active = _state.value.active ?: return
+        if (active.file !in pendingText && text == active.document.text) return
+        pendingText[active.file] = text
+        if (!active.isDirty) markDirty(active.file, dirty = true)
     }
 
     fun save() {
-        viewModelScope.launch { saveIfDirty(announce = true) }
+        viewModelScope.launch {
+            val file = _state.value.activeFile ?: return@launch
+            saveIfDirty(file, announce = true)
+        }
     }
 
-    private suspend fun saveIfDirty(announce: Boolean = false) {
-        val document = _state.value.document ?: return
-        val text = pendingText ?: return
+    /** Writes every modified tab. Used before a build, which reads the disk. */
+    private suspend fun saveAll() {
+        _state.value.openFiles.filter { it.isDirty }.forEach { saveIfDirty(it.file) }
+    }
 
-        when (val result = documents.save(document, text)) {
+    private suspend fun saveIfDirty(file: File, announce: Boolean = false) {
+        val open = _state.value.openFiles.firstOrNull { it.file == file } ?: return
+        val text = pendingText[file] ?: return
+
+        when (val result = documents.save(open.document, text)) {
             is AppResult.Success -> {
-                pendingText = null
+                pendingText -= file
                 // The document's own text moves with it, so the file on disk and
                 // the state agree about what "unmodified" means.
-                _state.update {
-                    it.copy(document = document.copy(text = text), isDocumentDirty = false)
+                _state.update { current ->
+                    current.copy(
+                        openFiles = current.openFiles.map {
+                            if (it.file == file) {
+                                it.copy(document = it.document.copy(text = text), isDirty = false)
+                            } else {
+                                it
+                            }
+                        },
+                    )
                 }
-                if (announce) _events.send(WorkspaceEvent.Notice("${document.name} saved."))
+                if (announce) _events.send(WorkspaceEvent.Notice("${open.name} saved."))
             }
             is AppResult.Failure -> _events.send(WorkspaceEvent.Notice(result.error.message))
         }
+    }
+
+    private fun markDirty(file: File, dirty: Boolean) {
+        _state.update { current ->
+            current.copy(
+                openFiles = current.openFiles.map {
+                    if (it.file == file) it.copy(isDirty = dirty) else it
+                },
+            )
+        }
+    }
+
+    fun openSearch() {
+        _state.update { it.copy(isSearchOpen = true) }
+    }
+
+    fun closeSearch() {
+        _state.update { it.copy(isSearchOpen = false) }
     }
 
     fun build() {
@@ -252,6 +353,12 @@ class WorkspaceViewModel(
             // ago. Waiting for it is better than telling someone their project
             // is not one.
             descriptorJob?.join()
+
+            // Before the checks below, not after: they can all refuse, and a
+            // refused build must still have written the buffers. The user
+            // asked for their work to be built; saving it is the part that can
+            // always be honoured.
+            saveAll()
 
             val project = project ?: run {
                 _events.send(
@@ -271,11 +378,6 @@ class WorkspaceViewModel(
 
     private suspend fun runBuild(project: Project) {
         try {
-            // The compiler reads the file, not the widget. Building an unsaved
-            // buffer puts every diagnostic on the wrong line, which is worse
-            // than a build that takes a moment longer to start.
-            saveIfDirty()
-
             _state.update {
                 it.copy(isBuildPanelOpen = true, build = BuildUiState(isRunning = true))
             }
@@ -306,7 +408,18 @@ class WorkspaceViewModel(
         val root = project?.rootDir ?: rootNode?.file ?: return
         val file = diagnostic.file ?: return
         openDocument(File(root, file.path))
+        _jumps.trySend(diagnostic)
     }
+
+    /**
+     * Where in the file the last-requested diagnostic was.
+     *
+     * A one-shot: the screen consumes it once the editor has that file showing
+     * and moves the cursor. State would re-fire the jump on every recomposition,
+     * dragging the user back from wherever they had scrolled to.
+     */
+    private val _jumps = Channel<Diagnostic>(Channel.CONFLATED)
+    val jumps: Flow<Diagnostic> = _jumps.receiveAsFlow()
 
     private suspend fun onBuildEvent(event: BuildEvent) {
         when (event) {

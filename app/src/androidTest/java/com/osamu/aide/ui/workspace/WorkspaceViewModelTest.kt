@@ -105,6 +105,9 @@ class WorkspaceViewModelTest {
     private val mainActivitySource: File
         get() = File(project.rootDir, "src/main/java/com/example/demo/MainActivity.java")
 
+    private val manifest: File
+        get() = File(project.rootDir, "src/main/AndroidManifest.xml")
+
     @Test
     fun opening_a_project_names_it_and_lists_its_files() {
         onMain { viewModel.open(project.rootDir) }
@@ -121,23 +124,23 @@ class WorkspaceViewModelTest {
         onMain { viewModel.open(project.rootDir) }
         onMain { viewModel.openDocument(mainActivitySource) }
 
-        awaitState("the document to load") { it.document != null }
-        val document = viewModel.state.value.document!!
-        assertEquals(mainActivitySource, document.file)
-        assertEquals(mainActivitySource.readText(), document.text)
-        assertFalse("a freshly opened file is not modified", viewModel.state.value.isDocumentDirty)
+        awaitState("the document to load") { it.active != null }
+        val active = viewModel.state.value.active!!
+        assertEquals(mainActivitySource, active.file)
+        assertEquals(mainActivitySource.readText(), active.document.text)
+        assertFalse("a freshly opened file is not modified", active.isDirty)
     }
 
     @Test
     fun an_edit_is_marked_modified_and_reaches_the_file_on_disk() {
         onMain { viewModel.open(project.rootDir) }
         onMain { viewModel.openDocument(mainActivitySource) }
-        awaitState("the document to load") { it.document != null }
+        awaitState("the document to load") { it.active != null }
 
-        val edited = viewModel.state.value.document!!.text + "\n// edited\n"
+        val edited = viewModel.state.value.active!!.document.text + "\n// edited\n"
 
         // The widget echoes its own setText back; that must not count as a change.
-        onMain { viewModel.onTextChanged(viewModel.state.value.document!!.text) }
+        onMain { viewModel.onTextChanged(viewModel.state.value.active!!.document.text) }
         assertFalse(viewModel.state.value.isDocumentDirty)
 
         onMain { viewModel.onTextChanged(edited) }
@@ -149,23 +152,98 @@ class WorkspaceViewModelTest {
     }
 
     @Test
-    fun opening_another_file_saves_the_one_before_it() {
+    fun opening_a_second_file_adds_a_tab_and_leaves_the_first_open() {
         onMain { viewModel.open(project.rootDir) }
         onMain { viewModel.openDocument(mainActivitySource) }
-        awaitState("the document to load") { it.document != null }
+        awaitState("the first document") { it.active?.file == mainActivitySource }
 
-        val edited = viewModel.state.value.document!!.text + "\n// switched away\n"
-        onMain { viewModel.onTextChanged(edited) }
-
-        val manifest = File(project.rootDir, "src/main/AndroidManifest.xml")
         onMain { viewModel.openDocument(manifest) }
-        awaitState("the manifest to load") { it.document?.file == manifest }
+        awaitState("the second document") { it.active?.file == manifest }
+
+        val state = viewModel.state.value
+        assertEquals(2, state.openFiles.size)
+        assertEquals(
+            listOf(mainActivitySource, manifest),
+            state.openFiles.map { it.file },
+        )
+    }
+
+    @Test
+    fun reopening_a_file_that_is_already_open_activates_its_tab() {
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(mainActivitySource) }
+        awaitState("the first document") { it.active?.file == mainActivitySource }
+        onMain { viewModel.openDocument(manifest) }
+        awaitState("the second document") { it.active?.file == manifest }
+
+        onMain { viewModel.openDocument(mainActivitySource) }
+        awaitState("the first tab to come forward") { it.active?.file == mainActivitySource }
 
         assertEquals(
-            "switching files silently discarded an edit",
-            edited,
-            mainActivitySource.readText(),
+            "a duplicate tab was opened",
+            2,
+            viewModel.state.value.openFiles.size,
         )
+    }
+
+    @Test
+    fun each_tab_tracks_its_own_unsaved_changes() {
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(mainActivitySource) }
+        awaitState("the first document") { it.active?.file == mainActivitySource }
+
+        val edited = viewModel.state.value.active!!.document.text + "\n// edited\n"
+        onMain { viewModel.onTextChanged(edited) }
+
+        onMain { viewModel.openDocument(manifest) }
+        awaitState("the second document") { it.active?.file == manifest }
+
+        val state = viewModel.state.value
+        assertFalse("the manifest was not edited", state.isDocumentDirty)
+        assertTrue(
+            "the first tab lost its unsaved change",
+            state.openFiles.first { it.file == mainActivitySource }.isDirty,
+        )
+        // Still only in the buffer -- switching tabs is not a save.
+        assertFalse(mainActivitySource.readText().contains("// edited"))
+    }
+
+    @Test
+    fun closing_a_tab_saves_it_and_falls_back_to_its_neighbour() {
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(mainActivitySource) }
+        awaitState("the first document") { it.active?.file == mainActivitySource }
+        onMain { viewModel.openDocument(manifest) }
+        awaitState("the second document") { it.active?.file == manifest }
+
+        val edited = viewModel.state.value.active!!.document.text + "\n<!-- edited -->\n"
+        onMain { viewModel.onTextChanged(edited) }
+
+        onMain { viewModel.closeDocument(manifest) }
+        awaitState("the tab to close") { it.openFiles.size == 1 }
+
+        assertEquals(mainActivitySource, viewModel.state.value.activeFile)
+        assertEquals("closing a tab discarded its edit", edited, manifest.readText())
+    }
+
+    @Test
+    fun a_build_saves_every_modified_tab_not_just_the_active_one() {
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(mainActivitySource) }
+        awaitState("the first document") { it.active?.file == mainActivitySource }
+
+        val edited = viewModel.state.value.active!!.document.text + "\n// built with this\n"
+        onMain { viewModel.onTextChanged(edited) }
+
+        onMain { viewModel.openDocument(manifest) }
+        awaitState("the second document") { it.active?.file == manifest }
+
+        // Build refuses for want of a platform, or runs -- either way it saves
+        // first, because the compiler reads the disk and not the buffers.
+        onMain { viewModel.build() }
+        awaitState("the background tab to be written") {
+            mainActivitySource.readText() == edited
+        }
     }
 
     @Test

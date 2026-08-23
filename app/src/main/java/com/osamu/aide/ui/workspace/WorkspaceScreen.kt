@@ -11,20 +11,27 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.background
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Redo
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
@@ -34,6 +41,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
@@ -50,10 +58,14 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -62,8 +74,12 @@ import com.osamu.aide.core.ui.layout.AdaptiveWorkspace
 import com.osamu.aide.core.ui.layout.PaneBreakpoints
 import com.osamu.aide.core.ui.layout.PaneMode
 import com.osamu.aide.core.ui.theme.CodeTextStyle
+import androidx.compose.ui.graphics.Color
+import com.osamu.aide.editor.CodeEditorController
 import com.osamu.aide.editor.CodeEditorView
 import com.osamu.aide.editor.EditorLanguages
+import com.osamu.aide.editor.SearchBar
+import com.osamu.aide.editor.SymbolRow
 import com.osamu.aide.engine.api.Diagnostic
 import com.osamu.aide.engine.api.DiagnosticSeverity
 import com.osamu.aide.toolchain.manager.InstallProgress
@@ -84,8 +100,27 @@ fun WorkspaceScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val editorController = remember { CodeEditorController() }
+
+    // Consumed once the tab it names is showing; see the effect below.
+    var pendingJump by remember { mutableStateOf<Diagnostic?>(null) }
 
     LaunchedEffect(projectDir) { viewModel.open(projectDir) }
+    LaunchedEffect(viewModel) { viewModel.jumps.collect { pendingJump = it } }
+
+    LaunchedEffect(pendingJump, state.activeFile) {
+        val jump = pendingJump ?: return@LaunchedEffect
+        val root = state.projectRoot ?: return@LaunchedEffect
+        val target = jump.file?.let { File(root, it.path) } ?: return@LaunchedEffect
+        if (state.activeFile != target) return@LaunchedEffect
+
+        // One frame, so the tab switch has actually put that buffer in the
+        // widget. Jumping into the outgoing buffer lands on a line of the
+        // wrong file, which looks like the diagnostic was wrong.
+        withFrameNanos { }
+        editorController.jumpTo(jump.line, jump.column)
+        pendingJump = null
+    }
 
     // The system installer's confirmation is an Activity. Its result says only
     // that the dialog closed; the outcome arrives on ApkInstaller's broadcast,
@@ -154,6 +189,11 @@ fun WorkspaceScreen(
                             }
                         },
                         actions = {
+                            if (state.active != null) {
+                                IconButton(onClick = viewModel::openSearch) {
+                                    Icon(Icons.Default.Search, contentDescription = "Find")
+                                }
+                            }
                             if (state.isDocumentDirty) {
                                 IconButton(onClick = viewModel::save) {
                                     Icon(Icons.Default.Save, contentDescription = "Save")
@@ -178,7 +218,7 @@ fun WorkspaceScreen(
             ) { padding ->
                 AdaptiveWorkspace(
                     mode = mode,
-                    modifier = Modifier.padding(padding),
+                    modifier = Modifier.padding(padding).imePadding(),
                     fileTree = {
                         FileTreePane(
                             nodes = state.visibleNodes,
@@ -195,10 +235,14 @@ fun WorkspaceScreen(
                         )
                     },
                     editor = {
-                        EditorPane(
+                        EditorArea(
                             state = state,
                             languages = languages,
+                            controller = editorController,
                             onTextChanged = viewModel::onTextChanged,
+                            onSelectTab = viewModel::selectDocument,
+                            onCloseTab = viewModel::closeDocument,
+                            onCloseSearch = viewModel::closeSearch,
                         )
                     },
                 )
@@ -259,35 +303,147 @@ fun WorkspaceScreen(
     }
 }
 
+/**
+ * Tabs, the search bar, the editor, and the symbol row -- the whole editing
+ * surface, stacked.
+ *
+ * The symbol row is last so it sits directly above the soft keyboard, which is
+ * the only place it is any use: reaching past the keyboard to the top of the
+ * screen for a semicolon is no better than the two layer-switches it replaces.
+ */
 @Composable
-private fun EditorPane(
+private fun EditorArea(
     state: WorkspaceUiState,
     languages: EditorLanguages,
+    controller: CodeEditorController,
     onTextChanged: (String) -> Unit,
+    onSelectTab: (File) -> Unit,
+    onCloseTab: (File) -> Unit,
+    onCloseSearch: () -> Unit,
 ) {
-    val document = state.document
-    when {
-        document != null -> CodeEditorView(
-            document = document,
-            languages = languages,
-            onTextChanged = onTextChanged,
-            modifier = Modifier.fillMaxSize(),
-        )
+    Column(Modifier.fillMaxSize()) {
+        if (state.openFiles.isNotEmpty()) {
+            EditorTabs(
+                openFiles = state.openFiles,
+                activeFile = state.activeFile,
+                onSelect = onSelectTab,
+                onClose = onCloseTab,
+            )
+            HorizontalDivider()
+        }
 
-        state.documentError != null -> CentredMessage(
-            title = state.selectedFile?.name ?: "Could not open",
-            detail = state.documentError,
-        )
+        if (state.isSearchOpen && state.active != null) {
+            SearchBar(controller = controller, onDismiss = onCloseSearch)
+        }
 
-        state.selectedFile != null -> Box(
-            Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center,
-        ) { CircularProgressIndicator() }
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            val active = state.active
+            when {
+                active != null -> CodeEditorView(
+                    document = active.document,
+                    openDocuments = state.openFiles.map { it.document },
+                    languages = languages,
+                    onTextChanged = onTextChanged,
+                    modifier = Modifier.fillMaxSize(),
+                    controller = controller,
+                    diagnostics = state.build.diagnostics,
+                    projectRoot = state.projectRoot,
+                )
 
-        else -> CentredMessage(
-            title = "No file open",
-            detail = "Select a file from the project tree.",
-        )
+                state.documentError != null -> CentredMessage(
+                    title = state.openingFile?.name ?: "Could not open",
+                    detail = state.documentError,
+                )
+
+                state.openingFile != null -> Box(
+                    Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) { CircularProgressIndicator() }
+
+                else -> CentredMessage(
+                    title = "No file open",
+                    detail = "Select a file from the project tree.",
+                )
+            }
+        }
+
+        if (state.active != null) {
+            HorizontalDivider()
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // Fixed, not part of the scrolling row: undo is the one action
+                // that must never have scrolled out of reach.
+                IconButton(onClick = controller::undo) {
+                    Icon(Icons.Default.Undo, contentDescription = "Undo")
+                }
+                IconButton(onClick = controller::redo) {
+                    Icon(Icons.Default.Redo, contentDescription = "Redo")
+                }
+                SymbolRow(controller = controller, modifier = Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun EditorTabs(
+    openFiles: List<OpenFile>,
+    activeFile: File?,
+    onSelect: (File) -> Unit,
+    onClose: (File) -> Unit,
+) {
+    LazyRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        items(openFiles, key = { it.file.absolutePath }) { open ->
+            val isActive = open.file == activeFile
+            Surface(
+                onClick = { onSelect(open.file) },
+                color = if (isActive) {
+                    MaterialTheme.colorScheme.surfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.surface
+                },
+            ) {
+                Row(
+                    modifier = Modifier.padding(start = 12.dp, end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(
+                        text = open.name,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = if (isActive) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        maxLines = 1,
+                    )
+                    if (open.isDirty) {
+                        // A dot, not an asterisk in the name: the name is what
+                        // the eye scans the tab strip for, and it should not
+                        // change width as you type.
+                        Box(
+                            Modifier
+                                .size(6.dp)
+                                .background(MaterialTheme.colorScheme.primary, CircleShape),
+                        )
+                    }
+                    IconButton(
+                        onClick = { onClose(open.file) },
+                        modifier = Modifier.size(32.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Close ${open.name}",
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
