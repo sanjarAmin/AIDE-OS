@@ -4,6 +4,7 @@ import android.content.Context
 import com.osamu.aide.core.common.DefaultDispatcherProvider
 import com.osamu.aide.core.common.DispatcherProvider
 import com.osamu.aide.core.fs.FileProjectRepository
+import com.osamu.aide.core.fs.ProjectImporter
 import com.osamu.aide.core.fs.ProjectRepository
 import com.osamu.aide.editor.DocumentStore
 import com.osamu.aide.editor.EditorLanguages
@@ -31,6 +32,7 @@ val appModule = module {
     single { workspaceRoot(get<Context>()) }
 
     single<ProjectRepository> { FileProjectRepository(get(), get()) }
+    single { ProjectImporter(get(), get(), get()) }
 
     // Holds the tree-sitter query sources, so opening a second Java file does
     // not go back to assets for them.
@@ -52,7 +54,7 @@ val appModule = module {
         )
     }
 
-    viewModel { ProjectsViewModel(get()) }
+    viewModel { ProjectsViewModel(get(), get()) }
     viewModel { WorkspaceViewModel(get(), get(), get(), get(), get(), get()) }
 }
 

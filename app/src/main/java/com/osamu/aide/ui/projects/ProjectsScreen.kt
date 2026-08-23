@@ -1,5 +1,7 @@
 package com.osamu.aide.ui.projects
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,6 +15,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.DriveFolderUpload
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -25,6 +28,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -56,6 +60,12 @@ fun ProjectsScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var showCreateDialog by remember { mutableStateOf(false) }
 
+    // OpenDocumentTree rather than OpenDocument: a project is a folder, and
+    // picking its files one by one is not a thing anyone would do.
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { tree -> tree?.let(viewModel::importProject) }
+
     LaunchedEffect(state.errorMessage) {
         state.errorMessage?.let {
             snackbarHostState.showSnackbar(it)
@@ -68,6 +78,15 @@ fun ProjectsScreen(
             TopAppBar(
                 title = { Text("Projects") },
                 actions = {
+                    IconButton(
+                        onClick = { importLauncher.launch(null) },
+                        enabled = !state.isImporting,
+                    ) {
+                        Icon(
+                            Icons.Default.DriveFolderUpload,
+                            contentDescription = "Import a project folder",
+                        )
+                    }
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings")
                     }
@@ -81,6 +100,13 @@ fun ProjectsScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
+        if (state.isImporting) {
+            // A Gradle project is thousands of files over a content provider;
+            // this is long enough that silence reads as a failed pick.
+            LinearProgressIndicator(
+                Modifier.fillMaxWidth().padding(top = padding.calculateTopPadding()),
+            )
+        }
         when {
             state.isLoading -> Box(
                 Modifier.fillMaxSize().padding(padding),

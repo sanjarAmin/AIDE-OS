@@ -29,7 +29,7 @@ emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu host
 ```
 :app                 Compose shell — navigation, DI (Koin), screens
 :core:common         Result types, dispatchers, logging
-:core:fs             Project storage and the file tree
+:core:fs             Project storage, the file tree, SAF import. FINDINGS.
 :core:ui             Design system, theme, adaptive phone/tablet layout
 :editor              sora-editor + tree-sitter, wrapped for Compose. FINDINGS.
 :engine:api          The BuildSystem contract; knows nothing of any toolchain

@@ -16,7 +16,7 @@
 | ✅ | Spike R2b — ECJ, D8, apksig on ART | Resolved. `tools/ecj/FINDINGS.md` |
 | ✅ | License | GPLv3 |
 | 🟡 | **M0** Skeleton | Built: `:app`, `:core:{common,fs,ui}`, `:editor`, `:toolchain:{native,manager}`, `:engine:{api,fast}`. 9 of 22 planned modules. |
-| 🟡 | **M1** Editor | sora-editor + tree-sitter highlighting, document layer, wired into the workspace. Tabs, symbol row, search/replace, SAF and the diagnostics gutter remain. `editor/FINDINGS.md` |
+| 🟢 | **M1** Editor | Highlighting, tabs, symbol row, find/replace, diagnostics gutter, and SAF import. `editor/FINDINGS.md`, `core/fs/FINDINGS.md` |
 | 🟢 | **M2** First APK ⭐ | **The thesis holds, and it is reachable.** A person can create a project, edit it, tap Build, and end up with the app installed — all on the device. |
 
 **M2 in detail.** All six stages exist in `:engine:fast` and run on a device:
@@ -43,7 +43,25 @@ PackageInstaller. Driven by hand on an emulator: create a project → open
 downloaded → built in 2.1 s → `com.example.smokeapp` installed. Nothing was
 staged from a desktop.
 
-Diagnostics in that pane are tappable and open the file they name.
+Diagnostics in that pane are tappable: they open the file they name and put the
+cursor on the line, which the gutter has underlined.
+
+**M1 in detail.** The editor has tabs — one widget, one buffer per file, so a
+tab switch keeps that file's undo history and cursor — a symbol row above the
+keyboard for the characters a soft keyboard buries, find/replace over sora's
+own searcher, and a gutter fed by the last build's diagnostics. Projects can be
+imported from anywhere on the device through the Storage Access Framework.
+
+Importing *copies*, and that is a constraint rather than a shortcut: aapt2
+takes filesystem paths and a SAF document has none, so a project left where the
+user picked it would be editable and unbuildable. `core/fs/FINDINGS.md` records
+that and the three SAF behaviours that cost time to find. Verified by hand: a
+Gradle root on shared storage imported (its single module found, `build/` and
+`.git/` skipped), built in 2.7 s, installed, and launched showing its own
+string resource.
+
+What M1 does not have is anything that needs to understand the code — no
+completion, no go-to-definition, no errors before you build. That is M3.
 
 `engine/fast/FINDINGS.md` records what the pipeline cost to assemble — the
 install-time constraints that no stage reports, and what is deliberately not

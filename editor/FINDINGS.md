@@ -70,7 +70,24 @@ query *text* instead and builds a fresh spec per language instance.
 `EditorHighlightTest.a_second_file_of_the_same_language_still_highlights`
 pins it down; nothing below the widget level can see this.
 
-## 5. An empty query is a comment, not an empty string
+## 5. A `Content` is the undo stack, and tabs live or die on that
+
+`CodeEditor.setText(CharSequence)` builds a fresh `Content` unless it is handed
+one to reuse — the three-argument overload with `reuseContentObject = true`. A
+`Content` is not just the characters: it carries the undo history and the
+cursor.
+
+So a tab strip that swaps text by passing the document's `String` back in loses
+both on every switch. Nothing throws and nothing is actually lost from disk,
+but coming back to a file you were editing to find the cursor at the top and
+Undo empty reads as data loss, which is worse. `EditorBuffers` keeps one
+`Content` per open file and hands it back.
+
+One widget serves every tab rather than one editor per tab: each `CodeEditor`
+carries a parse thread and native tree-sitter memory, and a phone with eight
+files open cannot afford eight of them.
+
+## 6. An empty query is a comment, not an empty string
 
 `TsLanguageSpec` takes four queries. The grammars ship one. The other three —
 code blocks, brackets, locals — are wanted only by folding markers, bracket
@@ -82,14 +99,14 @@ They cannot be `""`: the binding rejects a blank query outright with
 no file of that language opens at all. `"; intentionally empty"` is a comment,
 compiles to no patterns, and means what the empty string was meant to.
 
-## 6. Core library desugaring is not optional
+## 7. Core library desugaring is not optional
 
 The tree-sitter AARs declare it in their AAR metadata, so the build fails at
 `checkDebugAndroidTestAarMetadata` rather than at run time — the right call by
 whoever set it. It has to be enabled in `:editor` **and in every module that
 consumes it**, including `:app`, along with `coreLibraryDesugaring(...)`.
 
-## 7. A BOM behind an `api` dependency has to be `api` too
+## 8. A BOM behind an `api` dependency has to be `api` too
 
 `:editor` exposes sora-editor to `:app` with `api(libs.sora.editor)`, which
 carries no version — the version comes from the sora BOM. With the BOM declared
@@ -108,8 +125,11 @@ is.
   than no threshold. `EditorHighlightTest` asserts that a 5,000-line file is
   correctly highlighted end to end and leaves the frame rate to the manual
   device matrix.
-- **Tabs, symbol row, search/replace, SAF, diagnostics gutter.** M1's remaining
-  deliverables. One file is open at a time today.
-- **Jumping to a diagnostic's line.** The workspace opens the file a diagnostic
-  names; positioning the cursor on the line needs the editor handle, which the
-  Compose host does not expose yet.
+- **Formatting, folding, bracket matching.** All three need queries the
+  grammars do not ship (finding 6). They are worth adding per language, and are
+  not worth blocking anything else on.
+- **Multiple editors at once.** Split view would need more than one
+  `CodeEditor` alive, which finding 5 explains is not free. Nothing needs it
+  yet.
+- **Diagnostics as you type.** The gutter shows what the last *build* found.
+  Live diagnostics are M3 and need a language server, not more editor.

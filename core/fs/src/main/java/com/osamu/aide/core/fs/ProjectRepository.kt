@@ -4,15 +4,14 @@ import com.osamu.aide.core.common.AppResult
 import com.osamu.aide.core.common.DispatcherProvider
 import com.osamu.aide.core.common.runCatchingResult
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
 import java.io.File
 
 /**
  * Reads and writes projects under a single workspace directory.
  *
- * The descriptor is hand-rolled JSON via [JSONObject] rather than a serialization
- * plugin: it is a handful of fields, and keeping codegen out of the build keeps
- * incremental compiles fast across the module graph.
+ * The descriptor is hand-rolled JSON -- see [ProjectDescriptor] -- rather than a
+ * serialization plugin: it is a handful of fields, and keeping codegen out of
+ * the build keeps incremental compiles fast across the module graph.
  */
 interface ProjectRepository {
     suspend fun listProjects(): AppResult<List<Project>>
@@ -96,36 +95,9 @@ class FileProjectRepository(
             }
         }
 
-    private fun readDescriptor(dir: File): Project? = runCatching {
-        val json = JSONObject(File(dir, Project.DESCRIPTOR_NAME).readText())
-        Project(
-            name = json.getString(KEY_NAME),
-            rootDir = dir,
-            applicationId = json.getString(KEY_APPLICATION_ID),
-            language = SourceLanguage.valueOf(json.getString(KEY_LANGUAGE)),
-            engine = BuildEngine.valueOf(json.getString(KEY_ENGINE)),
-            lastOpenedAt = json.optLong(KEY_LAST_OPENED, 0L),
-        )
-    }.getOrNull()
+    private fun readDescriptor(dir: File): Project? = ProjectDescriptor.read(dir)
 
-    private fun writeDescriptor(project: Project) {
-        val json = JSONObject()
-            .put(KEY_NAME, project.name)
-            .put(KEY_APPLICATION_ID, project.applicationId)
-            .put(KEY_LANGUAGE, project.language.name)
-            .put(KEY_ENGINE, project.engine.name)
-            .put(KEY_LAST_OPENED, project.lastOpenedAt)
-        project.descriptorFile.writeText(json.toString(2))
-    }
+    private fun writeDescriptor(project: Project) = ProjectDescriptor.write(project)
 
-    private fun String.toDirectoryName(): String =
-        trim().replace(Regex("[^A-Za-z0-9._-]+"), "-").trim('-').ifEmpty { "project" }
-
-    private companion object {
-        const val KEY_NAME = "name"
-        const val KEY_APPLICATION_ID = "applicationId"
-        const val KEY_LANGUAGE = "language"
-        const val KEY_ENGINE = "engine"
-        const val KEY_LAST_OPENED = "lastOpenedAt"
-    }
+    private fun String.toDirectoryName(): String = ProjectDescriptor.directoryNameFor(this)
 }
