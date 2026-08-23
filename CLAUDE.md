@@ -36,8 +36,6 @@ emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu host
 :engine:fast         The bundled pipeline: aapt2 -> ECJ -> D8 -> apksig. FINDINGS.
 :toolchain:native    aapt2 in jniLibs, and the harness that execs it
 :toolchain:manager   Downloads android.jar & co: pin, verify, install. FINDINGS.
-:spike:kotlinc       Throwaway. Proves kotlinc + Compose run on ART.
-:spike:jvmtools      Throwaway. Proves ECJ, D8 and apksig run on ART.
 tools/               Scripts that produce the toolchains, and their FINDINGS.
 ```
 
@@ -70,8 +68,9 @@ failed to load still produces a clean compile.
 - **API 30 is the toolchain floor.** aapt2's libbase needs it, and the compiler
   dex archive is built for it. `minSdk` stays 26 — the editor works below 30 —
   so build features must gate at runtime, not fail at exec time.
-- **`:spike:kotlinc`'s assets are not in git.** ~100 MB of third-party jars,
-  rebuilt by `tools/kotlinc/build-shim.sh` and `build-kotlinc-dex.py`. Nothing
-  in the repo assembles the jar set they consume; that gap is real and known.
+- **The kotlinc dex archive's inputs are not in git.** ~100 MB of third-party
+  jars, consumed by `tools/kotlinc/build-shim.sh` and `build-kotlinc-dex.py`.
+  Nothing in the repo assembles that jar set; the gap is real and known, and
+  M4 (kotlinc in the engine) inherits it.
 - **`grep` here is a shell function that skips binary files.** Use
   `/usr/bin/grep -a` when searching class files, jars, or dex.

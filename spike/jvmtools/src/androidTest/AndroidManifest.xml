@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- ECJ holds a full type model and D8 an IR of every class it dexes;
-         neither is comfortable in a default per-app heap. -->
-    <application android:largeHeap="true" />
-</manifest>

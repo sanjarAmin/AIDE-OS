@@ -6,9 +6,10 @@ plugins {
  * The bundled build engine: aapt2 -> ECJ -> D8 -> apksig, running entirely on
  * the device with one native binary and no Linux userland.
  *
- * Everything here was proved to work on ART by `:spike:kotlinc` and
- * `:spike:jvmtools` first. Read `tools/ecj/FINDINGS.md` before changing how the
- * compiler is invoked -- several of the arguments look arbitrary and are not.
+ * Everything here was proved to work on ART by spikes R2 and R2b first (the
+ * spike modules are gone; their findings live under `tools/`). Read
+ * `tools/ecj/FINDINGS.md` before changing how the compiler is invoked --
+ * several of the arguments look arbitrary and are not.
  */
 android {
     namespace = "com.osamu.aide.engine.fast"

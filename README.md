@@ -15,16 +15,22 @@ register.
 
 ## Status
 
-Early. The shell and the toolchain groundwork exist; the build engine does not
-yet. Both of the plan's blocking risks have been closed by working spikes:
+Working, early. A person can create a project on the device — or import one
+from anywhere through the system file picker — edit it with syntax
+highlighting, tabs, and find/replace, tap Build, and have the APK compiled,
+signed, and installed in a few seconds. Nothing staged from a desktop.
 
 | | |
 |---|---|
-| **aapt2 on-device** | Builds from AOSP for arm64-v8a and x86_64, runs from `nativeLibraryDir`. [Findings](tools/aapt2/FINDINGS.md) |
-| **kotlinc + Compose on ART** | The Kotlin compiler and the Compose compiler plugin run on ART and produce transformed bytecode. [Findings](tools/kotlinc/FINDINGS.md) |
+| **M1 Editor** | sora-editor + tree-sitter: tabs, symbol row, find/replace, a diagnostics gutter fed by the build, SAF import. [Findings](editor/FINDINGS.md), [more](core/fs/FINDINGS.md) |
+| **M2 First APK** | aapt2 → ECJ → D8 → apksig, entirely on-device; the SDK platform downloaded and verified on first build. [Findings](engine/fast/FINDINGS.md) |
 
-Next milestone is **M2**: a Java hello-world project that builds and installs in
-under ten seconds.
+The spikes that de-risked the design — aapt2 built from AOSP, kotlinc + the
+Compose plugin on ART, ECJ/D8/apksig on ART — are recorded under
+[`tools/`](tools/), each with its own `FINDINGS.md`.
+
+Next milestone is **M3**: Java language intelligence — completion,
+diagnostics as you type, go-to-definition.
 
 ## Building
 
@@ -43,11 +49,10 @@ documents:
 JAVA_HOME=/path/to/jdk ./gradlew connectedDebugAndroidTest
 ```
 
-The Kotlin compiler archive that `:spike:kotlinc` loads is ~100 MB and is not
-tracked in git. `tools/kotlinc/build-shim.sh` and
-`tools/kotlinc/build-kotlinc-dex.py` rebuild it; see
+The Kotlin compiler dex archive built by `tools/kotlinc/build-shim.sh` and
+`tools/kotlinc/build-kotlinc-dex.py` is ~100 MB and is not tracked in git; see
 [`tools/kotlinc/FINDINGS.md`](tools/kotlinc/FINDINGS.md) for the jar set it
-needs.
+needs. The engine will consume it when Kotlin support lands (M4).
 
 ## Licence
 
