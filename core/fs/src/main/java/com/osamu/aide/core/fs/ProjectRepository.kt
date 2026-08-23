@@ -16,6 +16,17 @@ import java.io.File
  */
 interface ProjectRepository {
     suspend fun listProjects(): AppResult<List<Project>>
+
+    /**
+     * Reads the project rooted at [dir].
+     *
+     * Separate from [listProjects] because the workspace is reached by path --
+     * from navigation, and later from a launcher shortcut or a share intent --
+     * and scanning every project to find the one already named is both slower
+     * and wrong the moment a project lives outside the workspace root.
+     */
+    suspend fun openProject(dir: File): AppResult<Project>
+
     suspend fun createProject(
         name: String,
         applicationId: String,
@@ -38,6 +49,15 @@ class FileProjectRepository(
                     .filter { it.isDirectory && File(it, Project.DESCRIPTOR_NAME).exists() }
                     .mapNotNull { readDescriptor(it) }
                     .sortedByDescending { it.lastOpenedAt }
+            }
+        }
+
+    override suspend fun openProject(dir: File): AppResult<Project> =
+        withContext(dispatchers.io) {
+            runCatchingResult {
+                checkNotNull(readDescriptor(dir)) {
+                    "${dir.name} has no readable ${Project.DESCRIPTOR_NAME}."
+                }
             }
         }
 

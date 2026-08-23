@@ -17,6 +17,14 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // aapt2 and the tree-sitter grammars are native, and the app is only
+        // useful on a device it has both for. Left unset, the APK would carry
+        // tree-sitter for armeabi-v7a and x86 -- ABIs with no aapt2 beside them,
+        // where the editor would open and every build would fail at exec time.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
     }
 
     buildTypes {
@@ -29,6 +37,10 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
+
+        // Required by the tree-sitter bindings :editor pulls in; their AAR
+        // metadata refuses to build without it. See editor/build.gradle.kts.
+        isCoreLibraryDesugaringEnabled = true
     }
     buildFeatures {
         compose = true
@@ -46,10 +58,16 @@ android {
 }
 
 dependencies {
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
+
     implementation(project(":core:common"))
     implementation(project(":core:fs"))
     implementation(project(":core:ui"))
+    implementation(project(":editor"))
+    implementation(project(":engine:api"))
+    implementation(project(":engine:fast"))
     implementation(project(":toolchain:native"))
+    implementation(project(":toolchain:manager"))
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.material3)
@@ -72,6 +90,7 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.test.runner)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

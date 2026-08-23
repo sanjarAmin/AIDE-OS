@@ -5,7 +5,15 @@ import com.osamu.aide.core.common.DefaultDispatcherProvider
 import com.osamu.aide.core.common.DispatcherProvider
 import com.osamu.aide.core.fs.FileProjectRepository
 import com.osamu.aide.core.fs.ProjectRepository
+import com.osamu.aide.editor.DocumentStore
+import com.osamu.aide.editor.EditorLanguages
+import com.osamu.aide.engine.fast.AndroidPlatformProvider
+import com.osamu.aide.engine.fast.ApkInstaller
+import com.osamu.aide.toolchain.manager.ToolchainManager
+import com.osamu.aide.toolchain.nativetools.NativeToolRunner
+import com.osamu.aide.toolchain.nativetools.NativeToolchain
 import com.osamu.aide.ui.projects.ProjectsViewModel
+import com.osamu.aide.ui.workspace.ProjectBuilder
 import com.osamu.aide.ui.workspace.WorkspaceViewModel
 import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.module
@@ -24,8 +32,28 @@ val appModule = module {
 
     single<ProjectRepository> { FileProjectRepository(get(), get()) }
 
+    // Holds the tree-sitter query sources, so opening a second Java file does
+    // not go back to assets for them.
+    single { EditorLanguages(get()) }
+    single { DocumentStore(get()) }
+
+    single { NativeToolchain.from(get()) }
+    single { NativeToolRunner(get(), get()) }
+    single { ToolchainManager(get(), get()) }
+    single { AndroidPlatformProvider(get(), get()) }
+    single { ApkInstaller(get(), get()) }
+    single {
+        ProjectBuilder(
+            toolchain = get(),
+            platforms = get(),
+            runner = get(),
+            dispatchers = get(),
+            outputRoot = File(get<Context>().cacheDir, "builds"),
+        )
+    }
+
     viewModel { ProjectsViewModel(get()) }
-    viewModel { WorkspaceViewModel(get()) }
+    viewModel { WorkspaceViewModel(get(), get(), get(), get(), get(), get()) }
 }
 
 /**

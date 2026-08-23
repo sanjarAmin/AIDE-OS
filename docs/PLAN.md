@@ -7,7 +7,7 @@
 
 ## Status
 
-*As of 2026-08-22.*
+*As of 2026-08-23.*
 
 | | Milestone | State |
 |---|---|---|
@@ -15,9 +15,9 @@
 | ✅ | Spike R2 — kotlinc + Compose on ART | Resolved. `tools/kotlinc/FINDINGS.md` |
 | ✅ | Spike R2b — ECJ, D8, apksig on ART | Resolved. `tools/ecj/FINDINGS.md` |
 | ✅ | License | GPLv3 |
-| 🟡 | **M0** Skeleton | Built: `:app`, `:core:{common,fs,ui}`, `:toolchain:{native,manager}`, `:engine:{api,fast}`. 8 of 22 planned modules. |
-| ⬜ | **M1** Editor | Not started |
-| 🟢 | **M2** First APK ⭐ | **The thesis holds.** Source to installed app works end to end on a device, from a platform the device downloaded itself. What remains is a screen to drive it from. |
+| 🟡 | **M0** Skeleton | Built: `:app`, `:core:{common,fs,ui}`, `:editor`, `:toolchain:{native,manager}`, `:engine:{api,fast}`. 9 of 22 planned modules. |
+| 🟡 | **M1** Editor | sora-editor + tree-sitter highlighting, document layer, wired into the workspace. Tabs, symbol row, search/replace, SAF and the diagnostics gutter remain. `editor/FINDINGS.md` |
+| 🟢 | **M2** First APK ⭐ | **The thesis holds, and it is reachable.** A person can create a project, edit it, tap Build, and end up with the app installed — all on the device. |
 
 **M2 in detail.** All six stages exist in `:engine:fast` and run on a device:
 aapt2 compile → aapt2 link → ECJ → D8 → package → apksig, behind
@@ -34,9 +34,16 @@ platform from Google's repository, verifies its SHA-1, and extracts
 Terms. `DownloadedPlatformBuildTest` then builds a project against exactly that
 — nothing staged by hand.
 
-What M2 does not yet have is a way for a person to do any of it: there is no
-build screen, because there is no editor. That is M1, and it is what makes the
-engine reachable rather than merely correct.
+**The two are joined.** `WorkspaceScreen` now opens files in the real editor and
+its Build button runs the real engine: it saves the buffer, offers the SDK
+platform download with Google's licence if the device has never built anything,
+streams stage timings and diagnostics into a pane, and hands the signed APK to
+PackageInstaller. Driven by hand on an emulator: create a project → open
+`MainActivity.java` (highlighted) → Build → accept the licence → 62 MB
+downloaded → built in 2.1 s → `com.example.smokeapp` installed. Nothing was
+staged from a desktop.
+
+Diagnostics in that pane are tappable and open the file they name.
 
 `engine/fast/FINDINGS.md` records what the pipeline cost to assemble — the
 install-time constraints that no stage reports, and what is deliberately not
