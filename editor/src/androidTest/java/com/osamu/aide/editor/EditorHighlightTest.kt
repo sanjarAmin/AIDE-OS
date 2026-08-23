@@ -159,6 +159,26 @@ class EditorHighlightTest {
     }
 
     @Test
+    fun a_second_file_of_the_same_language_still_highlights() {
+        // The editor destroys the outgoing language on every setEditorLanguage,
+        // and destroying a tree-sitter language closes its spec. Anything that
+        // shares one spec between two files therefore works exactly once, and
+        // fails on the file after it with "spec is closed" -- which reads as a
+        // corrupt install rather than as what it is.
+        analyse(source)
+
+        instrumentation.runOnMainSync {
+            editor.setEditorLanguage(languages.languageFor(File("Other.java")))
+        }
+        analyse(source)
+
+        assertTrue(
+            "the second Java file opened is unstyled: ${colorsOn(Line.CLASS_DECLARATION)}",
+            EditorColorScheme.KEYWORD in colorsOn(Line.CLASS_DECLARATION),
+        )
+    }
+
+    @Test
     fun an_unknown_file_type_opens_as_plain_text_rather_than_failing() {
         instrumentation.runOnMainSync {
             editor.setEditorLanguage(languages.languageFor(File("notes.unknown")))

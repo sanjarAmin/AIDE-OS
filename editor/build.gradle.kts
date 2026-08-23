@@ -60,7 +60,10 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.ui.tooling.preview)
 
-    implementation(platform(libs.sora.bom))
+    // api, not implementation: sora-editor is exposed to consumers by the api
+    // line below, and a versionless api dependency whose constraint stayed in
+    // this module resolves to nothing at all in :app.
+    api(platform(libs.sora.bom))
     api(libs.sora.editor)
     implementation(libs.sora.language.treesitter)
     implementation(libs.tree.sitter)

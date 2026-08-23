@@ -46,13 +46,23 @@ enum class EditorLanguage(
 /**
  * Builds the sora [Language] for a file.
  *
- * Grammars and their compiled queries are expensive to construct and are held
- * for the life of the process, keyed by language: opening a second Java file
- * should not reparse the grammar, and on a phone that difference is visible.
+ * One [Language] per editor per file: nothing here is shared between editors,
+ * and the reason is ownership rather than taste -- see [specFor].
  */
 class EditorLanguages(private val context: Context) {
 
-    private val specs = mutableMapOf<EditorLanguage, TsLanguageSpec>()
+    /**
+     * The query *text*, not the compiled spec.
+     *
+     * Caching the spec is the obvious optimisation and is wrong. sora's
+     * `TsLanguage.destroy()` closes the spec it was constructed with, and
+     * `CodeEditor.setEditorLanguage` destroys the outgoing language -- so a
+     * spec shared between two files is closed the moment the second one is
+     * opened, and every language built from it afterwards throws
+     * "spec is closed". Reading a query out of assets is what is left, and it
+     * is a few kilobytes.
+     */
+    private val queries = mutableMapOf<EditorLanguage, String>()
 
     @Synchronized
     fun languageFor(file: File): Language {
@@ -62,13 +72,12 @@ class EditorLanguages(private val context: Context) {
         if (!TreeSitterRuntime.isAvailable) return EmptyLanguage()
 
         val language = EditorLanguage.of(file) ?: return EmptyLanguage()
-        val spec = specs.getOrPut(language) { specFor(language) }
-        return TsLanguage(spec, tab = false) { EditorTheme.applyTo(this) }
+        return TsLanguage(specFor(language), tab = false) { EditorTheme.applyTo(this) }
     }
 
     private fun specFor(language: EditorLanguage): TsLanguageSpec = TsLanguageSpec(
         language = language.language(),
-        highlightScmSource = query(language, "highlights.scm"),
+        highlightScmSource = queries.getOrPut(language) { query(language, "highlights.scm") },
         // Blocks, brackets and locals are separate queries the grammars do not
         // ship, and the features built on them -- folding markers, bracket
         // matching, scope-aware highlighting -- are not worth blocking syntax
