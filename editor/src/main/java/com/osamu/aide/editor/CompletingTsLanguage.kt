@@ -3,6 +3,7 @@ package com.osamu.aide.editor
 import android.os.Bundle
 import io.github.rosemoe.sora.editor.ts.TsLanguage
 import io.github.rosemoe.sora.editor.ts.TsLanguageSpec
+import io.github.rosemoe.sora.lang.completion.CompletionCancelledException
 import io.github.rosemoe.sora.lang.completion.CompletionItemKind
 import io.github.rosemoe.sora.lang.completion.CompletionPublisher
 import io.github.rosemoe.sora.lang.completion.SimpleCompletionItem
@@ -40,11 +41,22 @@ internal class CompletingTsLanguage(
         val text = content.reference.toString()
         val offset = position.index.coerceIn(0, text.length)
 
-        val proposals = completions.completionsAt(file, text, offset)
+        // sora cancels a stale request by **interrupting this thread**, and it
+        // does that constantly -- every keystroke supersedes the one before.
+        // A source that blocks (any of them will: this is a compiler) sees that
+        // as an InterruptedException, and letting it escape gets the request
+        // logged as "Completion failed" rather than recognised as cancelled.
+        val proposals = try {
+            completions.completionsAt(file, text, offset)
+        } catch (interrupted: InterruptedException) {
+            // Re-assert the flag the throw cleared, so anything further up the
+            // stack still knows, then say what actually happened.
+            Thread.currentThread().interrupt()
+            throw CompletionCancelledException()
+        }
 
-        // Between the request and here the user may have typed again, in which
-        // case this list is about a buffer that no longer exists. sora signals
-        // that by throwing out of checkCancelled, which is the intended exit.
+        // The request may also have been superseded without an interrupt, in
+        // which case this list is about a buffer that no longer exists.
         publisher.checkCancelled()
 
         val prefix = prefixLength(text, offset)

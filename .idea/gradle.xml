@@ -18,6 +18,8 @@
             <option value="$PROJECT_DIR$/engine" />
             <option value="$PROJECT_DIR$/engine/api" />
             <option value="$PROJECT_DIR$/engine/fast" />
+            <option value="$PROJECT_DIR$/lsp" />
+            <option value="$PROJECT_DIR$/lsp/java" />
             <option value="$PROJECT_DIR$/spike" />
             <option value="$PROJECT_DIR$/spike/javals" />
             <option value="$PROJECT_DIR$/toolchain" />

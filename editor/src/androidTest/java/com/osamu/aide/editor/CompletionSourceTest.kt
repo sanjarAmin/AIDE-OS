@@ -6,12 +6,14 @@ import android.os.Looper
 import android.os.Bundle
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import io.github.rosemoe.sora.lang.completion.CompletionCancelledException
 import io.github.rosemoe.sora.lang.completion.CompletionItemKind
 import io.github.rosemoe.sora.lang.completion.CompletionPublisher
 import io.github.rosemoe.sora.lang.completion.SimpleCompletionItem
 import io.github.rosemoe.sora.text.Content
 import io.github.rosemoe.sora.text.ContentReference
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -148,6 +150,92 @@ class CompletionSourceTest {
 
         // "getSys" is six characters, and all six should be replaced.
         assertEquals(6, items.single().prefixLength)
+    }
+
+    /**
+     * Being superseded must read as cancellation, not failure.
+     *
+     * sora cancels a stale completion by **interrupting the worker thread**, and
+     * it does that on almost every keystroke. A source that blocks -- any real
+     * one will, this is a compiler -- surfaces that as an [InterruptedException],
+     * and the first version of this wiring let it escape: sora logged
+     * "Completion failed" and the user saw no list at all. Found by running the
+     * app, not by any test that existed at the time, which is why it has one now.
+     *
+     * The interrupt flag has to survive too, or code further up the stack is
+     * told the thread was never interrupted.
+     */
+    @Test
+    fun an_interrupted_source_reports_cancellation_and_preserves_the_flag() {
+        var flagInsideSource = false
+        languages.completionSource = CompletionSource { _, _, _ ->
+            flagInsideSource = Thread.currentThread().isInterrupted
+            throw InterruptedException("superseded")
+        }
+        val language = languages.languageFor(File("/project/Main.java"))
+        val content = Content("class Main { void f() { this.get } }")
+        val publisher = CompletionPublisher(Handler(Looper.getMainLooper()), {}, 1)
+
+        var cancelled = false
+        var interruptSurvived = false
+        val worker = Thread {
+            try {
+                language.requireAutoComplete(
+                    ContentReference(content),
+                    content.indexer.getCharPosition(32),
+                    publisher,
+                    Bundle(),
+                )
+            } catch (expected: CompletionCancelledException) {
+                cancelled = true
+            } catch (leaked: InterruptedException) {
+                cancelled = false
+            }
+            interruptSurvived = Thread.currentThread().isInterrupted
+        }
+        worker.start()
+        worker.join(10_000)
+
+        assertFalse("the source should not see the flag already set", flagInsideSource)
+        assertTrue(
+            "an interrupted source must surface as CompletionCancelledException",
+            cancelled,
+        )
+        assertTrue("the interrupt flag was swallowed", interruptSurvived)
+    }
+
+    /** And the language has to keep working afterwards. */
+    @Test
+    fun a_request_after_an_interrupted_one_still_produces_items() {
+        var first = true
+        val source = CompletionSource { _, _, _ ->
+            if (first) {
+                first = false
+                throw InterruptedException("superseded")
+            }
+            listOf(EditorCompletion("getWindow", EditorCompletionKind.METHOD))
+        }
+        languages.completionSource = source
+
+        val language = languages.languageFor(File("/project/Main.java"))
+        val content = Content("class Main {}")
+        val worker = Thread {
+            runCatching {
+                language.requireAutoComplete(
+                    ContentReference(content),
+                    content.indexer.getCharPosition(5),
+                    CompletionPublisher(Handler(Looper.getMainLooper()), {}, 1),
+                    Bundle(),
+                )
+            }
+            // Leaving the flag set would make every later blocking call throw.
+            Thread.interrupted()
+        }
+        worker.start()
+        worker.join(10_000)
+
+        val items = complete("class Main { void f() { this.get } }", 32, source)
+        assertEquals(listOf("getWindow"), items.map { it.label.toString() })
     }
 
     @Test

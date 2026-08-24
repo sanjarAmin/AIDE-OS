@@ -26,7 +26,12 @@ data class EditorCompletion(
  * machinery, and may block -- it is already off the main thread and the caller
  * expects it to take a while. It may also be abandoned mid-flight when the user
  * types another character, so it must not have side effects worth keeping.
+ *
+ * Abandonment is delivered as a **thread interrupt**, so an implementation that
+ * blocks may throw [InterruptedException] and should let it propagate rather
+ * than swallow it: the caller turns it into the cancellation sora understands.
  */
 fun interface CompletionSource {
+    @Throws(InterruptedException::class)
     fun completionsAt(file: File, text: String, offset: Int): List<EditorCompletion>
 }

@@ -86,6 +86,11 @@ class LanguageServices(
  * The alternative -- an async bridge back into a callback -- would buy nothing,
  * because sora's contract is already "block until you have an answer, and be
  * abandoned if the user types again".
+ *
+ * That abandonment arrives as an interrupt, which [runBlocking] reports by
+ * cancelling its coroutine and throwing [InterruptedException]. It is allowed
+ * out of here on purpose; [com.osamu.aide.editor.CompletionSource] documents it,
+ * and the editor turns it into a cancellation rather than a failure.
  */
 class JavaCompletionSource(private val service: JavaLanguageService) : CompletionSource {
 
