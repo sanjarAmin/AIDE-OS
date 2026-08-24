@@ -55,6 +55,14 @@ dependencies {
 
     // Pinned deliberately; see tools/ecj/FINDINGS.md before moving them.
     implementation(libs.ecj)
+
+    // Not for its compiler -- for its `javax.lang.model`, which Android does
+    // not have and which ECJ's batch FileSystem touches in a static
+    // initialiser. This module used to carry a twelve-line hand-written
+    // SourceVersion for that; nb-javac ships the real one, and two copies of
+    // the same class in one APK is a bug that only appears once both are
+    // installed. See FINDINGS section 10.
+    implementation(libs.nb.javac.android)
     implementation(libs.r8)
     implementation(libs.apksig)
 

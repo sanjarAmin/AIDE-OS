@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Redo
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Search
@@ -103,7 +104,7 @@ fun WorkspaceScreen(
     val editorController = remember { CodeEditorController() }
 
     // Consumed once the tab it names is showing; see the effect below.
-    var pendingJump by remember { mutableStateOf<Diagnostic?>(null) }
+    var pendingJump by remember { mutableStateOf<EditorJump?>(null) }
 
     LaunchedEffect(projectDir) { viewModel.open(projectDir) }
     LaunchedEffect(viewModel) { viewModel.jumps.collect { pendingJump = it } }
@@ -111,7 +112,7 @@ fun WorkspaceScreen(
     LaunchedEffect(pendingJump, state.activeFile) {
         val jump = pendingJump ?: return@LaunchedEffect
         val root = state.projectRoot ?: return@LaunchedEffect
-        val target = jump.file?.let { File(root, it.path) } ?: return@LaunchedEffect
+        val target = File(root, jump.file.path)
         if (state.activeFile != target) return@LaunchedEffect
 
         // One frame, so the tab switch has actually put that buffer in the
@@ -243,6 +244,7 @@ fun WorkspaceScreen(
                             onSelectTab = viewModel::selectDocument,
                             onCloseTab = viewModel::closeDocument,
                             onCloseSearch = viewModel::closeSearch,
+                            onGoToDefinition = viewModel::goToDefinition,
                         )
                     },
                 )
@@ -320,6 +322,7 @@ private fun EditorArea(
     onSelectTab: (File) -> Unit,
     onCloseTab: (File) -> Unit,
     onCloseSearch: () -> Unit,
+    onGoToDefinition: (Int) -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
         if (state.openFiles.isNotEmpty()) {
@@ -346,7 +349,9 @@ private fun EditorArea(
                     onTextChanged = onTextChanged,
                     modifier = Modifier.fillMaxSize(),
                     controller = controller,
-                    diagnostics = state.build.diagnostics,
+                    // Live analysis for the file being edited, the
+                    // build's for everything else; see editorDiagnostics.
+                    diagnostics = state.editorDiagnostics,
                     projectRoot = state.projectRoot,
                 )
 
@@ -372,6 +377,14 @@ private fun EditorArea(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // Fixed, not part of the scrolling row: undo is the one action
                 // that must never have scrolled out of reach.
+                IconButton(
+                    onClick = { controller.cursorOffset()?.let(onGoToDefinition) },
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = "Go to definition",
+                    )
+                }
                 IconButton(onClick = controller::undo) {
                     Icon(Icons.Default.Undo, contentDescription = "Undo")
                 }

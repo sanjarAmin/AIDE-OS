@@ -82,6 +82,15 @@ class CodeEditorController {
      * past the end of a file the user has since edited, and that is not worth
      * an exception.
      */
+    /**
+     * Where the caret is, as a character index into the buffer.
+     *
+     * Null when no editor is attached. A language service works in offsets
+     * because that is what a compiler's source positions are; the line/column
+     * the editor thinks in is a rendering of the same thing.
+     */
+    fun cursorOffset(): Int? = editor?.cursor?.left
+
     fun jumpTo(line: Int, column: Int = 1) {
         val editor = editor ?: return
         val targetLine = (line - 1).coerceIn(0, editor.text.lineCount - 1)

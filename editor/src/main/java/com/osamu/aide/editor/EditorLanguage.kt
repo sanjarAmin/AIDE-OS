@@ -6,7 +6,6 @@ import com.itsaky.androidide.treesitter.java.TSLanguageJava
 import com.itsaky.androidide.treesitter.json.TSLanguageJson
 import com.itsaky.androidide.treesitter.kotlin.TSLanguageKotlin
 import com.itsaky.androidide.treesitter.xml.TSLanguageXml
-import io.github.rosemoe.sora.editor.ts.TsLanguage
 import io.github.rosemoe.sora.editor.ts.TsLanguageSpec
 import io.github.rosemoe.sora.lang.EmptyLanguage
 import io.github.rosemoe.sora.lang.Language
@@ -52,6 +51,21 @@ enum class EditorLanguage(
 class EditorLanguages(private val context: Context) {
 
     /**
+     * Where proposals come from, when anything can supply them.
+     *
+     * Settable rather than injected because it arrives late and can change:
+     * Java intelligence needs `android.jar`, which is a download the user may
+     * not have made yet, and it is per-project besides. A language built before
+     * the service exists still picks it up, because it reads this at completion
+     * time rather than capturing it at construction.
+     *
+     * Volatile: written from the main thread when a project opens, read from
+     * sora's completion worker.
+     */
+    @Volatile
+    var completionSource: CompletionSource? = null
+
+    /**
      * The query *text*, not the compiled spec.
      *
      * Caching the spec is the obvious optimisation and is wrong. sora's
@@ -72,7 +86,12 @@ class EditorLanguages(private val context: Context) {
         if (!TreeSitterRuntime.isAvailable) return EmptyLanguage()
 
         val language = EditorLanguage.of(file) ?: return EmptyLanguage()
-        return TsLanguage(specFor(language), tab = false) { EditorTheme.applyTo(this) }
+        return CompletingTsLanguage(
+            spec = specFor(language),
+            file = file,
+            // Read per request, not captured: see [completionSource].
+            source = { completionSource },
+        ) { EditorTheme.applyTo(this) }
     }
 
     private fun specFor(language: EditorLanguage): TsLanguageSpec = TsLanguageSpec(

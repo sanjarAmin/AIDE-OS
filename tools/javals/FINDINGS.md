@@ -105,9 +105,14 @@ namespaces** — `com.sun.tools.javac.*` became `openjdk.tools.javac.*`, and
 Two things follow:
 
 - Our spike compiles against `com.sun.*` / `javax.tools.*` and works, so the
-  relocation is *not* required to run on ART at API 34. Whatever drove it —
-  collisions with platform stubs, or wanting a newer language level — it is not
-  a blocker we have hit.
+  relocation is *not* required to run on ART at API 34 — **by the compiler
+  alone**. It is required as soon as something else in the same APK defines a
+  class in those packages: wiring `:lsp:java` into the app collided with the
+  `javax.lang.model.SourceVersion` shim `:engine:fast` carried for ECJ, and the
+  language service silently answered "no errors" for every file. That is
+  `engine/fast/FINDINGS.md` section 10, and it is the reason AndroidIDE
+  relocated. We resolved it by deleting the duplicate rather than relocating,
+  which works while nb-javac is the only provider of those packages.
 - We are pinned to a dead artifact. It is fine for M3, and it is a known debt.
   The escape hatch is the one the licence already permits: AndroidIDE is GPLv3,
   as are we, so vendoring their composite build is available if the pin ever

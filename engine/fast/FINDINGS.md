@@ -161,7 +161,59 @@ dependency edge so a resource change invalidates everything downstream of it,
 and `prepare()` staying destructive whenever a stamp is missing or does not
 match. That is a milestone's work, not a cleanup.
 
-## 10. Things known missing
+## 10. Two `javax.lang.model.SourceVersion`s in one APK, and the silence that follows
+
+Android has no `javax.lang.model`, so this module used to carry a hand-written
+twelve-line `SourceVersion` enum: ECJ's batch `FileSystem` reads
+`SourceVersion.valueOf("RELEASE_12")` in a static initialiser, catching
+`IllegalArgumentException`. A *missing class* throws `NoClassDefFoundError`
+instead, which walks past that handler and makes the whole batch compiler
+unloadable. The shim stopped at `RELEASE_11` deliberately, so the probe threw
+the exception ECJ expects and left `isJRE12Plus` false.
+
+That was correct for this module alone and became a bug the moment `:lsp:java`
+existed. nb-javac ships the *real* `javax.lang.model`, `SourceVersion`
+included — `RELEASE_0` through `RELEASE_17`, plus `isIdentifier`, `isName` and
+`latest`. With both modules in one APK, **both classes are dexed**: D8 does not
+report a duplicate, because each library is dexed separately and the copies land
+in different `classes*.dex`. ART then resolves the name to whichever dex comes
+first, which was the shim.
+
+The symptom is worth recording, because nothing about it points at a classpath:
+
+- Completion returned nothing. Diagnostics returned nothing.
+- No crash, no log, no exception out of the language service.
+- `parse()` worked perfectly — `typeDecls=1`.
+- `analyze()` returned zero elements, and `Elements.getTypeElement` then reported
+  *"Cannot use Elements.getTypeElement before the TaskEvent.Kind.ENTER finished
+  event"* — because ENTER had aborted on a `NoSuchMethodError` for
+  `SourceVersion.isIdentifier(CharSequence)`, swallowed inside javac.
+
+A language service that silently answers "no errors" is indistinguishable from a
+clean file, which is how this survived a green unit-test suite: `:lsp:java`'s own
+instrumented tests pass, because its test APK has no ECJ in it and therefore only
+one `SourceVersion`. **Only the app that contains both is broken**, and only an
+end-to-end test through the app catches it — `WorkspaceViewModelTest` now has one.
+
+The fix is to have exactly one definition. The shim is deleted and this module
+depends on `nb-javac-android` for the real one, which is already in the app for
+`:lsp:java`, so nothing grows. Two things make that safe, and both were checked
+rather than assumed:
+
+- `isJRE12Plus` becomes **true** with the real enum. It gates only
+  `getOlderSystemRelease`, which reads `ct.sym` out of a JDK image that does not
+  exist on a device — and that is reached only for `--release`, which
+  `JavaCompileStage` does not pass. It uses `-source`/`-target`.
+- `:engine:fast`'s instrumented suite still builds and signs a working APK.
+
+Worth noting for the future: this is *why* AndroidIDE relocated
+`javax.*` to `jdkx.*` and `com.sun.tools.javac.*` to `openjdk.tools.javac.*` in
+their vendored compiler. `tools/javals/FINDINGS.md` recorded that the relocation
+was not needed on ART — true of the compiler in isolation, and wrong for an
+application that also carries ECJ. A third javax-providing dependency would put
+that question back on the table.
+
+## 11. Things known missing
 
 - **The bundled tests stage `android.jar` by hand.** They read a 27 MB copy out
   of `androidTest/assets`, which is not in git and only exists on a machine that

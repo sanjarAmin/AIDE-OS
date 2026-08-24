@@ -1,6 +1,7 @@
 package com.osamu.aide.ui.workspace
 
 import android.content.Intent
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.osamu.aide.core.common.AppResult
@@ -10,6 +11,7 @@ import com.osamu.aide.core.fs.Project
 import com.osamu.aide.core.fs.ProjectFiles
 import com.osamu.aide.core.fs.ProjectRepository
 import com.osamu.aide.editor.DocumentStore
+import com.osamu.aide.editor.EditorLanguages
 import com.osamu.aide.editor.SourceDocument
 import com.osamu.aide.engine.api.BuildEvent
 import com.osamu.aide.engine.api.BuildResult
@@ -22,6 +24,9 @@ import com.osamu.aide.toolchain.manager.ToolchainComponent
 import com.osamu.aide.toolchain.manager.ToolchainManager
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -96,6 +101,22 @@ sealed interface WorkspaceEvent {
 }
 
 /** One open tab. */
+/**
+ * What the language service last said about the file being edited.
+ *
+ * Only ever one file's worth. Analysis follows the cursor: running it for every
+ * open tab would keep a compiler busy on files nobody is looking at, and the
+ * gutter only ever renders the file on screen anyway.
+ */
+/** Somewhere to put the cursor: a project-relative file, 1-based position. */
+data class EditorJump(val file: File, val line: Int, val column: Int)
+
+data class AnalysisUiState(
+    val file: File? = null,
+    val diagnostics: List<Diagnostic> = emptyList(),
+    val isRunning: Boolean = false,
+)
+
 data class OpenFile(
     val document: SourceDocument,
     val isDirty: Boolean = false,
@@ -119,6 +140,7 @@ data class WorkspaceUiState(
     val documentError: String? = null,
     val isSearchOpen: Boolean = false,
     val build: BuildUiState = BuildUiState(),
+    val analysis: AnalysisUiState = AnalysisUiState(),
     val isBuildPanelOpen: Boolean = false,
     val platform: PlatformUiState? = null,
 ) {
@@ -130,6 +152,22 @@ data class WorkspaceUiState(
     val isDocumentDirty: Boolean get() = active?.isDirty == true
 
     val hasUnsavedChanges: Boolean get() = openFiles.any { it.isDirty }
+
+    /**
+     * What the gutter shows.
+     *
+     * Live analysis wins over the build's diagnostics for the file it is about,
+     * because it is newer -- the build describes what was on disk when it ran,
+     * and the user has been typing since. Everything else falls back to the
+     * build, which is the only thing that knows about resources, dexing and
+     * signing.
+     */
+    val editorDiagnostics: List<Diagnostic>
+        get() = if (analysis.file != null && analysis.file == activeFile) {
+            analysis.diagnostics
+        } else {
+            build.diagnostics
+        }
 }
 
 class WorkspaceViewModel(
@@ -139,6 +177,8 @@ class WorkspaceViewModel(
     private val builder: ProjectBuilder,
     private val toolchain: ToolchainManager,
     private val installer: ApkInstaller,
+    private val languageServices: LanguageServices,
+    private val languages: EditorLanguages,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(WorkspaceUiState())
@@ -161,6 +201,7 @@ class WorkspaceViewModel(
     private var descriptorJob: Job? = null
     private var buildJob: Job? = null
     private var installJob: Job? = null
+    private var analysisJob: Job? = null
 
     /**
      * How far the platform download got, kept outside the prompt's state so
@@ -180,6 +221,7 @@ class WorkspaceViewModel(
             expandedPaths = setOf(projectDir.absolutePath),
         )
         rebuildTree()
+        installCompletions(projectDir)
 
         // The tree does not need the descriptor and building cannot start
         // without it, so the two are not sequenced: the files appear
@@ -195,6 +237,18 @@ class WorkspaceViewModel(
                 is AppResult.Failure -> Unit
             }
         }
+    }
+
+    /**
+     * Points the editor's completion at this project, if anything can serve it.
+     *
+     * Cleared rather than left stale when it cannot: a service built for the
+     * previous project would answer with that project's types, which is worse
+     * than an empty list because it looks like it worked.
+     */
+    private fun installCompletions(projectDir: File) {
+        languages.completionSource = languageServices.forProject(projectDir)
+            ?.let(::JavaCompletionSource)
     }
 
     fun toggle(node: FileNode) {
@@ -288,6 +342,94 @@ class WorkspaceViewModel(
         if (active.file !in pendingText && text == active.document.text) return
         pendingText[active.file] = text
         if (!active.isDirty) markDirty(active.file, dirty = true)
+        analyse(active.file, text)
+    }
+
+    /**
+     * Runs the language service over the buffer, a beat after typing stops.
+     *
+     * Debounced rather than throttled, and the previous request is cancelled
+     * rather than allowed to finish: mid-word, a diagnostic is almost always
+     * "cannot find symbol" for an identifier the user is halfway through
+     * typing. Showing that and taking it back a keystroke later is worse than
+     * showing nothing, and the compiler time spent producing it is wasted.
+     *
+     * The service serialises requests internally, so a cancelled job that has
+     * already reached the compiler still has to finish there before the next
+     * one starts. Cancelling early is what keeps that queue from growing.
+     */
+    private fun analyse(file: File, text: String) {
+        val root = _state.value.projectRoot ?: return
+        val service = languageServices.forProject(root) ?: return
+        if (file.extension != "java") return
+
+        analysisJob?.cancel()
+        analysisJob = viewModelScope.launch {
+            delay(ANALYSIS_DEBOUNCE_MILLIS)
+            _state.update { it.copy(analysis = it.analysis.copy(isRunning = true)) }
+
+            // Logged, not swallowed. A language service that fails silently
+            // looks exactly like a clean file, and the first version of this
+            // hid a NoSuchMethodError for as long as it took to notice that no
+            // diagnostic had ever appeared. Analysis is still best-effort --
+            // the editor must survive a broken compiler -- but not invisible.
+            val diagnostics = try {
+                service.diagnostics(file, text)
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (failure: Throwable) {
+                Log.w(TAG, "analysis of ${file.name} failed", failure)
+                null
+            }
+
+            // A cancelled job must not publish: by now the state may describe a
+            // different file entirely.
+            if (diagnostics == null || !isActive) return@launch
+            _state.update { current ->
+                current.copy(
+                    analysis = AnalysisUiState(
+                        file = file,
+                        diagnostics = diagnostics,
+                        isRunning = false,
+                    ),
+                )
+            }
+        }
+    }
+
+    /**
+     * Jumps to the declaration of whatever is at [offset] in the active file.
+     *
+     * Opens the declaring file first when it is a different one, then jumps --
+     * the two are sequenced rather than fired together because the jump is a
+     * cursor move inside a document that has to exist first.
+     */
+    fun goToDefinition(offset: Int) {
+        val active = _state.value.active ?: return
+        val root = _state.value.projectRoot ?: return
+        val service = languageServices.forProject(root) ?: return
+
+        viewModelScope.launch {
+            val text = pendingText[active.file] ?: active.document.text
+            val target = try {
+                service.definition(active.file, text, offset)
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (failure: Throwable) {
+                Log.w(TAG, "go-to-definition failed", failure)
+                null
+            }
+            if (target == null) {
+                _events.send(WorkspaceEvent.Notice("No definition found."))
+                return@launch
+            }
+
+            // Opening a tab that is already open just selects it, so this is
+            // unconditional; the screen holds the jump until that tab is the
+            // one actually showing.
+            openDocument(File(root, target.file.path))
+            _jumps.trySend(EditorJump(target.file, target.line, target.column))
+        }
     }
 
     fun save() {
@@ -408,18 +550,22 @@ class WorkspaceViewModel(
         val root = project?.rootDir ?: rootNode?.file ?: return
         val file = diagnostic.file ?: return
         openDocument(File(root, file.path))
-        _jumps.trySend(diagnostic)
+        _jumps.trySend(EditorJump(file, diagnostic.line, diagnostic.column))
     }
 
     /**
-     * Where in the file the last-requested diagnostic was.
+     * Where the cursor has been asked to go next.
      *
      * A one-shot: the screen consumes it once the editor has that file showing
      * and moves the cursor. State would re-fire the jump on every recomposition,
      * dragging the user back from wherever they had scrolled to.
+     *
+     * Shared by diagnostics and go-to-definition because the hard part is the
+     * same for both -- waiting for the tab to actually be the one on screen --
+     * and doing it twice would mean two ways to land in the wrong buffer.
      */
-    private val _jumps = Channel<Diagnostic>(Channel.CONFLATED)
-    val jumps: Flow<Diagnostic> = _jumps.receiveAsFlow()
+    private val _jumps = Channel<EditorJump>(Channel.CONFLATED)
+    val jumps: Flow<EditorJump> = _jumps.receiveAsFlow()
 
     private suspend fun onBuildEvent(event: BuildEvent) {
         when (event) {
@@ -560,5 +706,26 @@ class WorkspaceViewModel(
         }
         walk(root)
         return out
+    }
+
+    /**
+     * The warm compiler is a symbol table's worth of platform classes. Nothing
+     * else drops it, and the editor is the only thing that wanted it.
+     */
+    override fun onCleared() {
+        languages.completionSource = null
+        languageServices.release()
+        super.onCleared()
+    }
+
+    private companion object {
+        const val TAG = "WorkspaceViewModel"
+
+        /**
+         * Long enough to sit through a word, short enough that pausing to think
+         * shows the errors. Tuned against a warm request costing ~80 ms: at this
+         * delay a normal typing burst produces one compile, not twelve.
+         */
+        const val ANALYSIS_DEBOUNCE_MILLIS = 350L
     }
 }

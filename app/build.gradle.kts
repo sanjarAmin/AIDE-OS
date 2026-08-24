@@ -66,6 +66,7 @@ dependencies {
     implementation(project(":editor"))
     implementation(project(":engine:api"))
     implementation(project(":engine:fast"))
+    implementation(project(":lsp:java"))
     implementation(project(":toolchain:native"))
     implementation(project(":toolchain:manager"))
 

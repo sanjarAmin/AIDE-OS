@@ -14,9 +14,11 @@ import com.osamu.aide.toolchain.manager.ToolchainManager
 import com.osamu.aide.toolchain.nativetools.NativeToolRunner
 import com.osamu.aide.toolchain.nativetools.NativeToolchain
 import com.osamu.aide.ui.projects.ProjectsViewModel
+import com.osamu.aide.ui.workspace.LanguageServices
 import com.osamu.aide.ui.workspace.ProjectBuilder
 import com.osamu.aide.ui.workspace.WorkspaceViewModel
 import org.koin.core.module.dsl.viewModel
+import org.koin.core.qualifier.named
 import org.koin.dsl.module
 import java.io.File
 
@@ -25,11 +27,18 @@ import java.io.File
  * graph stays free of codegen -- with the number of modules this project is
  * heading towards, KSP rounds would dominate incremental build times.
  */
+private const val BUILD_OUTPUT_ROOT = "buildOutputRoot"
+
 val appModule = module {
 
     single<DispatcherProvider> { DefaultDispatcherProvider() }
 
     single { workspaceRoot(get<Context>()) }
+
+    // One definition of where intermediates go. The build writes R.java under
+    // it and language intelligence reads it back, so the two must agree; a
+    // second literal here is how they would quietly stop agreeing.
+    single(named(BUILD_OUTPUT_ROOT)) { File(get<Context>().cacheDir, "builds") }
 
     single<ProjectRepository> { FileProjectRepository(get(), get()) }
     single { ProjectImporter(get(), get(), get()) }
@@ -50,12 +59,22 @@ val appModule = module {
             platforms = get(),
             runner = get(),
             dispatchers = get(),
-            outputRoot = File(get<Context>().cacheDir, "builds"),
+            outputRoot = get(named(BUILD_OUTPUT_ROOT)),
+        )
+    }
+
+    // One per app, so the warm compiler behind it survives tab switches and
+    // rotations. Rebuilding it per screen would undo the whole point.
+    single {
+        LanguageServices(
+            toolchain = get(),
+            dispatchers = get(),
+            buildOutputRoot = get(named(BUILD_OUTPUT_ROOT)),
         )
     }
 
     viewModel { ProjectsViewModel(get(), get()) }
-    viewModel { WorkspaceViewModel(get(), get(), get(), get(), get(), get()) }
+    viewModel { WorkspaceViewModel(get(), get(), get(), get(), get(), get(), get(), get()) }
 }
 
 /**

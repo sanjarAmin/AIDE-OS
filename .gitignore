@@ -30,3 +30,4 @@ local.properties
 /spike/jvmtools/src/androidTest/assets/*.jar
 /engine/fast/src/androidTest/assets/android.jar
 /lsp/java/src/androidTest/assets/android.jar
+/app/src/androidTest/assets/android.jar
