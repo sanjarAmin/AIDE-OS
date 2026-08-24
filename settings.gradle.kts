@@ -46,5 +46,12 @@ include(":toolchain:native")
 // Components too large to bundle: downloaded, verified, installed on device.
 include(":toolchain:manager")
 
+// Java language intelligence: completion, diagnostics, go-to-definition. In
+// process, not over a socket -- see :lsp:client for the transports the C++ and
+// Kotlin servers will need. Spike R3 in tools/javals/FINDINGS.md is the design
+// input; the short version is that a compiler has to stay warm between
+// keystrokes or nothing here meets its latency budget.
+include(":lsp:java")
+
 // Spike R3 -- a Java language-intelligence core on ART. Not part of the app.
 include(":spike:javals")
