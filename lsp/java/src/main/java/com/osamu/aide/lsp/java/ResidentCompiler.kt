@@ -53,6 +53,7 @@ import javax.tools.StandardLocation
 internal class ResidentCompiler(
     private val platform: File,
     private val classpath: List<File>,
+    private val sourcePath: List<File>,
 ) {
 
     // One context. Requests are serialised, so a second would never be live at
@@ -67,6 +68,18 @@ internal class ResidentCompiler(
             // it anywhere else and javac looks for a JDK that is not there.
             setLocation(StandardLocation.PLATFORM_CLASS_PATH, listOf(platform))
             setLocation(StandardLocation.CLASS_PATH, classpath)
+            // Without this a project is a heap of unrelated files: a reference
+            // to a class the user wrote in another file does not resolve, so it
+            // has no type, so it completes nothing and jumps nowhere. javac
+            // reads from here on demand -- only files actually referenced are
+            // parsed, which is why this does not cost a whole-project compile.
+            //
+            // The file being edited is passed in as a buffer as well as living
+            // here on disk. javac does not go looking on the source path for a
+            // class the compilation unit it was handed already declares, so the
+            // two do not collide -- and the buffer is the one that wins, which
+            // is what makes unsaved edits visible to the request.
+            setLocation(StandardLocation.SOURCE_PATH, sourcePath)
         }
     }
 

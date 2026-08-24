@@ -170,6 +170,29 @@ Two consequences worth carrying forward:
   clean when it is not. The pool drops them; `pooling_does_not_leak_symbols_between_requests`
   asserts it on ART rather than trusting the documentation.
 
+## Go-to-definition needs a source path, and that is not free of consequence
+
+A reference to a class the user wrote in another file does not resolve at all
+unless `StandardLocation.SOURCE_PATH` points at the project's source roots.
+Without it there is no type, so nothing completes on it and nothing jumps to it
+— and the failure is silent, indistinguishable from "nothing under the cursor".
+
+Two things about that turned out fine and were worth checking rather than
+assuming:
+
+- **The buffer and the file on disk do not collide.** The file being edited is
+  passed in as a `JavaFileObject` *and* sits on the source path. javac does not
+  go looking on the source path for a class the compilation unit it was handed
+  already declares, so there is no duplicate-class error, and the unsaved buffer
+  is what the request sees.
+- **It did not cost the budget.** Warm median moved from 82 ms to 92 ms. javac
+  reads the source path on demand, so only files actually referenced are parsed;
+  this is not a whole-project compile.
+
+Definitions that live in `android.jar` return null rather than a location. The
+element has a symbol but no tree, so there is no file to open, and inventing one
+would send the user somewhere that does not exist.
+
 ## Verified on device
 
 `:spike:javals:connectedDebugAndroidTest` on `aideos_test` (API 34, x86_64),

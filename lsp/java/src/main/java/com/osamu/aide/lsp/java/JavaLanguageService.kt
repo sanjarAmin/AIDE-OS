@@ -7,7 +7,8 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * Java intelligence for one project: completion and diagnostics, in process.
+ * Java intelligence for one project: completion, diagnostics and go-to-
+ * definition, in process.
  *
  * Holds a warm compiler, so it is meant to live as long as the project is open
  * and to be shared by everything that asks it questions. Constructing one per
@@ -20,13 +21,14 @@ import java.io.File
  * pool would let completion stall the editor's file reads.
  */
 class JavaLanguageService(
-    private val platform: File,
+    platform: File,
     private val projectRoot: File,
     private val dispatchers: DispatcherProvider,
     classpath: List<File> = emptyList(),
+    sourcePath: List<File> = listOf(File(projectRoot, "src/main/java")),
 ) {
 
-    private val compiler = ResidentCompiler(platform, classpath)
+    private val compiler = ResidentCompiler(platform, classpath, sourcePath)
 
     /** What javac says about [text], as the gutter renders it. */
     suspend fun diagnostics(file: File, text: String): List<Diagnostic> =
@@ -57,6 +59,23 @@ class JavaLanguageService(
                     runCatching { JavaCompletions.at(compilation, path, prefix) }
                         .getOrDefault(emptyList())
                 }
+            }
+        }
+
+    /**
+     * Where the thing at [offset] was declared, or null if there is nowhere to
+     * go.
+     *
+     * Null covers two ordinary cases as well as the failures: the cursor is on
+     * nothing in particular, or it is on something declared in `android.jar`,
+     * which has symbols but no source to open.
+     */
+    suspend fun definition(file: File, text: String, offset: Int): SourceLocation? =
+        withContext(dispatchers.compiler) {
+            compiler.withCompilation(file, text) { compilation ->
+                val path = FindCursor(compilation.task).scan(compilation.unit, offset.toLong())
+                    ?: return@withCompilation null
+                runCatching { JavaDefinitions.at(compilation, path, projectRoot) }.getOrNull()
             }
         }
 

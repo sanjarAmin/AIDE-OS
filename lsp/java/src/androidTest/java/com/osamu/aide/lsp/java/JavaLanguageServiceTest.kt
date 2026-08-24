@@ -219,6 +219,76 @@ class JavaLanguageServiceTest {
         )
     }
 
+    @Test
+    fun jumping_to_a_definition_lands_on_the_name_in_the_same_file() = runTest {
+        val text = LOCAL_DEFINITION.replace(CURSOR, "")
+        val location = service.definition(
+            sourceFile("Local.java"),
+            text,
+            LOCAL_DEFINITION.indexOf(CURSOR),
+        )
+
+        val found = requireNotNull(location) { "no definition found" }
+        assertEquals(File("src/main/java/com/example/Local.java"), found.file)
+
+        // The span must cover the identifier, not the whole declaration: the
+        // point of the jump is to put the cursor on the name.
+        val line = text.lines()[found.line - 1]
+        assertEquals(
+            "expected the span to cover the declared name, got '${
+                line.substring(found.column - 1, found.endColumn - 1)
+            }' on line: $line",
+            "target",
+            line.substring(found.column - 1, found.endColumn - 1),
+        )
+    }
+
+    /**
+     * The case that needs a source path, and the reason one is configured.
+     *
+     * A reference to a class the user wrote in another file has to resolve
+     * before it can be jumped to. Without `SOURCE_PATH` javac never reads the
+     * other file, the type is unresolved, and this returns null -- which is
+     * indistinguishable from "nothing under the cursor" unless it is tested.
+     */
+    @Test
+    fun jumping_to_a_definition_crosses_files() = runTest {
+        File(projectRoot, "src/main/java/com/example/Helper.java").apply {
+            parentFile?.mkdirs()
+            writeText(HELPER)
+        }
+
+        val text = CROSS_FILE.replace(CURSOR, "")
+        val location = service.definition(
+            sourceFile("Caller.java"),
+            text,
+            CROSS_FILE.indexOf(CURSOR),
+        )
+
+        val found = requireNotNull(location) { "no definition found across files" }
+        assertEquals(
+            "should have jumped into the other file",
+            File("src/main/java/com/example/Helper.java"),
+            found.file,
+        )
+        val line = HELPER.lines()[found.line - 1]
+        assertEquals(
+            "expected to land on the method name, got line: $line",
+            "help",
+            line.substring(found.column - 1, found.endColumn - 1),
+        )
+    }
+
+    @Test
+    fun a_definition_inside_the_platform_has_nowhere_to_go() = runTest {
+        // `Activity` is declared in android.jar: a symbol with no source. Null
+        // is the honest answer; a location would send the user nowhere.
+        val text = ACTIVITY.replace(CURSOR, "")
+        val onActivity = text.indexOf("extends Activity") + "extends ".length + 2
+
+        assertEquals(null, service.definition(sourceFile(), text, onActivity))
+    }
+
     private fun renamedSource(method: String, caller: String = method): String = """
         package com.example;
 
@@ -263,6 +333,40 @@ class JavaLanguageServiceTest {
                 protected void onCreate(Bundle savedInstanceState) {
                     super.onCreate(savedInstanceState);
                     Object local = /*^*/;
+                }
+            }
+        """.trimIndent()
+
+        val LOCAL_DEFINITION = """
+            package com.example;
+
+            public class Local {
+                int target() {
+                    return 1;
+                }
+
+                int call() {
+                    return /*^*/target();
+                }
+            }
+        """.trimIndent()
+
+        val HELPER = """
+            package com.example;
+
+            public class Helper {
+                static int help() {
+                    return 7;
+                }
+            }
+        """.trimIndent()
+
+        val CROSS_FILE = """
+            package com.example;
+
+            public class Caller {
+                int call() {
+                    return Helper./*^*/help();
                 }
             }
         """.trimIndent()
