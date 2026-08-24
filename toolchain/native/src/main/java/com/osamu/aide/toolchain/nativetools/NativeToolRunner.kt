@@ -7,6 +7,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.InputStream
 
 /**
  * Executes bundled native tools.
@@ -20,10 +21,24 @@ class NativeToolRunner(
     private val dispatchers: DispatcherProvider,
 ) {
 
+    /**
+     * Runs [tool], handing each line of its output to [onLine] as it is written.
+     *
+     * Streaming rather than collecting. The reason is not really memory -- a
+     * build keeps every diagnostic it is shown anyway -- it is latency: a
+     * resource error is worth putting in front of the user the moment aapt2
+     * prints it, and a run that only reports on exit cannot do that.
+     *
+     * [onLine] is called from whichever coroutine drains the stream it came
+     * from, but never from both at once (see [drain]), so an implementation may
+     * be sequential without being thread-safe. It must not block for long: the
+     * pipe it came from is not being read while it runs.
+     */
     suspend fun run(
         tool: NativeTool,
         args: List<String>,
         workingDir: File? = null,
+        onLine: (ToolLine) -> Unit = {},
     ): AppResult<ToolResult> {
         val executable = when (val availability = toolchain.locate(tool)) {
             is ToolAvailability.Available -> availability.executable
@@ -40,19 +55,42 @@ class NativeToolRunner(
                 // output than a pipe buffer holds, and reading them in sequence
                 // deadlocks: the process blocks writing to the stream we are
                 // not reading yet, so it never exits and waitFor never returns.
-                val (stdout, stderr) = coroutineScope {
-                    val out = async { process.inputStream.bufferedReader().readText() }
-                    val err = async { process.errorStream.bufferedReader().readText() }
-                    out.await() to err.await()
+                val sink = Any()
+                coroutineScope {
+                    val out = async { drain(process.inputStream, ToolStream.STDOUT, sink, onLine) }
+                    val err = async { drain(process.errorStream, ToolStream.STDERR, sink, onLine) }
+                    out.await()
+                    err.await()
                 }
 
-                val exitCode = process.waitFor()
-                AppResult.Success(ToolResult(exitCode, stdout.trim(), stderr.trim()))
+                AppResult.Success(ToolResult(process.waitFor()))
             } catch (e: Exception) {
                 AppResult.Failure(
                     AppError("Could not run ${tool.libraryName}: ${e.message}", e),
                 )
             }
+        }
+    }
+
+    /**
+     * Reads one stream to its end, a line at a time.
+     *
+     * The callback is made under [sink] so that the two concurrent drains take
+     * turns. That is a contract, not an optimisation: without it every caller
+     * would need a thread-safe collector for a callback that reads as though it
+     * were sequential, and the first one to forget would corrupt a list of
+     * diagnostics on a device and nowhere else. The lock is held only across the
+     * callback, never across a read, so a slow consumer on one stream cannot
+     * stop the other pipe from being drained.
+     */
+    private fun drain(
+        stream: InputStream,
+        tag: ToolStream,
+        sink: Any,
+        onLine: (ToolLine) -> Unit,
+    ) {
+        stream.bufferedReader().forEachLine { line ->
+            synchronized(sink) { onLine(ToolLine(tag, line)) }
         }
     }
 

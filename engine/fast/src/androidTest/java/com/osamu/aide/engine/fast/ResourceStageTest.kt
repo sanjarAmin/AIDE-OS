@@ -2,6 +2,7 @@ package com.osamu.aide.engine.fast
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.osamu.aide.core.fs.ProjectLayout
+import com.osamu.aide.engine.api.Diagnostic
 import com.osamu.aide.engine.api.DiagnosticSeverity
 import com.osamu.aide.engine.api.hasErrors
 import kotlinx.coroutines.test.runTest
@@ -126,6 +127,45 @@ class ResourceStageTest {
         // pretending to a precision aapt2 does not always have.
         val located = result.diagnostics.first { it.severity == DiagnosticSeverity.ERROR }
         assertEquals(
+            File("src/main/res/values/strings.xml"),
+            located.file,
+        )
+    }
+
+    /**
+     * The streaming path carries the same diagnostics, canonicalised the same
+     * way.
+     *
+     * Worth asserting separately from the returned [StageResult]: the reported
+     * copy travels through a callback on the coroutine draining aapt2's pipes,
+     * and a refactor that forgot to route it through [Aapt2Diagnostics] would
+     * still fail the stage correctly while handing the editor an absolute cache
+     * path it cannot open. Jump-to-error would break and nothing else would.
+     */
+    @Test
+    fun diagnostics_are_reported_while_the_tool_runs() = runTest {
+        val project = fixture.project()
+        val layout = ProjectLayout.of(project)
+        File(layout.resourceDir, "values/strings.xml").writeText(
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <resources>
+                <string name="greeting">unclosed
+            </resources>
+            """.trimIndent(),
+        )
+
+        val reported = mutableListOf<Diagnostic>()
+        val result = stage.compile(layout, fixture.workspace()) { reported += it }
+
+        assertEquals(
+            "reported and returned diagnostics disagree",
+            result.diagnostics,
+            reported.toList(),
+        )
+        val located = reported.first { it.severity == DiagnosticSeverity.ERROR }
+        assertEquals(
+            "the streamed path was not relativised",
             File("src/main/res/values/strings.xml"),
             located.file,
         )

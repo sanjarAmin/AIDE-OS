@@ -74,19 +74,20 @@ class Aapt2InstrumentedTest {
     fun aapt2_reports_its_version() = runTest {
         assumeTrue(Build.VERSION.SDK_INT >= NativeTool.AAPT2.minApiLevel)
 
-        val result = runner.run(NativeTool.AAPT2, listOf("version"))
+        val output = Output()
+        val result = runner.run(NativeTool.AAPT2, listOf("version"), onLine = output.sink)
         val value = (result as? AppResult.Success)?.value
             ?: throw AssertionError("run failed: $result")
 
-        assertEquals("stderr: ${value.stderr}", 0, value.exitCode)
+        assertEquals("stderr: ${output.stderr}", 0, value.exitCode)
         // aapt2 routes everything through its own diagnostics printer, which
         // writes to stderr -- including `version`, and including success output.
         // Reading stdout here would silently pass on a broken binary.
         assertTrue(
-            "unexpected version output: ${value.diagnostics}",
-            value.diagnostics.contains("Android Asset Packaging Tool"),
+            "unexpected version output: ${output.diagnostics}",
+            output.diagnostics.contains("Android Asset Packaging Tool"),
         )
-        assertTrue("expected nothing on stdout, got ${value.stdout}", value.stdout.isBlank())
+        assertTrue("expected nothing on stdout, got ${output.stdout}", output.stdout.isBlank())
     }
 
     /** The real thing: compile a resource file into aapt2's binary format. */
@@ -106,14 +107,16 @@ class Aapt2InstrumentedTest {
         )
         val outDir = File(workDir, "compiled").apply { mkdirs() }
 
+        val output = Output()
         val result = runner.run(
             tool = NativeTool.AAPT2,
             args = listOf("compile", File(values, "strings.xml").absolutePath, "-o", outDir.absolutePath),
+            onLine = output.sink,
         )
         val value = (result as? AppResult.Success)?.value
             ?: throw AssertionError("run failed: $result")
 
-        assertEquals("aapt2 said: ${value.diagnostics}", 0, value.exitCode)
+        assertEquals("aapt2 said: ${output.diagnostics}", 0, value.exitCode)
 
         val produced = outDir.listFiles().orEmpty()
         assertEquals(
@@ -137,14 +140,40 @@ class Aapt2InstrumentedTest {
         File(values, "strings.xml").writeText("<resources><string name=\"x\">unclosed</resources>")
         val outDir = File(workDir, "bad-out").apply { mkdirs() }
 
+        val output = Output()
         val result = runner.run(
             tool = NativeTool.AAPT2,
             args = listOf("compile", File(values, "strings.xml").absolutePath, "-o", outDir.absolutePath),
+            onLine = output.sink,
         )
         val value = (result as? AppResult.Success)?.value
             ?: throw AssertionError("run failed: $result")
 
         assertTrue("malformed XML should fail", value.exitCode != 0)
-        assertTrue("expected a diagnostic message", value.diagnostics.isNotBlank())
+        assertTrue("expected a diagnostic message", output.diagnostics.isNotBlank())
+    }
+
+    /**
+     * Puts a run back together the way it used to arrive whole.
+     *
+     * The runner streams now, so a test that wants to assert on all of stdout or
+     * all of stderr has to collect it. Keeping the two apart is the point of two
+     * of these tests: aapt2 says everything on stderr, and a version check that
+     * read stdout would pass on a binary that printed nothing.
+     */
+    private class Output {
+        val stdout = StringBuilder()
+        val stderr = StringBuilder()
+
+        val sink: (ToolLine) -> Unit = { line ->
+            when (line.stream) {
+                ToolStream.STDOUT -> stdout
+                ToolStream.STDERR -> stderr
+            }.appendLine(line.text)
+        }
+
+        /** What the engine would show the user: stderr, or stdout if it is silent. */
+        val diagnostics: String
+            get() = stderr.toString().trim().ifBlank { stdout.toString().trim() }
     }
 }

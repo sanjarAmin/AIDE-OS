@@ -23,12 +23,23 @@ object Aapt2Diagnostics {
 
     fun parse(output: String, projectRoot: File): List<Diagnostic> =
         output.lineSequence()
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .map { line -> parseLine(line, projectRoot) }
+            .mapNotNull { line -> parseLine(line, projectRoot) }
             .toList()
 
-    private fun parseLine(line: String, projectRoot: File): Diagnostic {
+    /**
+     * One line, or null if it carried no message.
+     *
+     * Public because the engine parses aapt2's output as the process writes it,
+     * a line at a time, as well as all at once. Both routes go through here on
+     * purpose: [ProjectPaths.relativise] is applied in exactly one place, so a
+     * streamed diagnostic cannot end up pointing at an absolute cache path while
+     * a collected one points at a file the user can open.
+     */
+    fun parseLine(raw: String, projectRoot: File): Diagnostic? {
+        val line = raw.trim()
+        // aapt2's own spacing, not a message.
+        if (line.isEmpty()) return null
+
         val match = LINE.matchEntire(line)
             ?: return Diagnostic(DiagnosticSeverity.INFO, line)
 

@@ -2,9 +2,20 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!--
+        D8 dexes a whole project's classes in this process, and the Kotlin front
+        end will want considerably more when M4 wires it in. A default heap is
+        sized for an app, not for a compiler holding a program's type graph.
+
+        This is headroom, not isolation: an OOM here still takes the editor down
+        with the build, and the unsaved buffers with it. The fix docs/PLAN.md
+        asks for is a separate :build process behind a bound service, which this
+        does not replace.
+    -->
     <application
         android:name=".AideApplication"
         android:allowBackup="true"
+        android:largeHeap="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"

@@ -2,9 +2,11 @@ package com.osamu.aide.engine.fast
 
 import com.osamu.aide.core.common.AppResult
 import com.osamu.aide.core.fs.ProjectLayout
+import com.osamu.aide.engine.api.Diagnostic
 import com.osamu.aide.engine.api.hasErrors
 import com.osamu.aide.toolchain.nativetools.NativeTool
 import com.osamu.aide.toolchain.nativetools.NativeToolRunner
+import com.osamu.aide.toolchain.nativetools.ToolLine
 import com.osamu.aide.toolchain.nativetools.ToolResult
 import java.io.File
 
@@ -14,6 +16,11 @@ import java.io.File
  * This is the only part of the pipeline that leaves the JVM. aapt2 is a real
  * process, executed out of the native library directory because that is the one
  * place Android's W^X policy permits; see `tools/aapt2/FINDINGS.md`.
+ *
+ * Both stages report through `onDiagnostic` while the process runs, rather than
+ * only through the [StageResult] they return. aapt2 prints a resource error and
+ * then keeps going over the rest of the tree; the user should see the first one
+ * then, not after the last.
  */
 internal class ResourceStage(private val runner: NativeToolRunner) {
 
@@ -32,20 +39,23 @@ internal class ResourceStage(private val runner: NativeToolRunner) {
     suspend fun compile(
         layout: ProjectLayout,
         workspace: BuildWorkspace,
+        onDiagnostic: (Diagnostic) -> Unit = {},
     ): StageResult<File?> {
         if (!layout.resourceDir.isDirectory) return StageResult.ok(null)
 
         val output = File(workspace.compiledResources, "resources.zip")
+        val diagnostics = mutableListOf<Diagnostic>()
         val result = runner.run(
-            NativeTool.AAPT2,
-            listOf(
+            tool = NativeTool.AAPT2,
+            args = listOf(
                 "compile",
                 "--dir", layout.resourceDir.absolutePath,
                 "-o", output.absolutePath,
             ),
+            onLine = collector(diagnostics, layout.root, onDiagnostic),
         )
 
-        return interpret(result, layout.root, "Compiling resources failed.") {
+        return interpret(result, diagnostics, "Compiling resources failed.") {
             output.takeIf { it.isFile }
         }
     }
@@ -63,6 +73,7 @@ internal class ResourceStage(private val runner: NativeToolRunner) {
         workspace: BuildWorkspace,
         platform: AndroidPlatform,
         debuggable: Boolean,
+        onDiagnostic: (Diagnostic) -> Unit = {},
     ): StageResult<File?> {
         val compiledResources = File(workspace.compiledResources, "resources.zip")
 
@@ -86,10 +97,39 @@ internal class ResourceStage(private val runner: NativeToolRunner) {
             if (compiledResources.isFile) add(compiledResources.absolutePath)
         }
 
-        val result = runner.run(NativeTool.AAPT2, args)
+        val diagnostics = mutableListOf<Diagnostic>()
+        val result = runner.run(
+            tool = NativeTool.AAPT2,
+            args = args,
+            onLine = collector(diagnostics, layout.root, onDiagnostic),
+        )
 
-        return interpret(result, layout.root, "Linking resources failed.") {
+        return interpret(result, diagnostics, "Linking resources failed.") {
             workspace.linkedApk.takeIf { it.isFile }
+        }
+    }
+
+    /**
+     * Parses each line as the process writes it, reporting it and keeping it.
+     *
+     * Both streams are parsed. aapt2 puts every message on stderr and leaves
+     * stdout empty, so telling them apart would gain nothing here -- and the
+     * older rule this replaces, "use stderr, fall back to stdout", cannot be
+     * expressed line by line: whether stderr turns out to be empty is not known
+     * until the run is over, by which point the lines have already been handed
+     * over.
+     *
+     * A plain [MutableList] is safe as the sink because [NativeToolRunner]
+     * serialises the callback across the two streams it drains.
+     */
+    private fun collector(
+        into: MutableList<Diagnostic>,
+        projectRoot: File,
+        onDiagnostic: (Diagnostic) -> Unit,
+    ): (ToolLine) -> Unit = { line ->
+        Aapt2Diagnostics.parseLine(line.text, projectRoot)?.let { diagnostic ->
+            into += diagnostic
+            onDiagnostic(diagnostic)
         }
     }
 
@@ -103,13 +143,14 @@ internal class ResourceStage(private val runner: NativeToolRunner) {
      */
     private inline fun interpret(
         result: AppResult<ToolResult>,
-        projectRoot: File,
+        diagnostics: List<Diagnostic>,
         failureMessage: String,
         produced: () -> File?,
     ): StageResult<File?> = when (result) {
+        // The tool never started, so nothing was streamed and there is nothing
+        // to report but why.
         is AppResult.Failure -> StageResult.failed(result.error.message)
         is AppResult.Success -> {
-            val diagnostics = Aapt2Diagnostics.parse(result.value.diagnostics, projectRoot)
             val output = produced()
             when {
                 !result.value.isSuccess -> StageResult.failed(failureMessage, diagnostics)

@@ -124,7 +124,44 @@ The budget is an assertion in `FastBuildSystemTest`, not an aspiration. The
 number above is an emulator on a desktop and is not a phone; the manual device
 matrix in `docs/PLAN.md` is what settles that.
 
-## 9. Things known missing
+## 9. Timestamp-based incrementality ships a corrupt APK
+
+Reviewed and rejected 2026-08-24, because it is the obvious first design and
+someone will propose it again. The shape that fails:
+
+> Skip `compile`+`link` if `res/` has not changed since `linked.apk`; skip
+> `javac`+`dex` if `src/` has not changed since the dex.
+
+The two halves are not independent, and `FastBuildSystem` says so where it
+orders them: **`R.java` is an output of linking and an input to compiling.**
+Change only a resource -- add a string, add a layout -- and `src/` is untouched,
+so that rule skips `javac` and `dex` and packages a dex whose `R` constants came
+from the *previous* link. Resource IDs move on every link. The APK installs,
+runs, and resolves the wrong resources, which is a far worse outcome than the
+clean build it saved.
+
+Anything mtime-based has three more problems on top:
+
+- A directory's `lastModified` does not change when a nested file does, so the
+  check needs a recursive walk to be even approximately right.
+- A deleted `.java` leaves its `.class` in `classes/`, and the dexer takes it.
+- Builds here run 2--3 s, inside the resolution of the timestamps being
+  compared. Edit within the same second as a build and the tree reads
+  up-to-date.
+
+And the workspace lives in `cacheDir` (`ProjectBuilder`), which Android may
+evict *partially* at any moment. An up-to-date check that trusts a half-evicted
+workspace is exactly the corrupt-reuse case `BuildWorkspace.prepare()` is
+written to prevent.
+
+What would work is what `docs/PLAN.md` already asks for: per-stage stamps over a
+content hash of that stage's real inputs -- file set and contents, tool
+arguments, `minSdk`, `debuggable` -- with res -> `R.java` -> javac modelled as a
+dependency edge so a resource change invalidates everything downstream of it,
+and `prepare()` staying destructive whenever a stamp is missing or does not
+match. That is a milestone's work, not a cleanup.
+
+## 10. Things known missing
 
 - **The bundled tests stage `android.jar` by hand.** They read a 27 MB copy out
   of `androidTest/assets`, which is not in git and only exists on a machine that
@@ -135,7 +172,8 @@ matrix in `docs/PLAN.md` is what settles that.
 - **No incrementality.** `BuildWorkspace.prepare()` deletes the tree every
   build, deliberately: reusing a workspace from a cancelled build is how you get
   an APK containing the previous run's classes. Incrementality belongs at the
-  stage level keyed on input hashes, and is not written.
+  stage level keyed on input hashes, and is not written. Section 9 records the
+  cheaper design that does not work.
 - **No Kotlin.** Spike R2 proved the compiler and the Compose plugin run on ART;
   neither is wired into this module. `FastBuildSystem` refuses a Kotlin project
   by name rather than building one silently missing every Kotlin class.
