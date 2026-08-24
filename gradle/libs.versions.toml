@@ -19,6 +19,12 @@ ecj = "3.38.0"
 r8 = "9.3.19"
 apksig = "9.3.1"
 
+# Spike R3. NetBeans' fork of javac -- error-tolerant, built for editors --
+# patched for Android by the AndroidIDE project. Frozen upstream at JDK 17
+# since 2022; AndroidIDE later absorbed the compiler into its own tree, so
+# this artifact is the last standalone release.
+nbJavac = "17.0.0.3"
+
 # Editor. Both are LGPL-2.1 and are consumed unmodified, as Maven artifacts;
 # see R6 in docs/PLAN.md for the obligation that imposes and the relink path.
 sora = "0.23.6"
@@ -63,6 +69,7 @@ androidx-compose-material-icons-extended = { group = "androidx.compose.material"
 ecj = { group = "org.eclipse.jdt", name = "ecj", version.ref = "ecj" }
 r8 = { group = "com.android.tools", name = "r8", version.ref = "r8" }
 apksig = { group = "com.android.tools.build", name = "apksig", version.ref = "apksig" }
+nb-javac-android = { group = "io.github.itsaky", name = "nb-javac-android", version.ref = "nbJavac" }
 
 desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugarJdkLibs" }
 

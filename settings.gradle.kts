@@ -45,3 +45,6 @@ include(":toolchain:native")
 
 // Components too large to bundle: downloaded, verified, installed on device.
 include(":toolchain:manager")
+
+// Spike R3 -- a Java language-intelligence core on ART. Not part of the app.
+include(":spike:javals")
