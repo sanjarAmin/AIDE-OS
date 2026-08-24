@@ -1,11 +1,11 @@
 # Spike R3: a Java language service on ART — result
 
-**Outcome: resolved, with a condition.** nb-javac runs on ART and answers the
-queries an editor asks — completion, live diagnostics, positioned errors on a
-file that does not parse. But the plan's **< 200 ms** acceptance is *not* met by
-the obvious implementation, and the gap is not small: a fresh compilation task
-per request costs **~700–1100 ms**. `:lsp:java` has to be built around keeping a
-compiler warm, and that decision is forced, not stylistic.
+**Outcome: resolved.** nb-javac runs on ART and answers the queries an editor
+asks — completion, live diagnostics, positioned errors on a file that does not
+parse. The plan's **< 200 ms** acceptance is met, but *only* by a service built
+around a warm compiler: the obvious implementation, a fresh compilation task per
+request, costs **~700–1100 ms**. That decision is forced, not stylistic, and the
+measurements below are why. `:lsp:java` now answers in a warm median of 82 ms.
 
 Measured on the `aideos_test` AVD (API 34, x86_64) against
 `io.github.itsaky:nb-javac-android:17.0.0.3`, with the pinned `android.jar` as
@@ -128,21 +128,47 @@ Two things follow:
 
 ## Where `:lsp:java` landed against this
 
-The module was written from the list above and currently implements item 1
-only: a resident `JavaLanguageService` holding one `JavacTool` and one
-`StandardJavaFileManager`, serialised by a mutex.
+Resolved, and more cheaply than this document first assumed.
 
-Completion latency over eight consecutive requests, same file, on the same AVD:
+The list above says the symbol table has to survive between requests, and
+guesses that means porting AndroidIDE's `ReusableCompiler`. It does not:
+**`com.sun.tools.javac.api.JavacTaskPool` is already in the artifact**, with the
+`ReusableContext` / `ReusableJavaCompiler` / `ReusableLog` machinery upstream
+wrote for exactly this. AndroidIDE hand-rolled their own because they needed
+hooks for partial reparse and cancellation on top of it; a service that needs
+neither yet can use javac's.
+
+`:lsp:java` holds one file manager *and* one pooled context. Completion latency
+over eight consecutive requests, same file, same AVD:
 
 | Request | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
 |---|---|---|---|---|---|---|---|---|
-| ms | 981 | 430 | 509 | 305 | 396 | 422 | 272 | 225 |
+| file manager only | 981 | 430 | 509 | 305 | 396 | 422 | 272 | 225 |
+| **+ pooled context** | 1135 | 103 | 110 | 84 | 78 | 82 | 77 | 79 |
 
-**225 ms best warm, against a 200 ms budget** — over by about 15 %, and noisy.
-That is what this document predicted, and it is the evidence that items 2 and 3
-are not optional polish. `:lsp:java`'s latency test reports the number rather
-than asserting it, on the grounds that a test failing for a reason already
-written down here teaches nobody anything.
+**Warm median 82 ms against a 200 ms budget**, from 225 ms. The cold request is
+unchanged at ~1.1 s and always will be — it is classloading plus the first read
+of `android.jar`, paid once per process.
+
+So the whole story, in one line each:
+
+| Shape | Warm |
+|---|---|
+| Fresh task per request | 700–1100 ms |
+| Warm file manager | ~225 ms |
+| Warm file manager + pooled context | **~82 ms** |
+
+Two consequences worth carrying forward:
+
+- **Items 3 and 4 are no longer on the critical path.** Partial reparse and
+  cancellation were listed as what it would take to meet the budget. It is met
+  without them. They become what it takes to *hold* the budget on a large file
+  under fast typing, which is a real concern and a different one.
+- **Pooling is a correctness risk, not just a speed trick.** A reused context
+  that kept the previous compilation's source classes would leave renamed types
+  resolvable and deleted members completing — the editor would report a file as
+  clean when it is not. The pool drops them; `pooling_does_not_leak_symbols_between_requests`
+  asserts it on ART rather than trusting the documentation.
 
 ## Verified on device
 

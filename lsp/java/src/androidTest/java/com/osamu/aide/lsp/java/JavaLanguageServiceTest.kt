@@ -126,19 +126,81 @@ class JavaLanguageServiceTest {
     }
 
     /**
-     * Where `:lsp:java` sits against M3's acceptance.
+     * A reused context must not remember the last request's classes.
      *
-     * Reported, not asserted, and deliberately so. Spike R3 established that a
-     * warm file manager plateaus around 200 ms and that closing the rest of the
-     * gap needs the symbol table to survive between requests, which this does
-     * not do yet. Asserting a budget the design is known not to meet would only
-     * produce a test that fails for a reason already written down.
+     * This is the hazard the pool introduces and the reason it is worth a test
+     * rather than a comment. The symbol table survives between requests on
+     * purpose -- that is what makes it fast -- so the question is whether the
+     * *source* classes survive with it. If they do, renaming a type leaves the
+     * old name resolvable, deleting a member leaves it completing, and the
+     * editor tells the user their file is fine when it is not.
      *
-     * The number is logged so the next change to [ResidentCompiler] can be
-     * judged against it.
+     * Compiled twice through the same pooled context: first a class with a
+     * `first()` method, then the same file with that method renamed. If the
+     * second compilation still sees `first`, pooling is unsafe as configured.
      */
     @Test
-    fun completion_latency_is_measured_against_the_two_hundred_millisecond_budget() = runTest {
+    fun pooling_does_not_leak_symbols_between_requests() = runTest {
+        val file = sourceFile("Renamed.java")
+
+        val before = service.diagnostics(file, renamedSource(method = "first"))
+        assertTrue("first version should be clean: ${before.map { it.describe() }}",
+            before.errors.isEmpty())
+
+        // Same file, method renamed, and the caller below still says first().
+        val after = service.diagnostics(file, renamedSource(method = "second", caller = "first"))
+        assertTrue(
+            "the previous compilation's method was still resolvable -- the pooled " +
+                "context is leaking source symbols between requests",
+            after.errors.isNotEmpty(),
+        )
+
+        // And the other direction: the renamed method really is usable now.
+        val renamed = service.diagnostics(file, renamedSource(method = "second", caller = "second"))
+        assertTrue("renamed version should be clean: ${renamed.map { it.describe() }}",
+            renamed.errors.isEmpty())
+    }
+
+    /**
+     * Reuse must not change the answers, only the time they take.
+     *
+     * Runs the same completion repeatedly through one pooled context. A symbol
+     * table that degraded across requests -- dropping platform classes it had
+     * cleared, or accumulating duplicates -- would show up here as a proposal
+     * list that changes shape after the first call.
+     */
+    @Test
+    fun repeated_completions_return_a_stable_answer() = runTest {
+        val text = ACTIVITY.replace(CURSOR, "")
+        val offset = ACTIVITY.indexOf(CURSOR)
+
+        val runs = (0 until 5).map { service.complete(sourceFile(), text, offset).map { it.label } }
+
+        runs.forEachIndexed { index, labels ->
+            assertTrue("request $index returned nothing", labels.isNotEmpty())
+            assertTrue("request $index lost an inherited member", "getSystemService" in labels)
+        }
+        assertEquals(
+            "the proposal set changed between identical requests",
+            1,
+            runs.map { it.toSet() }.distinct().size,
+        )
+    }
+
+    /**
+     * M3's acceptance criterion, as an assertion.
+     *
+     * The plan asks for completion under 200 ms and this is where that is
+     * enforced, the way `:engine:fast` enforces its ten-second build: a
+     * regression here fails the build rather than being noticed later.
+     *
+     * The median of the warm requests is the measure, not the best of them. One
+     * fast request proves the path can be fast; the median is what the user
+     * feels. The first request is excluded outright -- it pays for classloading
+     * and the first read of `android.jar`, and an app pays that once.
+     */
+    @Test
+    fun completion_answers_inside_the_two_hundred_millisecond_budget() = runTest {
         val text = ACTIVITY.replace(CURSOR, "")
         val offset = ACTIVITY.indexOf(CURSOR)
 
@@ -146,11 +208,30 @@ class JavaLanguageServiceTest {
             measureTimeMillis { service.complete(sourceFile(), text, offset) }
         }
 
-        Log.i(TAG, "completion latency, requests 0..7: $timings")
-        val best = timings.drop(2).min()
-        Log.i(TAG, "best warm completion: $best ms (M3 budget is 200 ms)")
-        assertTrue("completion stopped returning anything", timings.isNotEmpty())
+        val warm = timings.drop(1).sorted()
+        val median = warm[warm.size / 2]
+        Log.i(TAG, "completion latency, requests 0..7: $timings (warm median $median ms)")
+
+        assertTrue(
+            "warm completion median was $median ms against a 200 ms budget; " +
+                "all requests: $timings",
+            median < 200,
+        )
     }
+
+    private fun renamedSource(method: String, caller: String = method): String = """
+        package com.example;
+
+        public class Renamed {
+            int $method() {
+                return 1;
+            }
+
+            int call() {
+                return $caller();
+            }
+        }
+    """.trimIndent()
 
     private companion object {
         const val TAG = "LspJava"
