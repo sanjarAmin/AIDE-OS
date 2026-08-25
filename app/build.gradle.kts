@@ -54,6 +54,21 @@ android {
         jniLibs {
             useLegacyPackaging = true
         }
+
+        resources {
+            // Maven's own jars, which :engine:deps brings in, each carry a copy
+            // of these and the merger will not choose between them -- seventeen
+            // files named META-INF/DEPENDENCIES stop the build outright. The
+            // same excludes exist in :engine:deps, and library packaging rules
+            // do not propagate to a consumer, so they have to be repeated here.
+            excludes += setOf(
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE*",
+                "META-INF/NOTICE*",
+                "META-INF/sisu/**",
+                "META-INF/*.kotlin_module",
+            )
+        }
     }
 }
 
@@ -65,6 +80,7 @@ dependencies {
     implementation(project(":core:ui"))
     implementation(project(":editor"))
     implementation(project(":engine:api"))
+    implementation(project(":engine:deps"))
     implementation(project(":engine:fast"))
     implementation(project(":lsp:java"))
     implementation(project(":toolchain:native"))

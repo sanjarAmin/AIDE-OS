@@ -43,14 +43,21 @@ class LanguageServices(
      * Silence is the better failure.
      */
     @Synchronized
-    fun forProject(projectRoot: File): JavaLanguageService? {
-        current?.let { (root, service) -> if (root == projectRoot) return service }
+    fun forProject(projectRoot: File, classpath: List<File> = emptyList()): JavaLanguageService? {
+        current?.let { (root, service) ->
+            if (root == projectRoot && service.classpath == classpath) return service
+        }
 
         val androidJar = toolchain.androidJar() ?: return null
         val service = JavaLanguageService(
             platform = androidJar,
             projectRoot = projectRoot,
             dispatchers = dispatchers,
+            // The dependency jars, so completion and diagnostics see AndroidX
+            // rather than reporting every androidx.* reference as unresolved.
+            // A changed classpath builds a new service: the warm compiler holds
+            // a symbol table for the old one, and there is no way to add to it.
+            classpath = classpath,
             sourcePath = listOf(
                 File(projectRoot, "src/main/java"),
                 // aapt2 writes R.java here during a build, and nothing else

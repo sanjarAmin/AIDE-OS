@@ -31,22 +31,29 @@ internal class DexStage(private val dispatchers: DispatcherProvider) {
         minSdk: Int,
         debuggable: Boolean,
         projectRoot: File,
+        dependencies: List<File> = emptyList(),
     ): StageResult<List<File>> {
         val classFiles = classesDir.walkTopDown()
             .filter { it.isFile && it.extension == "class" }
             .sortedBy { it.invariantSeparatorsPath }
             .toList()
 
+        // Dependencies are **program** input, not library input: their classes
+        // have to end up in the APK's dex or the app links against them at
+        // compile time and throws NoClassDefFoundError on the device. Only
+        // android.jar is a library here, because the platform provides it.
+        val dependencyJars = dependencies.filter { it.isFile }
+
         // A project with resources and no code is legal; it links to an APK
         // carrying no dex at all, and that is not this stage's problem.
-        if (classFiles.isEmpty()) return StageResult.ok(emptyList())
+        if (classFiles.isEmpty() && dependencyJars.isEmpty()) return StageResult.ok(emptyList())
 
         val collector = DiagnosticCollector(projectRoot)
         val thrown = withContext(dispatchers.compiler) {
             runCatching {
                 D8.run(
                     D8Command.builder(collector)
-                        .addProgramFiles(classFiles.map { it.toPath() })
+                        .addProgramFiles((classFiles + dependencyJars).map { it.toPath() })
                         // android.jar only. The platform stubs must never appear
                         // here or on the program path: their method bodies throw,
                         // and D8 has no need of them -- it desugars the

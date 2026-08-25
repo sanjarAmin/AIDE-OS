@@ -43,7 +43,7 @@ internal class ResourceStage(private val runner: NativeToolRunner) {
     ): StageResult<File?> {
         if (!layout.resourceDir.isDirectory) return StageResult.ok(null)
 
-        val output = File(workspace.compiledResources, "resources.zip")
+        val output = workspace.compiledProjectResources
         val diagnostics = mutableListOf<Diagnostic>()
         val result = runner.run(
             tool = NativeTool.AAPT2,
@@ -61,6 +61,43 @@ internal class ResourceStage(private val runner: NativeToolRunner) {
     }
 
     /**
+     * Compiles a dependency's `res/` into its own archive.
+     *
+     * Separately from the project's, and separately from each other, because
+     * aapt2 overlays whole archives in the order they are given at link time.
+     * One combined compile would lose that ordering, and with it the rule that
+     * the app's own resources win over a library's.
+     *
+     * Produces null for a library with nothing to compile, which is common:
+     * plenty of AARs carry only code.
+     */
+    suspend fun compileLibrary(
+        resourceDir: File,
+        index: Int,
+        workspace: BuildWorkspace,
+        projectRoot: File,
+        onDiagnostic: (Diagnostic) -> Unit = {},
+    ): StageResult<File?> {
+        if (!resourceDir.isDirectory) return StageResult.ok(null)
+
+        val output = workspace.compiledLibraryResources(index)
+        val diagnostics = mutableListOf<Diagnostic>()
+        val result = runner.run(
+            tool = NativeTool.AAPT2,
+            args = listOf(
+                "compile",
+                "--dir", resourceDir.absolutePath,
+                "-o", output.absolutePath,
+            ),
+            onLine = collector(diagnostics, projectRoot, onDiagnostic),
+        )
+
+        return interpret(result, diagnostics, "Compiling library resources failed.") {
+            output.takeIf { it.isFile }
+        }
+    }
+
+    /**
      * Links compiled resources and the manifest into an APK containing no code,
      * and generates `R.java` beside it.
      *
@@ -73,9 +110,11 @@ internal class ResourceStage(private val runner: NativeToolRunner) {
         workspace: BuildWorkspace,
         platform: AndroidPlatform,
         debuggable: Boolean,
+        /** Library archives, in overlay order: earliest is weakest. */
+        libraryResources: List<File> = emptyList(),
         onDiagnostic: (Diagnostic) -> Unit = {},
     ): StageResult<File?> {
-        val compiledResources = File(workspace.compiledResources, "resources.zip")
+        val compiledResources = workspace.compiledProjectResources
 
         val args = buildList {
             add("link")
@@ -94,6 +133,12 @@ internal class ResourceStage(private val runner: NativeToolRunner) {
                 add("-A"); add(layout.assetsDir.absolutePath)
             }
             if (debuggable) add("--debug-mode")
+
+            // Order is the overlay rule, and it is the whole reason these are
+            // compiled separately: aapt2 lets a later archive override an
+            // earlier one, so libraries go first and the project last. Reverse
+            // this and a library's `app_name` silently replaces the user's.
+            libraryResources.filter { it.isFile }.forEach { add(it.absolutePath) }
             if (compiledResources.isFile) add(compiledResources.absolutePath)
         }
 

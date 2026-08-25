@@ -11,6 +11,7 @@ import com.osamu.aide.engine.api.BuildStage
 import com.osamu.aide.engine.api.BuildSystem
 import com.osamu.aide.engine.api.Diagnostic
 import com.osamu.aide.toolchain.nativetools.NativeToolRunner
+import java.io.File
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ProducerScope
@@ -63,8 +64,28 @@ class FastBuildSystem(
                 resources.compile(layout, workspace, onDiagnostic)
             }
 
+            // Each dependency's resources compile into their own archive, in a
+            // fixed order, so linking can overlay them beneath the project's.
+            // Failing the build over one of them is deliberate: a library whose
+            // resources did not compile produces an R class missing symbols the
+            // user's code refers to, and that surfaces as errors in *their*
+            // file.
+            val libraryResources = mutableListOf<File>()
+            request.dependencies.resourceDirectories.forEachIndexed { index, directory ->
+                reportingStage(BuildStage.COMPILE_RESOURCES, diagnostics) { onDiagnostic ->
+                    resources.compileLibrary(directory, index, workspace, layout.root, onDiagnostic)
+                }?.let(libraryResources::add)
+            }
+
             reportingStage(BuildStage.LINK_RESOURCES, diagnostics) { onDiagnostic ->
-                resources.link(layout, workspace, platform, request.debuggable, onDiagnostic)
+                resources.link(
+                    layout = layout,
+                    workspace = workspace,
+                    platform = platform,
+                    debuggable = request.debuggable,
+                    libraryResources = libraryResources,
+                    onDiagnostic = onDiagnostic,
+                )
             }
 
             // R.java is an output of linking and an input to compiling, which is
@@ -72,7 +93,13 @@ class FastBuildSystem(
             // parallel however much the wall clock would like them to be.
             val sources = layout.javaSources() + workspace.generatedJavaSources()
             stage(BuildStage.COMPILE_JAVA, diagnostics) {
-                javac.compile(sources, platform, workspace, layout.root)
+                javac.compile(
+                    sources = sources,
+                    platform = platform,
+                    workspace = workspace,
+                    projectRoot = layout.root,
+                    dependencies = request.dependencies.classpath,
+                )
             }
 
             val dexFiles = stage(BuildStage.DEX, diagnostics) {
@@ -83,6 +110,7 @@ class FastBuildSystem(
                     minSdk = minSdk,
                     debuggable = request.debuggable,
                     projectRoot = layout.root,
+                    dependencies = request.dependencies.classpath,
                 )
             }
 

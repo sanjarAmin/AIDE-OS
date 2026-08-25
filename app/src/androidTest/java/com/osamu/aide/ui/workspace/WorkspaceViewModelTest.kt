@@ -9,6 +9,7 @@ import com.osamu.aide.core.fs.FileProjectRepository
 import com.osamu.aide.core.fs.Project
 import com.osamu.aide.core.fs.SourceLanguage
 import com.osamu.aide.editor.DocumentStore
+import com.osamu.aide.engine.deps.DependencyResolver
 import com.osamu.aide.editor.EditorLanguages
 import com.osamu.aide.engine.fast.AndroidPlatformProvider
 import com.osamu.aide.engine.fast.ApkInstaller
@@ -70,6 +71,9 @@ class WorkspaceViewModelTest {
             ).value
 
         val toolchain = ToolchainManager(context, dispatchers)
+        val projectDependencies = ProjectDependencies(
+            DependencyResolver(File(context.cacheDir, "maven"), dispatchers),
+        )
         stagePlatformJar()
         viewModel = WorkspaceViewModel(
             dispatchers = dispatchers,
@@ -79,6 +83,7 @@ class WorkspaceViewModelTest {
                 toolchain = toolchain,
                 platforms = AndroidPlatformProvider(context, dispatchers),
                 runner = NativeToolRunner(NativeToolchain.from(context), dispatchers),
+                dependencies = projectDependencies,
                 dispatchers = dispatchers,
                 outputRoot = File(context.cacheDir, "builds-test"),
             ),
@@ -89,6 +94,7 @@ class WorkspaceViewModelTest {
                 dispatchers = dispatchers,
                 buildOutputRoot = File(context.cacheDir, "builds-test"),
             ),
+            dependencies = projectDependencies,
             languages = EditorLanguages(context),
         )
         Unit

@@ -26,6 +26,7 @@ internal class JavaCompileStage(private val dispatchers: DispatcherProvider) {
         platform: AndroidPlatform,
         workspace: BuildWorkspace,
         projectRoot: File,
+        dependencies: List<File> = emptyList(),
     ): StageResult<File> {
         if (sources.isEmpty()) return StageResult.ok(workspace.classes)
 
@@ -47,7 +48,13 @@ internal class JavaCompileStage(private val dispatchers: DispatcherProvider) {
             // source level 9 and above. The stubs are what make lambdas
             // compile -- android.jar has no java.lang.invoke bootstrap classes.
             add("-classpath")
-            add(platform.compileClasspath.joinToString(File.pathSeparator) { it.absolutePath })
+            // Platform first, dependencies after. ECJ takes the first
+            // definition of a duplicated type, and a library shading its own
+            // copy of an android.* class must not win over the real one.
+            add(
+                (platform.compileClasspath + dependencies)
+                    .joinToString(File.pathSeparator) { it.absolutePath },
+            )
 
             add("-d"); add(workspace.classes.absolutePath)
             addAll(sources.map { it.absolutePath })

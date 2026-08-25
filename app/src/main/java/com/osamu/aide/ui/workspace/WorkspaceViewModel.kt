@@ -181,6 +181,7 @@ class WorkspaceViewModel(
     private val installer: ApkInstaller,
     private val languageServices: LanguageServices,
     private val languages: EditorLanguages,
+    private val dependencies: ProjectDependencies,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(WorkspaceUiState())
@@ -250,8 +251,34 @@ class WorkspaceViewModel(
      * than an empty list because it looks like it worked.
      */
     private fun installCompletions(projectDir: File) {
+        // Without a classpath first, so the editor has intelligence for
+        // platform types immediately. A cold dependency resolve is a minute of
+        // network, and completion on android.* should not wait for it.
         languages.completionSource = languageServices.forProject(projectDir)
             ?.let(::JavaCompletionSource)
+
+        // Then again with it, once the descriptor and the resolve are done. The
+        // second service replaces the first: a warm compiler's symbol table
+        // cannot be extended, so a wider classpath means a new one.
+        viewModelScope.launch {
+            descriptorJob?.join()
+            val resolved = project ?: return@launch
+            if (resolved.dependencies.isEmpty()) return@launch
+
+            val classpath = runCatching { dependencies.classpathFor(resolved) }.getOrNull()
+            if (classpath.isNullOrEmpty() || _state.value.projectRoot != projectDir) return@launch
+
+            languages.completionSource = languageServices.forProject(projectDir, classpath)
+                ?.let(::JavaCompletionSource)
+            Log.i(TAG, "language service rebuilt with ${classpath.size} dependency jars")
+
+            // Anything already on screen was analysed against the narrower
+            // classpath and is now wrong -- most visibly, every androidx.*
+            // import reported as unresolved.
+            _state.value.active?.let { active ->
+                analyse(active.file, pendingText[active.file] ?: active.document.text)
+            }
+        }
     }
 
     fun toggle(node: FileNode) {
@@ -623,6 +650,10 @@ class WorkspaceViewModel(
             is BuildEvent.StageCompleted -> _state.update {
                 val line = "${event.stage.displayName} — ${event.durationMillis} ms"
                 it.copy(build = it.build.copy(log = it.build.log + line))
+            }
+
+            is BuildEvent.Note -> _state.update {
+                it.copy(build = it.build.copy(log = it.build.log + event.message))
             }
 
             is BuildEvent.DiagnosticReported -> _state.update {

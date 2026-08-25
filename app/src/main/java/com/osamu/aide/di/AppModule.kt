@@ -9,6 +9,7 @@ import com.osamu.aide.core.fs.ProjectRepository
 import com.osamu.aide.editor.DocumentStore
 import com.osamu.aide.editor.EditorLanguages
 import com.osamu.aide.engine.fast.AndroidPlatformProvider
+import com.osamu.aide.engine.deps.DependencyResolver
 import com.osamu.aide.engine.fast.ApkInstaller
 import com.osamu.aide.toolchain.manager.ToolchainManager
 import com.osamu.aide.toolchain.nativetools.NativeToolRunner
@@ -16,6 +17,7 @@ import com.osamu.aide.toolchain.nativetools.NativeToolchain
 import com.osamu.aide.ui.projects.ProjectsViewModel
 import com.osamu.aide.ui.workspace.LanguageServices
 import com.osamu.aide.ui.workspace.ProjectBuilder
+import com.osamu.aide.ui.workspace.ProjectDependencies
 import com.osamu.aide.ui.workspace.WorkspaceViewModel
 import org.koin.core.module.dsl.viewModel
 import org.koin.core.qualifier.named
@@ -53,11 +55,17 @@ val appModule = module {
     single { ToolchainManager(get(), get()) }
     single { AndroidPlatformProvider(get(), get()) }
     single { ApkInstaller(get(), get()) }
+    // The local Maven repository. Cache storage: every file in it can be
+    // fetched again, so the system is welcome to reclaim it.
+    single { DependencyResolver(File(get<Context>().cacheDir, "maven"), get()) }
+    single { ProjectDependencies(get()) }
+
     single {
         ProjectBuilder(
             toolchain = get(),
             platforms = get(),
             runner = get(),
+            dependencies = get(),
             dispatchers = get(),
             outputRoot = get(named(BUILD_OUTPUT_ROOT)),
         )
@@ -74,7 +82,7 @@ val appModule = module {
     }
 
     viewModel { ProjectsViewModel(get(), get()) }
-    viewModel { WorkspaceViewModel(get(), get(), get(), get(), get(), get(), get(), get()) }
+    viewModel { WorkspaceViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
 }
 
 /**

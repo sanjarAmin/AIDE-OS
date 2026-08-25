@@ -39,6 +39,14 @@ data class Project(
     val language: SourceLanguage,
     val engine: BuildEngine,
     val lastOpenedAt: Long,
+    /**
+     * Maven coordinates the project declares, as `group:artifact:version`.
+     *
+     * Kept as text rather than a parsed type so `:core:fs` stays free of any
+     * dependency on the resolver: this module's job is to remember what the
+     * user wrote, and `:engine:deps` decides what it means.
+     */
+    val dependencies: List<String> = emptyList(),
 ) {
     val descriptorFile: File get() = File(rootDir, DESCRIPTOR_NAME)
 

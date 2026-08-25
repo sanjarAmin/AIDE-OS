@@ -24,7 +24,12 @@ class JavaLanguageService(
     platform: File,
     private val projectRoot: File,
     private val dispatchers: DispatcherProvider,
-    classpath: List<File> = emptyList(),
+    /**
+     * Readable so a caller can tell whether the service it is holding was built
+     * for the classpath it now wants. There is no way to add to a warm
+     * compiler's symbol table, so a change means a new service.
+     */
+    val classpath: List<File> = emptyList(),
     sourcePath: List<File> = listOf(File(projectRoot, "src/main/java")),
 ) {
 

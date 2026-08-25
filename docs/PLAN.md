@@ -302,16 +302,16 @@ M0–M5 is the real v1.0. Everything from M6 on is expansion.
 4. ~~**Pick a license**~~ — done, GPLv3.
 5. ~~**M0 skeleton**~~, ~~**M1 editor**~~, ~~**M2 first APK**~~ — closed. Hello-world
    builds and installs in **2.76 s** against the 10 s budget.
-6. **M3 intelligence** — feature-complete and verified in the running app.
-   `:lsp:java` answers completion, diagnostics-as-you-type, go-to-definition and
-   signature hints at a **92 ms** warm median against the 200 ms budget.
-   Outstanding: the acceptance test says *AndroidX* types, which cannot be
-   honoured until M4 puts a dependency on the classpath.
-7. **M4 deps + Kotlin** — the current target. `:engine:deps` first: it unblocks
-   the literal wording of M3's acceptance as well as its own milestone. Spike R4
-   has settled the resolver question; what is left is AAR extraction, a caching
-   policy, and wiring the resolved classpath into `:engine:fast` and
-   `:lsp:java`.
+6. ~~**M3 intelligence**~~ — **closed**. Completion, diagnostics-as-you-type,
+   go-to-definition and signature hints, verified rendering in the running app.
+   The acceptance test is met as written: completion on an **AndroidX** type at a
+   **76 ms** warm median against the 200 ms budget, once `:engine:deps` could put
+   `appcompat` on the classpath.
+7. **M4 deps + Kotlin** — the current target, half done. `:engine:deps` resolves
+   and unpacks AndroidX, and its classpath now reaches ECJ, D8, aapt2 (as
+   overlaid resource archives) and `:lsp:java`. What remains is the Kotlin half:
+   the compiler dex archive exists and spike R2 proved it runs, but nothing
+   wires kotlinc into the engine.
 
 ~~Before building `:build:fast`, verify the remaining "pure JVM, therefore fine
 on ART" assumptions — ECJ, D8/R8 and apksig.~~ Done: spike R2b. All three run,

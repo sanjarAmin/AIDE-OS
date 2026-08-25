@@ -29,6 +29,7 @@ class ProjectBuilder(
     private val toolchain: ToolchainManager,
     private val platforms: AndroidPlatformProvider,
     private val runner: NativeToolRunner,
+    private val dependencies: ProjectDependencies,
     private val dispatchers: DispatcherProvider,
     /**
      * Cache, not the project directory. Intermediates are large, regenerable,
@@ -60,8 +61,24 @@ class ProjectBuilder(
             return@flow
         }
 
+        // Resolved before the engine starts rather than inside it: a first
+        // resolve can take a minute of network, and the build's own stage
+        // reporting has no vocabulary for that. It is also cached, so the
+        // common case adds a second or two.
+        val resolved = dependencies.inputsFor(project) { message ->
+            emit(BuildEvent.Note(message))
+        }
+
         val engine = FastBuildSystem(runner, platforms.platformFor(androidJar), dispatchers)
-        emitAll(engine.build(BuildRequest(project, outputDir = outputFor(project))))
+        emitAll(
+            engine.build(
+                BuildRequest(
+                    project = project,
+                    outputDir = outputFor(project),
+                    dependencies = resolved,
+                ),
+            ),
+        )
     }
 
     // Project directory names are unique within the workspace, so this is

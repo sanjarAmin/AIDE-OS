@@ -17,6 +17,19 @@ class BuildWorkspace(val root: File) {
     val classes: File get() = File(root, "classes")
     val dex: File get() = File(root, "dex")
 
+    /** The project's own resources, compiled to aapt2's binary format. */
+    val compiledProjectResources: File get() = File(compiledResources, "resources.zip")
+
+    /**
+     * One archive per dependency that carries resources.
+     *
+     * Indexed rather than named after the artifact: the index *is* the overlay
+     * order, and encoding it in the filename keeps that order visible in a
+     * workspace someone is debugging by hand.
+     */
+    fun compiledLibraryResources(index: Int): File =
+        File(compiledResources, "library-%03d.zip".format(index))
+
     /** aapt2's output: resources and a binary manifest, but no code yet. */
     val linkedApk: File get() = File(root, "linked.apk")
     val unsignedApk: File get() = File(root, "unsigned.apk")

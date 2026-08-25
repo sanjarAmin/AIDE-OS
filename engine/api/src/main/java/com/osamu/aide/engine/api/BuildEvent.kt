@@ -16,6 +16,16 @@ sealed interface BuildEvent {
 
     data class DiagnosticReported(val diagnostic: Diagnostic) : BuildEvent
 
+    /**
+     * Something worth putting in the log that is not a stage and not a problem.
+     *
+     * Resolving dependencies is the case that forced this: a first resolve is a
+     * minute of network with nothing to show, and it happens before any stage
+     * has started. Reporting it as a diagnostic would file it under Problems,
+     * where it is not one.
+     */
+    data class Note(val message: String) : BuildEvent
+
     /** Always the last event, for both outcomes. */
     data class Finished(val result: BuildResult) : BuildEvent
 }
