@@ -25,6 +25,13 @@ apksig = "9.3.1"
 # this artifact is the last standalone release.
 nbJavac = "17.0.0.3"
 
+# Spike R4. Maven resolution on ART. The 1.9 line, not 2.x: 2.x's default
+# transport is java.net.http.HttpClient, which Android does not have at any API
+# level. maven-resolver-provider is Maven's own wiring for reading POMs -- the
+# resolver alone cannot, and that is the half most likely to resist dexing.
+mavenResolver = "1.9.27"
+mavenResolverProvider = "3.9.16"
+
 # Editor. Both are LGPL-2.1 and are consumed unmodified, as Maven artifacts;
 # see R6 in docs/PLAN.md for the obligation that imposes and the relink path.
 sora = "0.23.6"
@@ -70,6 +77,12 @@ ecj = { group = "org.eclipse.jdt", name = "ecj", version.ref = "ecj" }
 r8 = { group = "com.android.tools", name = "r8", version.ref = "r8" }
 apksig = { group = "com.android.tools.build", name = "apksig", version.ref = "apksig" }
 nb-javac-android = { group = "io.github.itsaky", name = "nb-javac-android", version.ref = "nbJavac" }
+
+maven-resolver-supplier = { group = "org.apache.maven.resolver", name = "maven-resolver-supplier", version.ref = "mavenResolver" }
+maven-resolver-connector-basic = { group = "org.apache.maven.resolver", name = "maven-resolver-connector-basic", version.ref = "mavenResolver" }
+maven-resolver-transport-http = { group = "org.apache.maven.resolver", name = "maven-resolver-transport-http", version.ref = "mavenResolver" }
+maven-resolver-transport-file = { group = "org.apache.maven.resolver", name = "maven-resolver-transport-file", version.ref = "mavenResolver" }
+maven-resolver-provider = { group = "org.apache.maven", name = "maven-resolver-provider", version.ref = "mavenResolverProvider" }
 
 desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugarJdkLibs" }
 

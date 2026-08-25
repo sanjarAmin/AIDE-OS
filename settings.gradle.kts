@@ -55,3 +55,7 @@ include(":lsp:java")
 
 // Spike R3 -- a Java language-intelligence core on ART. Not part of the app.
 include(":spike:javals")
+
+// Spike R4 -- Maven resolution on ART, which M4 is designed around. Not part
+// of the app.
+include(":spike:deps")

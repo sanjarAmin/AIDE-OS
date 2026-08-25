@@ -296,6 +296,9 @@ M0–M5 is the real v1.0. Everything from M6 on is expansion.
 1. ~~**Spike R1 (aapt2)**~~ — done.
 2. ~~**Spike R2 (Compose plugin in on-device kotlinc)**~~ — done.
 3. ~~**Spike R3 (Java language services on ART)**~~ — done. `tools/javals/FINDINGS.md`.
+   ~~**Spike R4 (Maven resolution on ART)**~~ — done. Resolves AndroidX
+   transitively, but needed four workarounds and rules out maven-resolver 2.x.
+   `tools/deps/FINDINGS.md`.
 4. ~~**Pick a license**~~ — done, GPLv3.
 5. ~~**M0 skeleton**~~, ~~**M1 editor**~~, ~~**M2 first APK**~~ — closed. Hello-world
    builds and installs in **2.76 s** against the 10 s budget.
@@ -305,7 +308,10 @@ M0–M5 is the real v1.0. Everything from M6 on is expansion.
    Outstanding: the acceptance test says *AndroidX* types, which cannot be
    honoured until M4 puts a dependency on the classpath.
 7. **M4 deps + Kotlin** — the current target. `:engine:deps` first: it unblocks
-   the literal wording of M3's acceptance as well as its own milestone.
+   the literal wording of M3's acceptance as well as its own milestone. Spike R4
+   has settled the resolver question; what is left is AAR extraction, a caching
+   policy, and wiring the resolved classpath into `:engine:fast` and
+   `:lsp:java`.
 
 ~~Before building `:build:fast`, verify the remaining "pure JVM, therefore fine
 on ART" assumptions — ECJ, D8/R8 and apksig.~~ Done: spike R2b. All three run,
