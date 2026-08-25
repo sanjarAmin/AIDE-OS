@@ -73,7 +73,7 @@ class DependencyResolver(
             val system = AndroidRepositorySystemSupplier().get()
             val session = session(system)
 
-            val wanted = collect(system, session, coordinates, onProgress)
+            val wanted = withoutSupersededModules(collect(system, session, coordinates, onProgress))
             val resolved = mutableListOf<ResolvedDependency>()
             val unresolved = mutableListOf<String>()
 
@@ -96,7 +96,22 @@ class DependencyResolver(
         }
     }
 
-    /** Phase one: the graph, downloading POMs but no artifacts. */
+    /**
+     * Phase one: the graph, downloading POMs but no artifacts.
+     *
+     * Two things stop the same module appearing twice, and both are needed.
+     *
+     * Conflict resolution does not *remove* the versions it rejected -- it
+     * leaves them in the graph carrying a `conflict.winner` marker pointing at
+     * the node that won. A visitor that takes every node it is shown therefore
+     * collects both, and D8 then fails the build with "Type ... is defined
+     * multiple times". Skipping marked losers is the primary fix.
+     *
+     * Deduplicating by `group:artifact` rather than by full coordinate is the
+     * backstop. Two versions of one module on a classpath is never what anyone
+     * wants, and if a marker is ever missed the symptom is a dex failure deep
+     * in a build rather than anything pointing here.
+     */
     private fun collect(
         system: RepositorySystem,
         session: DefaultRepositorySystemSession,
@@ -114,7 +129,10 @@ class DependencyResolver(
 
             node.accept(object : DependencyVisitor {
                 override fun visitEnter(node: DependencyNode): Boolean {
-                    node.dependency?.artifact?.let { collected.putIfAbsent(it.key, it) }
+                    // A version that lost its conflict is still in the graph.
+                    if (node.data[ConflictResolver.NODE_DATA_WINNER] != null) return true
+
+                    node.dependency?.artifact?.let { collected.putIfAbsent(it.module, it) }
                     return true
                 }
 
@@ -122,6 +140,46 @@ class DependencyResolver(
             })
         }
         return collected.values.toList()
+    }
+
+    /**
+     * Drops modules whose classes another module on the graph now contains.
+     *
+     * Maven has no notion of *capabilities*, so it cannot express "this
+     * artifact replaces that one" -- and when one module absorbs another's
+     * classes, both end up on the classpath and D8 refuses the build with
+     * "Type ... is defined multiple times". Gradle solves this with capability
+     * rules it ships built in; resolving with Maven means applying the same
+     * knowledge by hand.
+     *
+     * Only one such conflict is known to bite, and it bites every Kotlin
+     * project that touches AndroidX: Kotlin 1.8 folded `kotlin-stdlib-jdk7` and
+     * `kotlin-stdlib-jdk8` into `kotlin-stdlib`. Older AndroidX artifacts still
+     * depend on the split ones, so a graph routinely contains
+     * `kotlin-stdlib:1.8.x` beside `kotlin-stdlib-jdk7:1.6.x`, and the two
+     * genuinely share classes.
+     *
+     * Deliberately a short, named list rather than a general mechanism. Every
+     * entry is a claim about the ecosystem that could stop being true, and a
+     * list of three is auditable in a way a heuristic is not.
+     */
+    private fun withoutSupersededModules(artifacts: List<Artifact>): List<Artifact> {
+        val stdlib = artifacts.firstOrNull {
+            it.groupId == KOTLIN_GROUP && it.artifactId == "kotlin-stdlib"
+        } ?: return artifacts
+        if (!stdlib.version.isAtLeast(major = 1, minor = 8)) return artifacts
+
+        return artifacts.filterNot {
+            it.groupId == KOTLIN_GROUP && it.artifactId in STDLIB_ABSORBED_AT_1_8
+        }
+    }
+
+    /** `1.8.22` is at least 1.8; `1.6.21` is not. Non-numeric parts are ignored. */
+    private fun String.isAtLeast(major: Int, minor: Int): Boolean {
+        val parts = split('.', '-').mapNotNull { it.toIntOrNull() }
+        val actualMajor = parts.getOrNull(0) ?: return false
+        val actualMinor = parts.getOrNull(1) ?: 0
+        return actualMajor > major || (actualMajor == major && actualMinor >= minor)
     }
 
     /** Phase two, per artifact. See the class comment for why this exists. */
@@ -177,13 +235,19 @@ class DependencyResolver(
             )
         }
 
-    private val Artifact.key: String get() = "$groupId:$artifactId:$version"
+    /** Identity for deduplication: one version of a module, never two. */
+    private val Artifact.module: String get() = "$groupId:$artifactId"
     private val Artifact.label: String get() = "$artifactId-$version"
 
     private fun Artifact.withExtension(extension: String): Artifact =
         DefaultArtifact(groupId, artifactId, classifier, extension, version)
 
     companion object {
+        private const val KOTLIN_GROUP = "org.jetbrains.kotlin"
+
+        /** Folded into `kotlin-stdlib` as of Kotlin 1.8. */
+        private val STDLIB_ABSORBED_AT_1_8 = setOf("kotlin-stdlib-jdk7", "kotlin-stdlib-jdk8")
+
         /**
          * Google first, then Central.
          *

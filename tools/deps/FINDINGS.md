@@ -205,3 +205,50 @@ Two things the spike did not turn up:
   does not fit inside. A suite run against an empty cache fails on the clock
   while saying nothing about the code.
 
+## Two ways to get the same class twice, both found by one test
+
+Neither showed up until a single project used AndroidX **and** Kotlin together.
+`:engine:deps` resolved AndroidX correctly and `:engine:fast` compiled Kotlin
+correctly, each with a green suite; the combination failed at dexing. It is the
+same shape of gap as `engine/fast/FINDINGS.md` section 10, and the reason the
+milestone's acceptance test has to be the milestone's *whole* sentence.
+
+**Conflict losers stay in the graph.** `ConflictResolver` does not remove the
+versions it rejects — it leaves them in place carrying a `conflict.winner`
+marker naming the node that won. A visitor that takes every node it is shown
+collects both, so `appcompat` yielded `lifecycle-runtime` at 2.6.1 *and* 2.6.2
+and D8 refused the build:
+
+```
+Type androidx.lifecycle.LifecycleRegistry$Companion is defined multiple times
+```
+
+Skipping marked losers is the fix; deduplicating by `group:artifact` rather than
+by full coordinate is the backstop, because two versions of a module on one
+classpath is never wanted and the symptom otherwise lands far from the cause.
+
+**Maven has no concept of capabilities.** Kotlin 1.8 folded `kotlin-stdlib-jdk7`
+and `kotlin-stdlib-jdk8` into `kotlin-stdlib`, and older AndroidX artifacts
+still depend on the split ones — so a normal graph carries
+`kotlin-stdlib:1.8.22` beside `kotlin-stdlib-jdk7:1.6.21`, two *different
+modules* that genuinely share classes. Dedup by module cannot help. Gradle
+resolves it with capability rules it ships built in; Maven cannot express the
+relationship at all, so the same knowledge is applied by hand as a short named
+list. Three entries, deliberately not a heuristic: each is a claim about the
+ecosystem that could stop being true, and a list that short stays auditable.
+
+Between them these took the appcompat graph from 44 artifacts to 41.
+
+## M4's acceptance, as the plan words it
+
+> Project with `androidx.appcompat` + Kotlin sources builds
+
+Verified on device 2026-08-25: a Kotlin class extending `AppCompatActivity` and
+referring to a resource through `R`, built to a **2.8 MB APK with 380 entries**
+from 41 artifacts and 18 overlaid resource directories. One build exercising
+resolution, AAR extraction, aapt2 overlay, R generation across it, kotlinc
+against a dependency classpath, ECJ after it, and D8 over the lot.
+
+The Kotlin deliberately *uses* the dependency. A file that merely coexisted with
+appcompat would prove nothing about the classpath reaching the compiler.
+

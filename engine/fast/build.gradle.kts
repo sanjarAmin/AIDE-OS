@@ -38,6 +38,21 @@ android {
         jniLibs {
             useLegacyPackaging = true
         }
+
+        resources {
+            // :engine:deps is on the *test* classpath for M4's acceptance test,
+            // and Maven's jars each carry their own copy of these -- seventeen
+            // files named META-INF/DEPENDENCIES, which the merger refuses to
+            // choose between. Library packaging rules do not propagate to a
+            // consumer, so this is repeated in :app and here.
+            excludes += setOf(
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE*",
+                "META-INF/NOTICE*",
+                "META-INF/sisu/**",
+                "META-INF/*.kotlin_module",
+            )
+        }
     }
 
     androidResources {
@@ -73,6 +88,9 @@ dependencies {
     // came from; this is here so one test can prove the two halves compose --
     // that a downloaded platform really drives a build.
     androidTestImplementation(project(":toolchain:manager"))
+    // For M4's acceptance test, which resolves a real AndroidX artifact. The
+    // engine itself takes dependencies as plain files and never resolves.
+    androidTestImplementation(project(":engine:deps"))
 
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.test.runner)

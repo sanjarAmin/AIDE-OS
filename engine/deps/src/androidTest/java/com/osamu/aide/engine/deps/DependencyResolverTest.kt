@@ -116,6 +116,41 @@ class DependencyResolverTest {
     }
 
     /**
+     * One version of each module, never two.
+     *
+     * Conflict resolution does not remove the versions it rejects: they stay in
+     * the graph carrying a marker that names the winner. A collector that takes
+     * every node it is shown therefore returns both, and the failure lands much
+     * later and much less clearly -- D8 refusing the build with "Type
+     * androidx.lifecycle.LifecycleRegistry$Companion is defined multiple times",
+     * which says nothing about resolution at all.
+     *
+     * appcompat's graph reaches lifecycle-runtime by two paths at 2.6.1 and
+     * 2.6.2, so it exercises this without contriving anything.
+     */
+    @Test
+    fun a_module_appears_at_exactly_one_version() = runTest(timeout = NETWORK_TIMEOUT) {
+        val resolved = resolve("androidx.appcompat:appcompat:1.7.0")
+
+        val byModule = resolved.dependencies.groupBy {
+            "${it.coordinate.group}:${it.coordinate.artifact}"
+        }
+        val duplicated = byModule.filterValues { it.size > 1 }
+
+        assertTrue(
+            "these modules resolved to more than one version, which D8 will " +
+                "reject: " + duplicated.map { (module, entries) ->
+                    "$module -> ${entries.map { it.coordinate.version }}"
+                },
+            duplicated.isEmpty(),
+        )
+
+        // And the classpath must not carry the same jar name twice either.
+        val names = resolved.compileClasspath.map { it.parentFile?.name to it.name }
+        assertEquals("duplicate classpath entries", names.size, names.distinct().size)
+    }
+
+    /**
      * The number that decides whether this is usable day to day.
      *
      * Reported rather than asserted. The first resolve is network-bound and
