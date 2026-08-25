@@ -29,6 +29,10 @@ nbJavac = "17.0.0.3"
 # transport is java.net.http.HttpClient, which Android does not have at any API
 # level. maven-resolver-provider is Maven's own wiring for reading POMs -- the
 # resolver alone cannot, and that is the half most likely to resist dexing.
+# Spike R5. The Anthropic SDK, for M5's AI layer. A JVM SDK on ART, which is
+# the assumption this project has been wrong about three times.
+anthropicJava = "2.57.0"
+
 mavenResolver = "1.9.27"
 mavenResolverProvider = "3.9.16"
 
@@ -77,6 +81,8 @@ ecj = { group = "org.eclipse.jdt", name = "ecj", version.ref = "ecj" }
 r8 = { group = "com.android.tools", name = "r8", version.ref = "r8" }
 apksig = { group = "com.android.tools.build", name = "apksig", version.ref = "apksig" }
 nb-javac-android = { group = "io.github.itsaky", name = "nb-javac-android", version.ref = "nbJavac" }
+
+anthropic-java = { group = "com.anthropic", name = "anthropic-java", version.ref = "anthropicJava" }
 
 maven-resolver-supplier = { group = "org.apache.maven.resolver", name = "maven-resolver-supplier", version.ref = "mavenResolver" }
 maven-resolver-connector-basic = { group = "org.apache.maven.resolver", name = "maven-resolver-connector-basic", version.ref = "mavenResolver" }

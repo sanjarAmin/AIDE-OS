@@ -63,3 +63,7 @@ include(":spike:javals")
 // Spike R4 -- Maven resolution on ART, which M4 is designed around. Not part
 // of the app.
 include(":spike:deps")
+
+// Spike R5 -- the Anthropic SDK on ART, which M5 is designed around. Not part
+// of the app.
+include(":spike:ai")
