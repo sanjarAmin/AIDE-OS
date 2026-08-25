@@ -32,10 +32,20 @@ class FastBuildSystem(
     runner: NativeToolRunner,
     private val platform: AndroidPlatform,
     private val dispatchers: DispatcherProvider,
+    /**
+     * The Kotlin compiler, when the device has one.
+     *
+     * Null is an ordinary state, not a misconfiguration: the compiler is a
+     * 54 MB download and a Java project never needs it. A Kotlin project on a
+     * device without it is refused by name rather than failing somewhere in the
+     * middle of a build.
+     */
+    private val kotlin: KotlinCompiler? = null,
 ) : BuildSystem {
 
     private val resources = ResourceStage(runner)
     private val javac = JavaCompileStage(dispatchers)
+    private val kotlinc = kotlin?.let { KotlinCompileStage(it, dispatchers) }
     private val dexer = DexStage(dispatchers)
     private val packager = PackageStage(dispatchers)
     private val signer = SigningStage(dispatchers)
@@ -92,13 +102,37 @@ class FastBuildSystem(
             // why the two halves of the build cannot be reordered or run in
             // parallel however much the wall clock would like them to be.
             val sources = layout.javaSources() + workspace.generatedJavaSources()
+            val kotlinSources = layout.kotlinSources()
+
+            // Kotlin first, and given the Java sources too: it reads them for
+            // signatures without emitting anything for them, so Kotlin can see
+            // Java. ECJ then finds kotlinc's output already in classes/, so
+            // Java can see Kotlin. The other order leaves every Kotlin type
+            // unresolved in the Java half.
+            if (kotlinc != null && kotlinSources.isNotEmpty()) {
+                reportingStage(BuildStage.COMPILE_KOTLIN, diagnostics) { onDiagnostic ->
+                    kotlinc.compile(
+                        kotlinSources = kotlinSources,
+                        javaSources = sources,
+                        platform = platform,
+                        workspace = workspace,
+                        projectRoot = layout.root,
+                        moduleName = request.project.name,
+                        dependencies = request.dependencies.classpath,
+                        onDiagnostic = onDiagnostic,
+                    )
+                }
+            }
+
             stage(BuildStage.COMPILE_JAVA, diagnostics) {
                 javac.compile(
                     sources = sources,
                     platform = platform,
                     workspace = workspace,
                     projectRoot = layout.root,
-                    dependencies = request.dependencies.classpath,
+                    // kotlinc's output is already in classes/, and Java needs it
+                    // on the classpath to refer to anything Kotlin declared.
+                    dependencies = request.dependencies.classpath + workspace.classes,
                 )
             }
 
@@ -162,15 +196,16 @@ class FastBuildSystem(
             "Building needs Android 11 or newer. This device is running " +
                 "Android ${Build.VERSION.RELEASE}; the editor still works."
 
-        // Kotlin is a compiler and a plugin away, both proved by spike R2 and
-        // neither wired in. Saying so beats producing an APK silently missing
-        // every Kotlin class in it.
-        request.project.language == SourceLanguage.KOTLIN ||
-            layout.kotlinSources().isNotEmpty() ->
-            "The fast build engine does not compile Kotlin yet."
+        // The compiler is a download, and a Kotlin project without it cannot
+        // be built. Said here rather than discovered three stages in, where it
+        // would surface as every Kotlin type being unresolved in the Java half.
+        kotlinc == null &&
+            (request.project.language == SourceLanguage.KOTLIN ||
+                layout.kotlinSources().isNotEmpty()) ->
+            "This project has Kotlin sources; the Kotlin compiler is not installed."
 
-        layout.javaSources().isEmpty() ->
-            "This project has no Java sources."
+        layout.javaSources().isEmpty() && layout.kotlinSources().isEmpty() ->
+            "This project has no sources."
 
         else -> platform.validate()
     }

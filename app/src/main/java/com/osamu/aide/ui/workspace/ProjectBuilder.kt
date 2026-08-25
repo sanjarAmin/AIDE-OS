@@ -7,6 +7,7 @@ import com.osamu.aide.engine.api.BuildRequest
 import com.osamu.aide.engine.api.BuildResult
 import com.osamu.aide.engine.fast.AndroidPlatformProvider
 import com.osamu.aide.engine.fast.FastBuildSystem
+import com.osamu.aide.engine.fast.KotlinCompiler
 import com.osamu.aide.toolchain.manager.ToolchainComponent
 import com.osamu.aide.toolchain.manager.ToolchainManager
 import com.osamu.aide.toolchain.nativetools.NativeToolRunner
@@ -30,6 +31,12 @@ class ProjectBuilder(
     private val platforms: AndroidPlatformProvider,
     private val runner: NativeToolRunner,
     private val dependencies: ProjectDependencies,
+    /**
+     * Held here rather than built per build: the compiler's ~11 s startup is
+     * paid per classloader, so one is created for the process and reused.
+     * Null on a device that has not installed it.
+     */
+    private val kotlin: KotlinCompiler?,
     private val dispatchers: DispatcherProvider,
     /**
      * Cache, not the project directory. Intermediates are large, regenerable,
@@ -69,7 +76,12 @@ class ProjectBuilder(
             emit(BuildEvent.Note(message))
         }
 
-        val engine = FastBuildSystem(runner, platforms.platformFor(androidJar), dispatchers)
+        val engine = FastBuildSystem(
+            runner,
+            platforms.platformFor(androidJar),
+            dispatchers,
+            kotlin,
+        )
         emitAll(
             engine.build(
                 BuildRequest(

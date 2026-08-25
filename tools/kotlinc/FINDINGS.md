@@ -130,6 +130,30 @@ Confirmed on an Android 14 x86_64 emulator by
   because a plugin that silently failed to load still produces a clean compile,
   and checking the exit code alone cannot tell the two apart.
 
+### 8. The Compose plugin cannot be registered unconditionally
+
+Found wiring the compiler into `:engine:fast`, not by the spike — the spike only
+ever compiled Compose code, so it never saw this.
+
+Naming the archive with `-Xplugin` registers the Compose plugin for **every**
+compilation. The plugin then checks for the Compose runtime the moment it is
+asked to generate IR, and throws when it is absent:
+
+```
+androidx.compose.compiler.plugins.kotlin.IncompatibleComposeRuntimeVersionException:
+  The Compose Compiler requires the Compose Runtime to be on the class path,
+  but none could be found.
+```
+
+So a plain Kotlin project — no Compose anywhere in it — fails to build with an
+error about a library it never mentioned. The plugin has to be registered only
+when the project actually uses Compose.
+
+Detected by **marker class**, `androidx/compose/runtime/Composer.class`, rather
+than by artifact name: the runtime can arrive as a jar, as an AAR's extracted
+`classes.jar`, or under a coordinate this code has never heard of, and matching
+filenames would miss all but the first.
+
 ## Consequences for the app
 
 - **API 30 is the floor, again.** The archive is dexed at `--min-api 30`, which
@@ -141,6 +165,11 @@ Confirmed on an Android 14 x86_64 emulator by
   building the application environment, registering extension points, reading
   builtins. It is paid per `PathClassLoader`, so `:build:fast` should create one
   and hold it for the life of the process, never per build.
+- **The archive is not published anywhere.** `build-kotlinc-dex.py` produces
+  54 MB that no server hosts, so it cannot yet be a `ToolchainComponent` with a
+  pinned URL and checksum. `KotlinToolchainProvider` looks where a component
+  would be installed and returns null otherwise; every Kotlin path degrades to
+  a refusal naming the missing compiler. This is the last real gap in M4.
 - **Parent the loader to the boot classloader, not the app's.** The archive
   carries its own kotlin-stdlib and so does the app, and d8 synthesises helper
   classes independently for each. Parent-first delegation otherwise hands the

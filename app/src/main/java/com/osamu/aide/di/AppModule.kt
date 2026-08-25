@@ -11,6 +11,8 @@ import com.osamu.aide.editor.EditorLanguages
 import com.osamu.aide.engine.fast.AndroidPlatformProvider
 import com.osamu.aide.engine.deps.DependencyResolver
 import com.osamu.aide.engine.fast.ApkInstaller
+import com.osamu.aide.engine.fast.KotlinCompiler
+import com.osamu.aide.engine.fast.KotlinToolchainProvider
 import com.osamu.aide.toolchain.manager.ToolchainManager
 import com.osamu.aide.toolchain.nativetools.NativeToolRunner
 import com.osamu.aide.toolchain.nativetools.NativeToolchain
@@ -60,12 +62,23 @@ val appModule = module {
     single { DependencyResolver(File(get<Context>().cacheDir, "maven"), get()) }
     single { ProjectDependencies(get()) }
 
+    // Nullable on purpose: the Kotlin compiler is a 54 MB archive that is not
+    // published anywhere yet, so most devices will not have one and every
+    // Kotlin feature has to cope with that. See KotlinToolchainProvider.
+    single { KotlinToolchainProvider(get()) }
+    single<KotlinCompiler?> {
+        get<KotlinToolchainProvider>().toolchain()?.let { toolchain ->
+            KotlinCompiler(toolchain, File(get<Context>().cacheDir, "kotlin-host"))
+        }
+    }
+
     single {
         ProjectBuilder(
             toolchain = get(),
             platforms = get(),
             runner = get(),
             dependencies = get(),
+            kotlin = get(),
             dispatchers = get(),
             outputRoot = get(named(BUILD_OUTPUT_ROOT)),
         )

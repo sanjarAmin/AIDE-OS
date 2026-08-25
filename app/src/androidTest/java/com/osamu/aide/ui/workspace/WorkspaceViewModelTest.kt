@@ -84,6 +84,7 @@ class WorkspaceViewModelTest {
                 platforms = AndroidPlatformProvider(context, dispatchers),
                 runner = NativeToolRunner(NativeToolchain.from(context), dispatchers),
                 dependencies = projectDependencies,
+                kotlin = null,
                 dispatchers = dispatchers,
                 outputRoot = File(context.cacheDir, "builds-test"),
             ),

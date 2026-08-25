@@ -29,5 +29,10 @@ local.properties
 /spike/kotlinc/src/androidTest/assets/*.zip
 /spike/jvmtools/src/androidTest/assets/*.jar
 /engine/fast/src/androidTest/assets/android.jar
+# The Kotlin compiler dex archive (54 MB) and its stdlib, staged for the
+# instrumented tests. Built by tools/kotlinc/build-kotlinc-dex.py; the stdlib
+# comes from tools/kotlinc/fetch-jars.sh.
+/engine/fast/src/androidTest/assets/kotlinc.jar
+/engine/fast/src/androidTest/assets/kotlin-stdlib.jar
 /lsp/java/src/androidTest/assets/android.jar
 /app/src/androidTest/assets/android.jar
