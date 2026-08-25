@@ -73,6 +73,11 @@ dependencies {
     coreLibraryDesugaring(libs.desugar.jdk.libs)
 
     androidTestImplementation(libs.anthropic.java)
+    // Android has no com.sun.net.httpserver -- that is JVM-only, which is why
+    // :toolchain:manager's ArchiveServer fixture works (it is a JVM unit test)
+    // and an instrumented one cannot copy it. MockWebServer is built for this
+    // and runs on the same OkHttp the SDK already uses.
+    androidTestImplementation(libs.okhttp.mockwebserver)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.test.runner)
 }

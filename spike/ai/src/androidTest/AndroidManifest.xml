@@ -1,8 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- The spike calls the real API on purpose: whether the SDK works on a
-         device is the question, and a mocked transport answers a different one. -->
+    <!-- The live half of the spike calls the real API on purpose: whether the
+         SDK works on a device is the question, and a mocked transport answers
+         a different one. -->
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- The platform half talks to a MockWebServer over plain HTTP on
+         loopback, which Android blocks by default since API 28. -->
+    <application android:networkSecurityConfig="@xml/network_security_config" />
 
 </manifest>

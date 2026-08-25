@@ -32,6 +32,9 @@ nbJavac = "17.0.0.3"
 # Spike R5. The Anthropic SDK, for M5's AI layer. A JVM SDK on ART, which is
 # the assumption this project has been wrong about three times.
 anthropicJava = "2.57.0"
+# Matches the OkHttp the SDK resolves, so the test server and the client under
+# test share one HTTP stack rather than two versions of it.
+okhttp = "4.12.0"
 
 mavenResolver = "1.9.27"
 mavenResolverProvider = "3.9.16"
@@ -83,6 +86,7 @@ apksig = { group = "com.android.tools.build", name = "apksig", version.ref = "ap
 nb-javac-android = { group = "io.github.itsaky", name = "nb-javac-android", version.ref = "nbJavac" }
 
 anthropic-java = { group = "com.anthropic", name = "anthropic-java", version.ref = "anthropicJava" }
+okhttp-mockwebserver = { group = "com.squareup.okhttp3", name = "mockwebserver", version.ref = "okhttp" }
 
 maven-resolver-supplier = { group = "org.apache.maven.resolver", name = "maven-resolver-supplier", version.ref = "mavenResolver" }
 maven-resolver-connector-basic = { group = "org.apache.maven.resolver", name = "maven-resolver-connector-basic", version.ref = "mavenResolver" }
