@@ -79,6 +79,21 @@ class JavaLanguageService(
             }
         }
 
+    /**
+     * The signature of the call the cursor is inside, or null if it is not in
+     * one.
+     *
+     * Cheap relative to completion only because the compiler is already warm;
+     * it is the same parse and attribute, so callers should debounce it exactly
+     * as they debounce diagnostics.
+     */
+    suspend fun signatureAt(file: File, text: String, offset: Int): String? =
+        withContext(dispatchers.compiler) {
+            compiler.withCompilation(file, text) { compilation ->
+                runCatching { JavaSignatures.at(compilation, offset) }.getOrNull()
+            }
+        }
+
     /** The partial identifier immediately before the cursor. */
     private fun prefixAt(text: String, offset: Int): String {
         var start = offset.coerceIn(0, text.length)

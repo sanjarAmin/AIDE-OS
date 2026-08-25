@@ -55,7 +55,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDrawerState
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -80,6 +79,7 @@ import com.osamu.aide.editor.CodeEditorController
 import com.osamu.aide.editor.CodeEditorView
 import com.osamu.aide.editor.EditorLanguages
 import com.osamu.aide.editor.SearchBar
+import com.osamu.aide.editor.SignatureHintOverlay
 import com.osamu.aide.editor.SymbolRow
 import com.osamu.aide.engine.api.Diagnostic
 import com.osamu.aide.engine.api.DiagnosticSeverity
@@ -246,6 +246,13 @@ fun WorkspaceScreen(
                             onCloseTab = viewModel::closeDocument,
                             onCloseSearch = viewModel::closeSearch,
                             onGoToDefinition = viewModel::goToDefinition,
+                            onCursorMoved = viewModel::onCursorMoved,
+                            onDiagnosticClick = viewModel::openDiagnostic,
+                            onLaunchIntent = activityLauncher::launch,
+                            onCloseDock = viewModel::closeBuildPanel,
+                            // The wide layout already has a side tool pane; a
+                            // dock as well would report the same build twice.
+                            showDock = state.isBuildPanelOpen && !mode.showsToolPane,
                         )
                     },
                 )
@@ -272,27 +279,6 @@ fun WorkspaceScreen(
             )
         } else {
             body()
-        }
-
-        // Only the three-pane layout has somewhere to put build output. Below
-        // that width it arrives as a sheet, which is also where it belongs on a
-        // phone: it is transient, and it should not cost the editor half the
-        // screen for the rest of the session.
-        if (state.isBuildPanelOpen && !mode.showsToolPane) {
-            ModalBottomSheet(
-                onDismissRequest = viewModel::closeBuildPanel,
-                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-            ) {
-                BuildPane(
-                    state = state.build,
-                    onDiagnosticClick = { diagnostic ->
-                        viewModel.openDiagnostic(diagnostic)
-                        viewModel.closeBuildPanel()
-                    },
-                    onLaunchIntent = activityLauncher::launch,
-                    modifier = Modifier.heightIn(min = 200.dp, max = 420.dp),
-                )
-            }
         }
     }
 
@@ -324,6 +310,11 @@ private fun EditorArea(
     onCloseTab: (File) -> Unit,
     onCloseSearch: () -> Unit,
     onGoToDefinition: (Int) -> Unit,
+    onCursorMoved: (Int) -> Unit,
+    onDiagnosticClick: (Diagnostic) -> Unit,
+    onLaunchIntent: (Intent) -> Unit,
+    onCloseDock: () -> Unit,
+    showDock: Boolean,
 ) {
     Column(Modifier.fillMaxSize()) {
         if (state.openFiles.isNotEmpty()) {
@@ -357,6 +348,7 @@ private fun EditorArea(
                     openDocuments = state.openFiles.map { it.document },
                     languages = languages,
                     onTextChanged = onTextChanged,
+                    onCursorMoved = onCursorMoved,
                     modifier = Modifier.fillMaxSize(),
                     controller = controller,
                     // Live analysis for the file being edited, the
@@ -380,6 +372,30 @@ private fun EditorArea(
                     detail = "Select a file from the project tree.",
                 )
             }
+
+            // Over the editor rather than above it: the hint is transient and
+            // should not reflow the code every time the caret enters a call.
+            state.analysis.signature?.let { signature ->
+                SignatureHintOverlay(
+                    signature = signature,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(start = 12.dp, bottom = 8.dp, end = 12.dp),
+                )
+            }
+        }
+
+        if (showDock) {
+            HorizontalDivider()
+            BottomToolDock(
+                buildState = state.build,
+                // The build's view of the project, plus what the language
+                // service has since found in the file being edited.
+                problems = state.analysis.diagnostics + state.build.diagnostics,
+                onDiagnosticClick = onDiagnosticClick,
+                onLaunchIntent = onLaunchIntent,
+                onClose = onCloseDock,
+            )
         }
 
         if (state.active != null) {

@@ -26,6 +26,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -47,12 +48,22 @@ enum class ToolTab(val title: String, val icon: ImageVector) {
 }
 
 /**
- * Modern multi-tab bottom tool dock for the workspace.
- * Replaces the single transient modal sheet with a persistent/expandable tool container.
+ * The workspace's bottom tool dock.
+ *
+ * Replaces the transient bottom sheet on layouts with no room for a side tool
+ * pane. Persistent rather than modal, because build output is something you
+ * read *while* editing -- a sheet that covers the code you are fixing has to be
+ * dismissed before you can act on what it said.
+ *
+ * [problems] is separate from `buildState.diagnostics` on purpose: the language
+ * service reports the file being edited as it is typed, and the build reports
+ * the project as it was on disk. The Problems tab wants the union, most-recent
+ * first, which is what the caller assembles.
  */
 @Composable
 fun BottomToolDock(
     buildState: BuildUiState,
+    problems: List<Diagnostic>,
     onDiagnosticClick: (Diagnostic) -> Unit,
     onLaunchIntent: (Intent) -> Unit,
     onClose: () -> Unit,
@@ -81,7 +92,7 @@ fun BottomToolDock(
                     ToolTab.entries.forEach { tab ->
                         val isSelected = tab == selectedTab
                         val badgeCount = when (tab) {
-                            ToolTab.PROBLEMS -> buildState.diagnostics.size
+                            ToolTab.PROBLEMS -> problems.size
                             ToolTab.BUILD -> if (buildState.isRunning) 1 else 0
                             else -> 0
                         }
@@ -170,19 +181,50 @@ fun BottomToolDock(
             ) {
                 when (selectedTab) {
                     ToolTab.BUILD -> {
-                        LazyColumn(Modifier.fillMaxWidth()) {
-                            items(buildState.log) { line ->
+                        Column(Modifier.fillMaxWidth()) {
+                            // The one build failure the user can act on: the
+                            // install permission is a Settings toggle, not a
+                            // prompt. Losing this row when the dock replaced
+                            // the sheet would strand an otherwise good build.
+                            buildState.install?.let { install ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Text(
+                                        text = install.message,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    install.settings?.let { settings ->
+                                        TextButton(onClick = { onLaunchIntent(settings) }) {
+                                            Text("Settings")
+                                        }
+                                    }
+                                }
+                            }
+                            if (buildState.log.isEmpty() && buildState.install == null) {
                                 Text(
-                                    text = line,
-                                    style = CodeTextStyle,
+                                    text = "Build output appears here.",
+                                    style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(vertical = 1.dp),
                                 )
+                            }
+                            LazyColumn(Modifier.fillMaxWidth()) {
+                                items(buildState.log) { line ->
+                                    Text(
+                                        text = line,
+                                        style = CodeTextStyle,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(vertical = 1.dp),
+                                    )
+                                }
                             }
                         }
                     }
                     ToolTab.PROBLEMS -> {
-                        if (buildState.diagnostics.isEmpty()) {
+                        if (problems.isEmpty()) {
                             Text(
                                 text = "No problems found in project.",
                                 style = MaterialTheme.typography.bodyMedium,
@@ -191,7 +233,7 @@ fun BottomToolDock(
                             )
                         } else {
                             LazyColumn(Modifier.fillMaxWidth()) {
-                                items(buildState.diagnostics) { diagnostic ->
+                                items(problems) { diagnostic ->
                                     Text(
                                         text = diagnostic.describe(),
                                         style = CodeTextStyle,
@@ -207,32 +249,38 @@ fun BottomToolDock(
                             }
                         }
                     }
-                    ToolTab.LOGCAT -> {
-                        Column(Modifier.fillMaxWidth().padding(8.dp)) {
-                            Text(
-                                text = "Logcat stream connected (Application ID: live)",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.primary,
-                            )
-                            Text(
-                                text = "Waiting for process output...",
-                                style = CodeTextStyle,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(top = 4.dp),
-                            )
-                        }
-                    }
-                    ToolTab.TERMINAL -> {
-                        Column(Modifier.fillMaxWidth().padding(8.dp)) {
-                            Text(
-                                text = "$ aide-os --version\nAIDE-OS Native Shell v1.0 [aarch64]\n$ ",
-                                style = CodeTextStyle,
-                                color = MaterialTheme.colorScheme.onSurface,
-                            )
-                        }
-                    }
+                    // Both tabs are placeholders and say so. A mocked-up log
+                    // stream or shell prompt reads as a working feature, and
+                    // the first thing it teaches the user is that the UI lies
+                    // about what the app can do.
+                    ToolTab.LOGCAT -> NotBuiltYet(
+                        "Reading the running app's log needs the installed build to be " +
+                            "attached to. Nothing here is wired up yet.",
+                    )
+                    ToolTab.TERMINAL -> NotBuiltYet(
+                        "A shell needs the PTY terminal widget, which arrives with M8 " +
+                            "alongside Git.",
+                    )
                 }
             }
         }
+    }
+}
+
+/** An empty tool tab that is honest about being empty. */
+@Composable
+private fun NotBuiltYet(explanation: String) {
+    Column(Modifier.fillMaxWidth().padding(8.dp)) {
+        Text(
+            text = "Not built yet",
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Text(
+            text = explanation,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp),
+        )
     }
 }

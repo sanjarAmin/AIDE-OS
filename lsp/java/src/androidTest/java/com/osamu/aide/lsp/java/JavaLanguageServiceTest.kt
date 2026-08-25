@@ -289,6 +289,44 @@ class JavaLanguageServiceTest {
         assertEquals(null, service.definition(sourceFile(), text, onActivity))
     }
 
+    @Test
+    fun the_signature_of_the_call_the_cursor_is_inside_is_reported() = runTest {
+        val text = SIGNATURE.replace(CURSOR, "")
+        val signature = service.signatureAt(sourceFile(), text, SIGNATURE.indexOf(CURSOR))
+
+        val found = requireNotNull(signature) { "no signature inside a call" }
+        assertTrue("expected the method name, got '$found'", found.startsWith("setTitle("))
+
+        // An empty argument list matches no overload, so this is the fallback
+        // path: the widest candidate, plus a count of the rest. Activity
+        // declares setTitle(CharSequence) and setTitle(int).
+        assertTrue("expected a parameter type, got '$found'", "CharSequence" in found || "int" in found)
+        assertTrue("expected the other overload to be counted, got '$found'", "more" in found)
+
+        // android.jar carries no parameter names, and arg0 is worse than
+        // nothing -- it reads as the platform's own naming.
+        assertTrue("synthetic parameter name leaked, got '$found'", "arg0" !in found)
+        assertTrue(
+            "types should be unqualified so the hint fits a phone, got '$found'",
+            "java.lang" !in found,
+        )
+    }
+
+    /**
+     * Outside a call there is nothing to hint, and saying so matters.
+     *
+     * A signature that lingers after the caret leaves the parentheses is worse
+     * than none: it describes a call the user is no longer writing.
+     */
+    @Test
+    fun there_is_no_signature_outside_a_call() = runTest {
+        val text = SIGNATURE.replace(CURSOR, "")
+        // The class declaration line, well clear of any argument list.
+        val outside = text.indexOf("public class") + "public cl".length
+
+        assertEquals(null, service.signatureAt(sourceFile(), text, outside))
+    }
+
     private fun renamedSource(method: String, caller: String = method): String = """
         package com.example;
 
@@ -367,6 +405,21 @@ class JavaLanguageServiceTest {
             public class Caller {
                 int call() {
                     return Helper./*^*/help();
+                }
+            }
+        """.trimIndent()
+
+        val SIGNATURE = """
+            package com.example;
+
+            import android.app.Activity;
+            import android.os.Bundle;
+
+            public class MainActivity extends Activity {
+                @Override
+                protected void onCreate(Bundle savedInstanceState) {
+                    super.onCreate(savedInstanceState);
+                    setTitle(/*^*/);
                 }
             }
         """.trimIndent()

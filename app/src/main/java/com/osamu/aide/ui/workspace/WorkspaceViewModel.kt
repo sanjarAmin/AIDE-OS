@@ -115,6 +115,8 @@ data class AnalysisUiState(
     val file: File? = null,
     val diagnostics: List<Diagnostic> = emptyList(),
     val isRunning: Boolean = false,
+    /** The call the caret is inside, if it is inside one. */
+    val signature: String? = null,
 )
 
 data class OpenFile(
@@ -202,6 +204,7 @@ class WorkspaceViewModel(
     private var buildJob: Job? = null
     private var installJob: Job? = null
     private var analysisJob: Job? = null
+    private var signatureJob: Job? = null
 
     /**
      * How far the platform download got, kept outside the prompt's state so
@@ -297,7 +300,16 @@ class WorkspaceViewModel(
 
     fun selectDocument(file: File) {
         if (_state.value.activeFile == file) return
-        _state.update { it.copy(activeFile = file, documentError = null) }
+        signatureJob?.cancel()
+        // The hint describes a caret in the outgoing file; keeping it would
+        // caption the incoming one with the wrong call.
+        _state.update {
+            it.copy(
+                activeFile = file,
+                documentError = null,
+                analysis = it.analysis.copy(signature = null),
+            )
+        }
     }
 
     /**
@@ -391,9 +403,45 @@ class WorkspaceViewModel(
                         file = file,
                         diagnostics = diagnostics,
                         isRunning = false,
+                        // Carried across: the caret has not moved just because
+                        // the file was re-analysed, and dropping it here would
+                        // make the hint blink on every pause in typing.
+                        signature = current.analysis.signature,
                     ),
                 )
             }
+        }
+    }
+
+    /**
+     * Asks what call the caret is inside, and puts the answer in the state.
+     *
+     * Debounced harder than it looks like it needs to be. The caret moves on
+     * every keystroke as well as every tap, so an undebounced hint would run a
+     * compilation per character typed -- the same work as diagnostics, twice.
+     * A hint that appears a beat after you stop moving is the correct
+     * behaviour anyway; one that flickers on every character is not.
+     */
+    fun onCursorMoved(offset: Int) {
+        val active = _state.value.active ?: return
+        val root = _state.value.projectRoot ?: return
+        if (active.file.extension != "java") return
+        val service = languageServices.forProject(root) ?: return
+
+        signatureJob?.cancel()
+        signatureJob = viewModelScope.launch {
+            delay(SIGNATURE_DEBOUNCE_MILLIS)
+            val text = pendingText[active.file] ?: active.document.text
+            val signature = try {
+                service.signatureAt(active.file, text, offset)
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (failure: Throwable) {
+                Log.w(TAG, "signature lookup failed", failure)
+                null
+            }
+            if (!isActive) return@launch
+            _state.update { it.copy(analysis = it.analysis.copy(signature = signature)) }
         }
     }
 
@@ -727,5 +775,8 @@ class WorkspaceViewModel(
          * delay a normal typing burst produces one compile, not twelve.
          */
         const val ANALYSIS_DEBOUNCE_MILLIS = 350L
+
+        /** Shorter than analysis: a hint is worth less the later it lands. */
+        const val SIGNATURE_DEBOUNCE_MILLIS = 200L
     }
 }

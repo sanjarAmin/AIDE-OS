@@ -8,6 +8,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import com.osamu.aide.engine.api.Diagnostic
 import io.github.rosemoe.sora.event.ContentChangeEvent
+import io.github.rosemoe.sora.event.SelectionChangeEvent
 import io.github.rosemoe.sora.widget.CodeEditor
 import io.github.rosemoe.sora.widget.component.EditorAutoCompletion
 import io.github.rosemoe.sora.widget.getComponent
@@ -34,6 +35,8 @@ fun CodeEditorView(
     openDocuments: List<SourceDocument>,
     languages: EditorLanguages,
     onTextChanged: (String) -> Unit,
+    /** Where the caret went, as a character index. Drives signature hints. */
+    onCursorMoved: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
     controller: CodeEditorController? = null,
     /** Build diagnostics for the whole project; the gutter shows this file's. */
@@ -52,6 +55,7 @@ fun CodeEditorView(
     // recomposition -- so it has to read the *current* callback rather than the
     // one that happened to be in scope when the view was created.
     val currentListener = rememberUpdatedState(onTextChanged)
+    val currentCursorListener = rememberUpdatedState(onCursorMoved)
     val buffers = remember { EditorBuffers() }
     val currentController = rememberUpdatedState(controller)
 
@@ -72,6 +76,13 @@ fun CodeEditorView(
 
                 subscribeEvent(ContentChangeEvent::class.java) { event, _ ->
                     currentListener.value(event.editor.text.toString())
+                }
+                // Reported separately from text changes because the caret moves
+                // without the text doing so -- a tap into the middle of an
+                // existing call should raise its signature, and no edit has
+                // happened to notice.
+                subscribeEvent(SelectionChangeEvent::class.java) { event, _ ->
+                    currentCursorListener.value(event.editor.cursor.left)
                 }
                 currentController.value?.attach(this)
             }
