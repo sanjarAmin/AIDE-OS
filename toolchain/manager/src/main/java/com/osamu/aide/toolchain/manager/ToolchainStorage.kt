@@ -16,8 +16,13 @@ class ToolchainStorage(private val root: File) {
         File(root, component.id.replace(';', '-'))
 
     /** The installed file itself, whether or not it exists yet. */
+    /** The component's principal file; see [ToolchainComponent.primaryInstalledName]. */
     fun fileFor(component: ToolchainComponent): File =
-        File(directoryFor(component), component.installedName)
+        File(directoryFor(component), component.primaryInstalledName)
+
+    /** One named file inside an installed component. */
+    fun fileFor(component: ToolchainComponent, installedName: String): File =
+        File(directoryFor(component), installedName)
 
     fun isInstalled(component: ToolchainComponent): Boolean =
         fileFor(component).isFile

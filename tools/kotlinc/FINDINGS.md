@@ -165,11 +165,14 @@ filenames would miss all but the first.
   building the application environment, registering extension points, reading
   builtins. It is paid per `PathClassLoader`, so `:build:fast` should create one
   and hold it for the life of the process, never per build.
-- **The archive is not published anywhere.** `build-kotlinc-dex.py` produces
-  54 MB that no server hosts, so it cannot yet be a `ToolchainComponent` with a
-  pinned URL and checksum. `KotlinToolchainProvider` looks where a component
-  would be installed and returns null otherwise; every Kotlin path degrades to
-  a refusal naming the missing compiler. This is the last real gap in M4.
+- **The archive is published on this project's own releases.** Nothing upstream
+  ships a Kotlin compiler that runs on Android, so `build-kotlinc-dex.py`'s
+  output is uploaded to
+  `github.com/sanjarAmin/AIDE-OS/releases/tag/kotlinc-2.2.10` and installed by
+  `:toolchain:manager` like the platform. The pin is the release tag, so the
+  bytes behind that URL cannot change under a user. Absence stays an ordinary
+  state -- a Java project never needs it -- and every Kotlin path degrades to a
+  refusal that names the missing compiler rather than failing mid-build.
 - **Parent the loader to the boot classloader, not the app's.** The archive
   carries its own kotlin-stdlib and so does the app, and d8 synthesises helper
   classes independently for each. Parent-first delegation otherwise hands the

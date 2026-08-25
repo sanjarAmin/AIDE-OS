@@ -307,12 +307,13 @@ M0–M5 is the real v1.0. Everything from M6 on is expansion.
    The acceptance test is met as written: completion on an **AndroidX** type at a
    **76 ms** warm median against the 200 ms budget, once `:engine:deps` could put
    `appcompat` on the classpath.
-7. **M4 deps + Kotlin** — **acceptance met, blocked on distribution.** A Kotlin
-   project using `androidx.appcompat` builds to an APK on device: 41 artifacts
-   resolved and unpacked, resources overlaid, kotlinc ahead of ECJ, D8 over the
-   lot. The only thing left is delivery — the 54 MB compiler archive is
-   published nowhere, so it cannot be a `ToolchainComponent` and a real user
-   still cannot have Kotlin. Nothing in M5 changes that.
+7. ~~**M4 deps + Kotlin**~~ — **closed**. A Kotlin project using
+   `androidx.appcompat` builds to an APK on device: 41 artifacts resolved and
+   unpacked, resources overlaid, kotlinc ahead of ECJ, D8 over the lot. The
+   compiler is downloaded from this project's own releases by
+   `:toolchain:manager`, verified against a pinned checksum, and the download
+   is tested against the live release rather than a fixture.
+8. **M5 AI** — the current target, and the second starred milestone.
 
 ~~Before building `:build:fast`, verify the remaining "pure JVM, therefore fine
 on ART" assumptions — ECJ, D8/R8 and apksig.~~ Done: spike R2b. All three run,

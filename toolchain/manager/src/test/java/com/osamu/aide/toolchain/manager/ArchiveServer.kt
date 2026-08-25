@@ -64,8 +64,7 @@ class ArchiveServer(
         archiveUrl = url,
         archiveSha1 = sha1,
         archiveBytes = archive.size.toLong(),
-        entry = entryName,
-        installedName = "android.jar",
+        entries = mapOf(entryName to "android.jar"),
     )
 
     fun stop() = server.stop(0)

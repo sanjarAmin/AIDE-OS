@@ -40,6 +40,7 @@ class ToolchainManagerTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         manager = ToolchainManager(context, DefaultDispatcherProvider())
         manager.storage.remove(ToolchainComponent.ANDROID_PLATFORM)
+        manager.storage.remove(ToolchainComponent.KOTLIN_COMPILER)
         manager.license.accept()
     }
 
@@ -64,6 +65,61 @@ class ToolchainManagerTest {
             )
         }
         assertTrue("the build engine still reports it cannot build", manager.canBuild())
+    }
+
+    /**
+     * The Kotlin compiler, downloaded from this project's own releases.
+     *
+     * Unlike the platform this archive is ours, and the whole point of hosting
+     * it is that a user with no account can fetch it -- so this test is the one
+     * that would catch a release made private, a tag moved, or an asset
+     * deleted. It also exercises multi-entry extraction, which exists for this
+     * component: two files out of one archive, installed as one thing.
+     */
+    @Test
+    fun installs_the_kotlin_compiler_from_this_projects_releases() = runBlocking {
+        val component = ToolchainComponent.KOTLIN_COMPILER
+
+        val progress = manager.install(component).toList()
+
+        val last = progress.last()
+        assertTrue("install failed: $last", last is InstallProgress.Installed)
+
+        // Both entries, not just the one the existence check looks at.
+        val archive = manager.storage.fileFor(component, "kotlinc.jar")
+        val stdlib = manager.storage.fileFor(component, "kotlin-stdlib.jar")
+        assertTrue("kotlinc.jar was not installed", archive.isFile)
+        assertTrue("kotlin-stdlib.jar was not installed", stdlib.isFile)
+
+        // Usable, not merely present: a truncated dex archive is still a valid
+        // zip, and the compiler's own classes are what it will be asked for.
+        ZipFile(archive).use { zip ->
+            assertTrue(
+                "kotlinc.jar carries no dex",
+                zip.entries().asSequence().any { it.name.endsWith(".dex") },
+            )
+        }
+        ZipFile(stdlib).use { zip ->
+            assertTrue(
+                "kotlin-stdlib.jar has no kotlin/Unit.class",
+                zip.getEntry("kotlin/Unit.class") != null,
+            )
+        }
+    }
+
+    /**
+     * Kotlin is Apache-2.0; Google's SDK terms have nothing to do with it.
+     *
+     * Worth pinning because the licence prompt defaults to on, and asking a
+     * user to accept Google's agreement before downloading a JetBrains
+     * compiler would be a false statement made by the UI.
+     */
+    @Test
+    fun the_kotlin_compiler_asks_for_no_sdk_licence() {
+        assertTrue(
+            "the Kotlin compiler should not require Google's SDK licence",
+            !ToolchainComponent.KOTLIN_COMPILER.requiresSdkLicense,
+        )
     }
 
     @Test

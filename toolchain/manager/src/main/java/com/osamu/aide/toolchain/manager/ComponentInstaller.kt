@@ -203,33 +203,40 @@ class ComponentInstaller(
     }
 
     /**
-     * Pulls the one entry out of the archive.
+     * Pulls the wanted entries out of the archive.
      *
-     * Written to a temporary name and renamed into place, because
-     * [ToolchainStorage.isInstalled] is a file existence check: a component
-     * half-extracted when the process died would otherwise read as installed
-     * for the rest of the app's life.
+     * Each is written to a temporary name and renamed into place, and the
+     * *primary* entry is renamed last. [ToolchainStorage.isInstalled] is a file
+     * existence check on that one file, so finishing it last means a component
+     * interrupted part way through never reads as installed -- which would
+     * otherwise persist for the life of the app and surface as a compiler that
+     * is present and cannot start.
      */
     private fun extract(component: ToolchainComponent, archive: File): File {
-        val target = storage.fileFor(component)
-        target.parentFile?.mkdirs()
-        val partial = File(target.parentFile, "${target.name}.partial")
+        val directory = storage.directoryFor(component).apply { mkdirs() }
+        val primary = storage.fileFor(component)
+        val staged = mutableMapOf<File, File>()
 
         ZipFile(archive).use { zip ->
-            val entry = zip.getEntry(component.entry)
-                ?: throw IOException(
-                    "${component.displayName} does not contain ${component.entry}.",
-                )
-            zip.getInputStream(entry).use { input ->
-                partial.outputStream().buffered().use { input.copyTo(it) }
+            component.entries.forEach { (name, installedName) ->
+                val entry = zip.getEntry(name)
+                    ?: throw IOException("${component.displayName} does not contain $name.")
+                val partial = File(directory, "$installedName.partial")
+                zip.getInputStream(entry).use { input ->
+                    partial.outputStream().buffered().use { input.copyTo(it) }
+                }
+                staged[partial] = File(directory, installedName)
             }
         }
 
-        if (!partial.renameTo(target)) {
-            partial.delete()
-            throw IOException("${component.displayName} could not be installed.")
+        // Everything but the primary first, so the existence check flips last.
+        staged.entries.sortedBy { it.value == primary }.forEach { (partial, target) ->
+            if (!partial.renameTo(target)) {
+                staged.keys.forEach(File::delete)
+                throw IOException("${component.displayName} could not be installed.")
+            }
         }
-        return target
+        return primary
     }
 
     private companion object {
