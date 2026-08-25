@@ -146,3 +146,35 @@ Confirmed on an Android 14 x86_64 emulator by
   classes independently for each. Parent-first delegation otherwise hands the
   archive the app's synthetics and linking fails with `NoSuchMethodError` deep
   inside IntelliJ's message bus.
+
+## The input jars, and how much of them can be rebuilt
+
+`build-kotlinc-dex.py --jars` consumes a set of nine jars that nothing in this
+repository produced. They were assembled by hand into
+`~/aide-os-spikes/kotlinc/jars` and existed on exactly one machine: 64 MB of
+single-machine dependency standing in front of M4, and losing the machine lost
+the inputs.
+
+`jars.lock` now records all nine by sha256, and `fetch-jars.sh` rebuilds every
+row that carries a Maven coordinate, verifying each download against the lock so
+a mirror serving something else fails loudly rather than quietly.
+
+**Seven of the nine are byte-identical to Maven Central** and were checked that
+way rather than assumed — six Kotlin artifacts at 2.2.10 plus
+`org.jetbrains:annotations:23.0.0`. That is 62 of the 64 MB, reproducible from
+nothing:
+
+    tools/kotlinc/fetch-jars.sh [target-dir]
+
+Two are not, and both are repackaged rather than published as-is:
+
+| Jar | Why it resists pinning |
+|---|---|
+| `compose-runtime.jar` | an AAR's `classes.jar`, extracted — `androidx.compose.runtime` ships no plain jar |
+| `kotlinx-coroutines-core-jvm.jar` | matches no released artifact byte for byte; 1.8.1 is closest by size and still differs |
+
+Their checksums are in the lock, so a copy can be **verified** even though it
+cannot yet be **rebuilt**. Closing the last two means either extracting the AAR
+as a build step or finding what transformed the coroutines jar; until then the
+script says so and exits non-zero rather than pretending the set is complete.
+

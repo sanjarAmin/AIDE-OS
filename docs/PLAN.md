@@ -295,15 +295,28 @@ M0–M5 is the real v1.0. Everything from M6 on is expansion.
 
 1. ~~**Spike R1 (aapt2)**~~ — done.
 2. ~~**Spike R2 (Compose plugin in on-device kotlinc)**~~ — done.
-3. ~~**Pick a license**~~ — done, GPLv3.
-4. **M0 skeleton** — module structure, version catalog, Compose shell. Substantially done.
-5. **M2** — the make-or-break milestone, and the current target. Both risks that gated it are closed.
+3. ~~**Spike R3 (Java language services on ART)**~~ — done. `tools/javals/FINDINGS.md`.
+4. ~~**Pick a license**~~ — done, GPLv3.
+5. ~~**M0 skeleton**~~, ~~**M1 editor**~~, ~~**M2 first APK**~~ — closed. Hello-world
+   builds and installs in **2.76 s** against the 10 s budget.
+6. **M3 intelligence** — feature-complete and verified in the running app.
+   `:lsp:java` answers completion, diagnostics-as-you-type, go-to-definition and
+   signature hints at a **92 ms** warm median against the 200 ms budget.
+   Outstanding: the acceptance test says *AndroidX* types, which cannot be
+   honoured until M4 puts a dependency on the classpath.
+7. **M4 deps + Kotlin** — the current target. `:engine:deps` first: it unblocks
+   the literal wording of M3's acceptance as well as its own milestone.
 
 ~~Before building `:build:fast`, verify the remaining "pure JVM, therefore fine
 on ART" assumptions — ECJ, D8/R8 and apksig.~~ Done: spike R2b. All three run,
-but not for free — ECJ is pinned to 3.38.0, needs a `SourceVersion` runtime
-shim, and needs `platform-stubs.jar` on the compile classpath before it will
-accept a lambda. `tools/ecj/FINDINGS.md`.
+but not for free — ECJ is pinned to 3.38.0 and needs `platform-stubs.jar` on the
+compile classpath before it will accept a lambda. `tools/ecj/FINDINGS.md`.
+
+ECJ also needs a `javax.lang.model.SourceVersion` to exist at all, which Android
+does not provide. That was a hand-written shim until `:lsp:java` arrived with
+nb-javac's real one and the two collided in a single APK; the shim is gone and
+the real class serves both. `engine/fast/FINDINGS.md` section 10 — it is the
+sharpest example so far of a bug no module's own test suite can see.
 
 
 ---

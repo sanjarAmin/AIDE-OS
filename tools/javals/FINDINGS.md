@@ -198,6 +198,32 @@ Definitions that live in `android.jar` return null rather than a location. The
 element has a symbol but no tree, so there is no file to open, and inventing one
 would send the user somewhere that does not exist.
 
+## Signature help needs a different search, and usually a fallback
+
+Completion and signature help look like the same query and are not.
+[FindCursor] finds the identifier or member select *under* the caret, which is
+what completion wants. Between two parentheses there is often no node under the
+caret at all -- `setTitle()` has an empty argument list, and the only tree
+spanning that position is the invocation several levels up. Signature help scans
+for **containment** instead, keeping the innermost matching call so that
+`outer(inner(|))` reports the inner one.
+
+Resolution is the second trap. A hint is wanted precisely while the argument
+list is incomplete, which is exactly when the call matches no overload and
+`Trees.getElement` yields nothing useful. So an unresolved invocation falls back
+to looking the name up among the receiver's members, showing the widest
+candidate and counting the rest.
+
+Two limits come from `android.jar` itself and are permanent:
+
+- **No parameter names.** It is compiled without `-parameters`, so every
+  platform method's parameters are `arg0`, `arg1`. Printed, they read as the
+  API's own naming and say less than the bare type, so they are dropped:
+  `setTitle(int)`, not `setTitle(int arg0)`.
+- **Overloads are indistinguishable before anything is typed.** `setTitle`
+  has a `CharSequence` and an `int` form and nothing chooses between them at
+  the moment the paren opens.
+
 ## Verified on device
 
 `:spike:javals:connectedDebugAndroidTest` on `aideos_test` (API 34, x86_64),
@@ -205,3 +231,19 @@ would send the user somewhere that does not exist.
 test**: it asserts the naive shape misses 200 ms, so that this document becomes
 wrong loudly rather than silently. The real acceptance assertion belongs to
 `:lsp:java`, where it is not yet met.
+
+## M3, seen rather than inferred
+
+2026-08-24, in the running app on `aideos_test`: a project created through the
+UI, `MainActivity.java` opened from the file tree, and `this.` typed at the end
+of `onCreate`. The completion popup appears with real `Activity` members --
+`ACCESSIBILITY_SERVICE`, `ACCOUNT_SERVICE`, `ACTIVITY_SERVICE` -- carrying the
+semantic adapter's kind icons. Live diagnostics squiggle `R.string.greeting`,
+which is correct: `R.java` does not exist until a build has run. Typing
+`setTitle(` raises the hint `setTitle(int)`.
+
+Worth recording because it was the last claim in this document resting on log
+output rather than on something seen. The completion path had already passed
+every test in three modules while showing the user nothing at all -- twice, for
+two unrelated reasons (`engine/fast/FINDINGS.md` section 10, and sora cancelling
+by thread interrupt). A green suite is not a rendered popup.
