@@ -3,4 +3,13 @@
     <!-- Painted behind the window before Compose draws, so the cold-start frame
          matches the theme instead of flashing the opposite one. -->
     <color name="aide_window_background">#FFFFFFFF</color>
+
+    <!-- Semantic Colors for File Types -->
+    <color name="file_java">#E68A00</color>
+    <color name="file_kotlin">#7F52FF</color>
+    <color name="file_xml">#4CAF50</color>
+    <color name="file_json">#FBC02D</color>
+    <color name="file_gradle">#02303A</color>
+    <color name="file_generic">#757575</color>
+    <color name="folder">#FFA000</color>
 </resources>

@@ -107,7 +107,13 @@ class CompletionSourceTest {
     fun proposals_from_the_source_become_items_the_widget_can_show() {
         val source = RecordingSource(
             listOf(
-                EditorCompletion("getSystemService", EditorCompletionKind.METHOD, detail = "(String)"),
+                EditorCompletion(
+                    "getSystemService",
+                    EditorCompletionKind.METHOD,
+                    detail = "(String)",
+                    signature = "(String name)",
+                    returnType = "Object"
+                ),
                 EditorCompletion("finish", EditorCompletionKind.METHOD),
             ),
         )
@@ -118,6 +124,10 @@ class CompletionSourceTest {
         assertEquals(listOf("getSystemService", "finish"), items.map { it.label.toString() })
         assertEquals(CompletionItemKind.Method, items.first().kind)
         assertEquals("getSystemService", items.first().commitText)
+
+        val semanticItem = items.first() as SemanticCompletionItem
+        assertEquals("(String name)", semanticItem.signature)
+        assertEquals("Object", semanticItem.returnType)
     }
 
     @Test
@@ -236,6 +246,93 @@ class CompletionSourceTest {
 
         val items = complete("class Main { void f() { this.get } }", 32, source)
         assertEquals(listOf("getWindow"), items.map { it.label.toString() })
+    }
+
+    /**
+     * The case a typed prefix produces, and the one that breaks silently.
+     *
+     * [CompletionPublisher.addItem] stages into a private candidate list and
+     * only promotes it when the count reaches the publisher's update threshold,
+     * which defaults to five. A language that relies on that auto-flush instead
+     * of calling `updateList` publishes nothing at all for one to four
+     * proposals -- and narrowing to a handful of matches is the whole point of
+     * typing a prefix. The threshold here is sora's real default, not the 1 the
+     * other tests use, precisely so this cannot pass by accident.
+     */
+    @Test
+    fun a_result_set_below_the_publishers_threshold_is_still_published() {
+        val source = CompletionSource { _, _, _ ->
+            listOf(EditorCompletion("getWindow", EditorCompletionKind.METHOD))
+        }
+        languages.completionSource = source
+        val language = languages.languageFor(File("/project/Main.java"))
+
+        val thread = HandlerThread("threshold-test").apply { start() }
+        try {
+            val content = Content("class Main { void f() { this.getW } }")
+            val publisher = CompletionPublisher(
+                Handler(thread.looper),
+                {},
+                CompletionPublisher.DEFAULT_UPDATE_THRESHOLD,
+            )
+            language.requireAutoComplete(
+                ContentReference(content),
+                content.indexer.getCharPosition(33),
+                publisher,
+                Bundle(),
+            )
+            val drained = CountDownLatch(1)
+            Handler(thread.looper).post { drained.countDown() }
+            assertTrue("publisher never drained", drained.await(5, TimeUnit.SECONDS))
+
+            assertEquals(
+                "a single proposal never reached the widget",
+                listOf("getWindow"),
+                publisher.items.map { it.label.toString() },
+            )
+        } finally {
+            thread.quitSafely()
+        }
+    }
+
+    /**
+     * A request still in flight when the editor is detached must not crash.
+     *
+     * sora constructs the publisher with `editor.getHandler()`, and
+     * `View.getHandler()` is null while the view is not attached to a window,
+     * so publishing throws. There is no popup to fill by then; cancelling is
+     * the answer, and taking the whole editor down with a NullPointerException
+     * is not.
+     */
+    @Test
+    fun publishing_to_a_detached_editor_cancels_instead_of_crashing() {
+        languages.completionSource = CompletionSource { _, _, _ ->
+            listOf(EditorCompletion("getWindow", EditorCompletionKind.METHOD))
+        }
+        val language = languages.languageFor(File("/project/Main.java"))
+        val content = Content("class Main { void f() { this.getW } }")
+
+        // Exactly what sora hands us for a detached editor. Built reflectively
+        // because the constructor is annotated non-null, so Kotlin will not let
+        // the literal through -- but sora passes `editor.getHandler()`, which
+        // the platform is perfectly willing to make null.
+        val publisher = CompletionPublisher::class.java
+            .getDeclaredConstructor(Handler::class.java, Runnable::class.java, Int::class.javaPrimitiveType)
+            .newInstance(null, Runnable {}, 1)
+
+        var cancelled = false
+        try {
+            language.requireAutoComplete(
+                ContentReference(content),
+                content.indexer.getCharPosition(33),
+                publisher,
+                Bundle(),
+            )
+        } catch (expected: CompletionCancelledException) {
+            cancelled = true
+        }
+
+        assertTrue("a detached editor should cancel, not crash", cancelled)
     }
 
     @Test

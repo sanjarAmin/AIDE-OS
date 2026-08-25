@@ -84,6 +84,7 @@ import com.osamu.aide.editor.SymbolRow
 import com.osamu.aide.engine.api.Diagnostic
 import com.osamu.aide.engine.api.DiagnosticSeverity
 import com.osamu.aide.toolchain.manager.InstallProgress
+import com.osamu.aide.ui.util.FileIcons
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 import java.io.File
@@ -335,6 +336,15 @@ private fun EditorArea(
             HorizontalDivider()
         }
 
+        val active = state.active
+        if (active != null) {
+            BreadcrumbBar(
+                file = active.file,
+                projectRoot = state.projectRoot,
+            )
+            HorizontalDivider()
+        }
+
         if (state.isSearchOpen && state.active != null) {
             SearchBar(controller = controller, onDismiss = onCloseSearch)
         }
@@ -410,6 +420,7 @@ private fun EditorTabs(
     ) {
         items(openFiles, key = { it.file.absolutePath }) { open ->
             val isActive = open.file == activeFile
+            val iconInfo = FileIcons.infoFor(open.file, isDirectory = false)
             Surface(
                 onClick = { onSelect(open.file) },
                 color = if (isActive) {
@@ -419,10 +430,16 @@ private fun EditorTabs(
                 },
             ) {
                 Row(
-                    modifier = Modifier.padding(start = 12.dp, end = 4.dp),
+                    modifier = Modifier.padding(start = 8.dp, end = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
+                    Icon(
+                        imageVector = iconInfo.icon,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp),
+                        tint = iconInfo.tint
+                    )
                     Text(
                         text = open.name,
                         style = MaterialTheme.typography.labelLarge,
@@ -698,6 +715,7 @@ private fun FileTreeRow(
     } else {
         MaterialTheme.colorScheme.surface
     }
+    val iconInfo = FileIcons.infoFor(node.file, node.isDirectory, isExpanded)
     Surface(color = background, onClick = onClick) {
         Row(
             modifier = Modifier
@@ -710,14 +728,10 @@ private fun FileTreeRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Icon(
-                imageVector = when {
-                    node.isDirectory && isExpanded -> Icons.Default.FolderOpen
-                    node.isDirectory -> Icons.Default.Folder
-                    else -> Icons.AutoMirrored.Filled.InsertDriveFile
-                },
+                imageVector = iconInfo.icon,
                 contentDescription = null,
                 modifier = Modifier.size(16.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = iconInfo.tint,
             )
             Text(
                 text = node.name,

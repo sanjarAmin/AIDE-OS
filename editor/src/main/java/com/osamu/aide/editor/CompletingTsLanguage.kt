@@ -62,11 +62,45 @@ internal class CompletingTsLanguage(
         val prefix = prefixLength(text, offset)
         proposals.forEach { proposal ->
             publisher.addItem(
-                SimpleCompletionItem(proposal.label, proposal.detail, prefix, proposal.insert)
-                    .kind(proposal.kind.toSora()),
+                SemanticCompletionItem(
+                    proposal.label,
+                    proposal.detail,
+                    prefix,
+                    proposal.insert,
+                    proposal.signature,
+                    proposal.returnType,
+                    proposal.score
+                ).kind(proposal.kind.toSora()),
             )
         }
-        publisher.updateList()
+
+        publish(publisher)
+    }
+
+    /**
+     * Hands the staged proposals to the widget.
+     *
+     * Not optional, and not implied by [CompletionPublisher.addItem]: `addItem`
+     * only flushes once the staged count reaches the publisher's update
+     * threshold, which defaults to **five**. Without this call a result set of
+     * one to four items -- exactly what a typed prefix narrows down to, and the
+     * most useful case there is -- sits in the publisher forever and the user
+     * sees an empty popup.
+     *
+     * The null check is for a real crash rather than a hypothetical one. sora
+     * builds the publisher with `editor.getHandler()`, and `View.getHandler()`
+     * is null while the view is detached, so a request still in flight when the
+     * editor goes away reaches a publisher that cannot post. There is no popup
+     * to fill at that point, so the honest answer is to cancel: the alternative
+     * -- writing a Handler into sora's private final field by reflection -- is
+     * a lot of machinery to make output that nobody can see.
+     */
+    private fun publish(publisher: CompletionPublisher) {
+        try {
+            publisher.updateList()
+        } catch (detached: NullPointerException) {
+            throw CompletionCancelledException()
+        }
     }
 
     /**
@@ -87,7 +121,11 @@ internal class CompletingTsLanguage(
         EditorCompletionKind.FIELD -> CompletionItemKind.Field
         EditorCompletionKind.VARIABLE -> CompletionItemKind.Variable
         EditorCompletionKind.CLASS -> CompletionItemKind.Class
+        EditorCompletionKind.INTERFACE -> CompletionItemKind.Interface
+        EditorCompletionKind.ENUM -> CompletionItemKind.Enum
+        EditorCompletionKind.ANNOTATION -> CompletionItemKind.Class
         EditorCompletionKind.PACKAGE -> CompletionItemKind.Module
         EditorCompletionKind.KEYWORD -> CompletionItemKind.Keyword
+        EditorCompletionKind.SNIPPET -> CompletionItemKind.Snippet
     }
 }

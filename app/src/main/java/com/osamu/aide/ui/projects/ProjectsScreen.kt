@@ -3,6 +3,7 @@ package com.osamu.aide.ui.projects
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,8 +12,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DriveFolderUpload
@@ -46,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.osamu.aide.core.fs.Project
 import com.osamu.aide.core.fs.SourceLanguage
+import com.osamu.aide.ui.util.FileIcons
 import org.koin.androidx.compose.koinViewModel
 import java.io.File
 
@@ -142,20 +146,50 @@ fun ProjectsScreen(
 
 @Composable
 private fun ProjectRow(project: Project, onClick: () -> Unit) {
-    Column(
+    val dummyFile = remember(project.language) {
+        File("dummy." + if (project.language == SourceLanguage.KOTLIN) "kt" else "java")
+    }
+    val iconInfo = FileIcons.infoFor(dummyFile, isDirectory = false)
+
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 14.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(project.name, style = MaterialTheme.typography.titleMedium)
-        Text(
-            text = "${project.language.displayName}  ·  ${project.engine.displayName} build  ·  ${project.applicationId}",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .background(iconInfo.tint.copy(alpha = 0.1f), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = iconInfo.icon,
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
+                tint = iconInfo.tint
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 16.dp)
+        ) {
+            Text(
+                project.name,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = "${project.language.displayName}  ·  ${project.engine.displayName} build  ·  ${project.applicationId}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 

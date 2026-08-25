@@ -9,6 +9,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.osamu.aide.engine.api.Diagnostic
 import io.github.rosemoe.sora.event.ContentChangeEvent
 import io.github.rosemoe.sora.widget.CodeEditor
+import io.github.rosemoe.sora.widget.component.EditorAutoCompletion
+import io.github.rosemoe.sora.widget.getComponent
 import java.io.File
 
 /**
@@ -65,6 +67,8 @@ fun CodeEditorView(
                 setWordwrap(false)
                 setLineNumberEnabled(true)
                 setTabWidth(4)
+
+                getComponent<EditorAutoCompletion>().setAdapter(SemanticCompletionAdapter())
 
                 subscribeEvent(ContentChangeEvent::class.java) { event, _ ->
                     currentListener.value(event.editor.text.toString())

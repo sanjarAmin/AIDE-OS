@@ -30,8 +30,8 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
 
         // The tree-sitter bindings use java.util.concurrent.Flow and friends,
         // which exist only from API 24 upward and not at all on some of the

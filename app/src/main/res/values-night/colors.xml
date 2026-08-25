@@ -1,4 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="aide_window_background">#FF0F1115</color>
+
+    <!--
+        Night steps for the file-type colours in values/colors.xml.
+        Each is the same hue lifted for a dark ground; without them the light
+        values apply on both themes, and file_gradle (#02303A) is very nearly
+        black, so a Gradle file in a dark file tree has no visible icon at all.
+    -->
+    <color name="file_java">#FFB74D</color>
+    <color name="file_kotlin">#B39DFF</color>
+    <color name="file_xml">#81C784</color>
+    <color name="file_json">#FFD54F</color>
+    <color name="file_gradle">#4DB6AC</color>
+    <color name="file_generic">#9E9E9E</color>
+    <color name="folder">#FFCA28</color>
 </resources>

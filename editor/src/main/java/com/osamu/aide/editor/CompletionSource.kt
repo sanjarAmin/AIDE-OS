@@ -3,7 +3,18 @@ package com.osamu.aide.editor
 import java.io.File
 
 /** What kind of thing a proposal is, for the icon beside it. */
-enum class EditorCompletionKind { METHOD, FIELD, VARIABLE, CLASS, PACKAGE, KEYWORD }
+enum class EditorCompletionKind {
+    METHOD,
+    FIELD,
+    VARIABLE,
+    CLASS,
+    INTERFACE,
+    ENUM,
+    ANNOTATION,
+    PACKAGE,
+    KEYWORD,
+    SNIPPET,
+}
 
 /** One proposal, in the terms the editor needs and no others. */
 data class EditorCompletion(
@@ -11,6 +22,9 @@ data class EditorCompletion(
     val kind: EditorCompletionKind,
     val insert: String = label,
     val detail: String? = null,
+    val signature: String? = null,
+    val returnType: String? = null,
+    val score: Int = 0,
 )
 
 /**
