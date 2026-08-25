@@ -173,3 +173,35 @@ today only because its own tests run in a test APK that has it.
 2026-08-25. Three of three tests pass: the repository system constructs, a POM
 parses to 17 dependencies, and the graph resolves to 44 files with the AAR
 fallback exercised.
+
+## What `:engine:deps` does with all this
+
+The module built from this spike keeps all four workarounds and adds the piece
+the spike left out: unpacking. `androidx.appcompat:appcompat:1.7.0` resolves to
+**44 dependencies, none unresolved**, each handed over as `classes.jar` plus
+`res/`, `R.txt` and the manifest where the artifact is an AAR — so nothing
+downstream has to know which kind it got.
+
+| | |
+|---|---|
+| Cold resolve, `:engine:deps` | **122 s** — includes unpacking every AAR |
+| Warm resolve of the same graph | **2.3 s** |
+
+Warmer than the spike's 635 ms is expected and correct: the spike stopped at
+files on disk, while this also unzips each AAR. Extraction is cached against the
+archive's mtime, which is sound only because an artifact at a fixed version is
+immutable in a Maven repository. **Snapshots would break that assumption**, and
+are unsupported for exactly that reason.
+
+Two things the spike did not turn up:
+
+- **Android's `java.util.zip` refuses a `../` entry on read as well as write.**
+  A forged AAR throws `ZipException: restricted zip entry name` out of
+  `ZipFile`, before the extractor's own Zip Slip check can run. Welcome, but it
+  is the platform's guarantee rather than this module's, so the check stays —
+  and the extractor now treats a hostile or truncated archive as one bad
+  dependency instead of letting the exception fail the whole resolution.
+- **`runTest` defaults to a one-minute timeout**, which a cold AndroidX resolve
+  does not fit inside. A suite run against an empty cache fails on the clock
+  while saying nothing about the code.
+

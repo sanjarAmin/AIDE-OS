@@ -40,6 +40,10 @@ include(":editor")
 include(":engine:api")
 include(":engine:fast")
 
+// Maven resolution and AAR extraction. Spike R4 (tools/deps/FINDINGS.md) is
+// the design input; the resolver needs four workarounds to run on ART.
+include(":engine:deps")
+
 // Bundled native executables (aapt2 today, clang later) and the exec harness.
 include(":toolchain:native")
 

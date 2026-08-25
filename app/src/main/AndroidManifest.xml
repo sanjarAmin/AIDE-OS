@@ -3,6 +3,16 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <!--
+        Downloading is not incidental to this app: the Android platform is a
+        63 MB component fetched on first build, and M4 resolves dependencies
+        straight from Google's and Maven Central's repositories. Without this
+        the failure surfaces from inside a DNS lookup as a SecurityException,
+        which reads as a bug in the resolver rather than a missing permission.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!--
         D8 dexes a whole project's classes in this process, and the Kotlin front
         end will want considerably more when M4 wires it in. A default heap is
         sized for an app, not for a compiler holding a program's type graph.
