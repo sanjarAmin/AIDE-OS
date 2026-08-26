@@ -35,14 +35,16 @@ emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu host
 :core:ui             Design system, theme, adaptive phone/tablet layout
 :editor              sora-editor + tree-sitter, wrapped for Compose. FINDINGS.
 :engine:api          The BuildSystem contract; knows nothing of any toolchain
+:engine:deps         Maven resolution and AAR extraction, on ART. FINDINGS.
 :engine:fast         The bundled pipeline: aapt2 -> ECJ -> D8 -> apksig. FINDINGS.
+:lsp:java            nb-javac kept warm: completion, diagnostics, definitions
 :toolchain:native    aapt2 in jniLibs, and the harness that execs it
 :toolchain:manager   Downloads android.jar & co: pin, verify, install. FINDINGS.
 tools/               Scripts that produce the toolchains, and their FINDINGS.
 ```
 
-`docs/PLAN.md` lists 22 modules. Eleven exist. Do not create the rest
-speculatively — each arrives with the milestone that needs it.
+`docs/PLAN.md` lists 22 modules. Thirteen exist, plus three spikes. Do not
+create the rest speculatively — each arrives with the milestone that needs it.
 
 ## Conventions
 
