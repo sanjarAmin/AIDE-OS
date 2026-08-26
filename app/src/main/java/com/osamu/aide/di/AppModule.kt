@@ -13,12 +13,13 @@ import com.osamu.aide.editor.EditorLanguages
 import com.osamu.aide.engine.fast.AndroidPlatformProvider
 import com.osamu.aide.engine.deps.DependencyResolver
 import com.osamu.aide.engine.fast.ApkInstaller
-import com.osamu.aide.engine.fast.KotlinCompiler
 import com.osamu.aide.engine.fast.KotlinToolchainProvider
 import com.osamu.aide.toolchain.manager.ToolchainManager
 import com.osamu.aide.toolchain.nativetools.NativeToolRunner
 import com.osamu.aide.toolchain.nativetools.NativeToolchain
 import com.osamu.aide.ui.projects.ProjectsViewModel
+import com.osamu.aide.ui.workspace.AssistantViewModel
+import com.osamu.aide.ui.workspace.KotlinCompilerSource
 import com.osamu.aide.ui.workspace.LanguageServices
 import com.osamu.aide.ui.workspace.ProjectBuilder
 import com.osamu.aide.ui.workspace.ProjectDependencies
@@ -71,15 +72,12 @@ val appModule = module {
     single { DependencyResolver(File(get<Context>().cacheDir, "maven"), get()) }
     single { ProjectDependencies(get()) }
 
-    // Nullable on purpose: the Kotlin compiler is a 54 MB archive that is not
-    // published anywhere yet, so most devices will not have one and every
-    // Kotlin feature has to cope with that. See KotlinToolchainProvider.
+    // The Kotlin compiler is a 54 MB archive downloaded on demand, so most
+    // devices will not have one. That absence is carried by
+    // KotlinCompilerSource rather than by a nullable definition, because Koin
+    // cannot hold null in a singleton -- see the class for what that cost.
     single { KotlinToolchainProvider(get()) }
-    single<KotlinCompiler?> {
-        get<KotlinToolchainProvider>().toolchain()?.let { toolchain ->
-            KotlinCompiler(toolchain, File(get<Context>().cacheDir, "kotlin-host"))
-        }
-    }
+    single { KotlinCompilerSource(get(), File(get<Context>().cacheDir, "kotlin-host")) }
 
     single {
         ProjectBuilder(
@@ -103,6 +101,7 @@ val appModule = module {
         )
     }
 
+    viewModel { AssistantViewModel(get()) }
     viewModel { ProjectsViewModel(get(), get()) }
     viewModel { WorkspaceViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
 }

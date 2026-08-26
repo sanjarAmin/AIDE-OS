@@ -12,6 +12,7 @@ import com.osamu.aide.editor.DocumentStore
 import com.osamu.aide.engine.deps.DependencyResolver
 import com.osamu.aide.editor.EditorLanguages
 import com.osamu.aide.engine.fast.AndroidPlatformProvider
+import com.osamu.aide.engine.fast.KotlinToolchainProvider
 import com.osamu.aide.engine.fast.ApkInstaller
 import com.osamu.aide.toolchain.manager.ToolchainManager
 import com.osamu.aide.toolchain.nativetools.NativeToolRunner
@@ -84,7 +85,13 @@ class WorkspaceViewModelTest {
                 platforms = AndroidPlatformProvider(context, dispatchers),
                 runner = NativeToolRunner(NativeToolchain.from(context), dispatchers),
                 dependencies = projectDependencies,
-                kotlin = null,
+                // Points at a directory with no toolchain in it, so
+                // compiler() returns null -- which is what a device without
+                // the 54 MB download has, and the case this test is about.
+                kotlin = KotlinCompilerSource(
+                    KotlinToolchainProvider(context),
+                    File(context.cacheDir, "kotlin-host-test"),
+                ),
                 dispatchers = dispatchers,
                 outputRoot = File(context.cacheDir, "builds-test"),
             ),

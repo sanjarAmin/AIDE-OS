@@ -57,6 +57,7 @@ fun AideNavHost(navController: NavHostController = rememberNavController()) {
             WorkspaceScreen(
                 projectDir = File(path),
                 onNavigateBack = { navController.popBackStack() },
+                onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                 viewModel = koinViewModel(),
             )
         }

@@ -61,7 +61,7 @@ data class ChatUiState(
  */
 class ChatController(
     private val assistant: Assistant,
-    private val projectDir: File,
+    val projectDir: File,
     private val scope: CoroutineScope,
 ) {
 

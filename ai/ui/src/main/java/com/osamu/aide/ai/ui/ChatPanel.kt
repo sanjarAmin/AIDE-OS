@@ -44,9 +44,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.osamu.aide.ai.core.ApprovalRequest
@@ -94,6 +94,11 @@ fun ChatPanel(
 
 @Composable
 private fun Transcript(state: ChatUiState, modifier: Modifier = Modifier) {
+    if (state.entries.isEmpty()) {
+        EmptyTranscript(modifier)
+        return
+    }
+
     val listState = rememberLazyListState()
 
     // Follow the tail as the conversation grows. Keyed on the entry count
@@ -116,6 +121,40 @@ private fun Transcript(state: ChatUiState, modifier: Modifier = Modifier) {
                 is ChatEntry.FromAssistant -> Bubble(entry.text, fromUser = false)
                 is ChatEntry.Tool -> ToolChip(entry)
             }
+        }
+    }
+}
+
+/**
+ * What the panel says before anyone has said anything.
+ *
+ * The assistant can read and edit the project, and neither is guessable from an
+ * empty box with a text field under it. Saying so is also the only place the
+ * user is told that an edit will be confirmed first, which is the fact that
+ * makes trying it reasonable.
+ */
+@Composable
+private fun EmptyTranscript(modifier: Modifier = Modifier) {
+    Box(modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            // Deliberately not the composer's placeholder text. Two nodes
+            // reading "Ask about this project" is ambiguous to a screen reader
+            // and to anything else that addresses the screen by label.
+            Text(
+                text = "Ask about your code",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = "The assistant can read and search the files in this project, " +
+                    "and edit them once you confirm the change.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
         }
     }
 }
@@ -323,14 +362,19 @@ private fun Composer(enabled: Boolean, sending: Boolean, onSend: (String) -> Uni
                 strokeWidth = 2.dp,
             )
         } else {
-            IconButton(onClick = ::submit, enabled = enabled && draft.isNotBlank()) {
+            val canSend = enabled && draft.isNotBlank()
+            IconButton(onClick = ::submit, enabled = canSend) {
                 Icon(
                     Icons.AutoMirrored.Filled.Send,
                     contentDescription = "Send",
-                    tint = if (enabled && draft.isNotBlank()) {
+                    // Explicitly dimmed rather than left to Color.Unspecified,
+                    // which resolves to the ambient content colour -- so a
+                    // disabled button rendered in full-strength black and
+                    // invited a tap that does nothing.
+                    tint = if (canSend) {
                         MaterialTheme.colorScheme.primary
                     } else {
-                        Color.Unspecified
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
                     },
                 )
             }

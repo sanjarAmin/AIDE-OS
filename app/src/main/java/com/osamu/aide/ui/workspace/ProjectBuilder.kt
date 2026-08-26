@@ -32,11 +32,12 @@ class ProjectBuilder(
     private val runner: NativeToolRunner,
     private val dependencies: ProjectDependencies,
     /**
-     * Held here rather than built per build: the compiler's ~11 s startup is
-     * paid per classloader, so one is created for the process and reused.
-     * Null on a device that has not installed it.
+     * Asked per build rather than held, so a compiler installed while the app
+     * is running is used by the next build. The instance behind it is still
+     * reused -- its ~11 s startup is paid per classloader. See
+     * [KotlinCompilerSource] for why this is not a nullable Koin singleton.
      */
-    private val kotlin: KotlinCompiler?,
+    private val kotlin: KotlinCompilerSource,
     private val dispatchers: DispatcherProvider,
     /**
      * Cache, not the project directory. Intermediates are large, regenerable,
@@ -80,7 +81,7 @@ class ProjectBuilder(
             runner,
             platforms.platformFor(androidJar),
             dispatchers,
-            kotlin,
+            kotlin.compiler(),
         )
         emitAll(
             engine.build(

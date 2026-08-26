@@ -22,6 +22,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Folder
@@ -42,9 +43,11 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -70,6 +73,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.osamu.aide.core.fs.FileNode
+import com.osamu.aide.ai.ui.ChatPanel
 import com.osamu.aide.core.ui.layout.AdaptiveWorkspace
 import com.osamu.aide.core.ui.layout.PaneBreakpoints
 import com.osamu.aide.core.ui.layout.PaneMode
@@ -86,6 +90,7 @@ import com.osamu.aide.engine.api.DiagnosticSeverity
 import com.osamu.aide.toolchain.manager.InstallProgress
 import com.osamu.aide.ui.util.FileIcons
 import kotlinx.coroutines.launch
+import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import java.io.File
 
@@ -94,20 +99,27 @@ import java.io.File
 fun WorkspaceScreen(
     projectDir: File,
     onNavigateBack: () -> Unit,
+    onOpenSettings: () -> Unit,
     viewModel: WorkspaceViewModel,
+    assistant: AssistantViewModel = koinViewModel(),
     // A single instance for the whole app: it holds the compiled tree-sitter
     // queries, and rebuilding them per screen is the cost the cache exists to
     // avoid.
     languages: EditorLanguages = koinInject(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val chat by assistant.state.collectAsStateWithLifecycle()
+    var isChatOpen by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val editorController = remember { CodeEditorController() }
 
     // Consumed once the tab it names is showing; see the effect below.
     var pendingJump by remember { mutableStateOf<EditorJump?>(null) }
 
-    LaunchedEffect(projectDir) { viewModel.open(projectDir) }
+    LaunchedEffect(projectDir) {
+        viewModel.open(projectDir)
+        assistant.open(projectDir)
+    }
     LaunchedEffect(viewModel) { viewModel.jumps.collect { pendingJump = it } }
 
     LaunchedEffect(pendingJump, state.activeFile) {
@@ -191,6 +203,12 @@ fun WorkspaceScreen(
                             }
                         },
                         actions = {
+                            IconButton(onClick = { isChatOpen = true }) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.Chat,
+                                    contentDescription = "Ask the assistant",
+                                )
+                            }
                             if (state.active != null) {
                                 IconButton(onClick = viewModel::openSearch) {
                                     Icon(Icons.Default.Search, contentDescription = "Find")
@@ -279,6 +297,30 @@ fun WorkspaceScreen(
             )
         } else {
             body()
+        }
+    }
+
+    if (isChatOpen) {
+        // A sheet rather than a pane, in every layout. The assistant is
+        // something you reach for and dismiss, and giving it a permanent
+        // column would take that width from the editor on exactly the devices
+        // that have the least of it. Skipping the half-expanded stop because a
+        // half-height chat shows one message and the keyboard.
+        ModalBottomSheet(
+            onDismissRequest = { isChatOpen = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
+            ChatPanel(
+                state = chat,
+                onSend = assistant::send,
+                onApproval = assistant::resolveApproval,
+                onDismissError = assistant::dismissError,
+                onAddKey = {
+                    isChatOpen = false
+                    onOpenSettings()
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
         }
     }
 
