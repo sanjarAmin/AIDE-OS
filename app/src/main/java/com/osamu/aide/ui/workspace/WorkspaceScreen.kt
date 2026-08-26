@@ -25,6 +25,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
@@ -110,6 +111,7 @@ fun WorkspaceScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val chat by assistant.state.collectAsStateWithLifecycle()
+    val isCompleting by assistant.completing.collectAsStateWithLifecycle()
     var isChatOpen by remember { mutableStateOf(false) }
 
     // One tap: open the panel and ask, rather than opening it and leaving the
@@ -120,8 +122,25 @@ fun WorkspaceScreen(
         isChatOpen = true
         assistant.send(fixRequest(diagnostic, projectDir))
     }
+
     val snackbarHostState = remember { SnackbarHostState() }
     val editorController = remember { CodeEditorController() }
+
+    val completeAtCursor: () -> Unit = {
+        val open = state.active
+        val cursor = editorController.cursorOffset()
+        if (open != null && cursor != null) {
+            assistant.complete(
+                path = open.file.relativeToProject(projectDir),
+                // The buffer as the editor has it, not as it is on disk: the
+                // user may not have saved, and completing against the saved
+                // copy would continue code they have already changed.
+                text = open.document.text,
+                cursor = cursor,
+                onInsert = editorController::insert,
+            )
+        }
+    }
 
     // Consumed once the tab it names is showing; see the effect below.
     var pendingJump by remember { mutableStateOf<EditorJump?>(null) }
@@ -152,6 +171,10 @@ fun WorkspaceScreen(
     val activityLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { }
+
+    LaunchedEffect(assistant) {
+        assistant.notices.collect { snackbarHostState.showSnackbar(it) }
+    }
 
     LaunchedEffect(viewModel) {
         viewModel.events.collect { event ->
@@ -278,6 +301,8 @@ fun WorkspaceScreen(
                             onCursorMoved = viewModel::onCursorMoved,
                             onDiagnosticClick = viewModel::openDiagnostic,
                             onFixDiagnostic = askToFix,
+                            onComplete = completeAtCursor,
+                            isCompleting = isCompleting,
                             onLaunchIntent = activityLauncher::launch,
                             onCloseDock = viewModel::closeBuildPanel,
                             // The wide layout already has a side tool pane; a
@@ -367,6 +392,8 @@ private fun EditorArea(
     onCursorMoved: (Int) -> Unit,
     onDiagnosticClick: (Diagnostic) -> Unit,
     onFixDiagnostic: (Diagnostic) -> Unit,
+    onComplete: () -> Unit,
+    isCompleting: Boolean,
     onLaunchIntent: (Intent) -> Unit,
     onCloseDock: () -> Unit,
     showDock: Boolean,
@@ -466,6 +493,19 @@ private fun EditorArea(
                         Icons.AutoMirrored.Filled.ArrowForward,
                         contentDescription = "Go to definition",
                     )
+                }
+                // Explicit rather than as-you-type. Every keystroke is a
+                // request, and on a phone that is the user's own money and
+                // their battery -- so the tap is the budget.
+                IconButton(onClick = onComplete, enabled = !isCompleting) {
+                    if (isCompleting) {
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(
+                            Icons.Default.AutoAwesome,
+                            contentDescription = "Complete with the assistant",
+                        )
+                    }
                 }
                 IconButton(onClick = controller::undo) {
                     Icon(Icons.Default.Undo, contentDescription = "Undo")

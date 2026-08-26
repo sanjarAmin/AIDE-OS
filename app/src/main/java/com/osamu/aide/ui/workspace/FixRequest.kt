@@ -52,7 +52,7 @@ fun fixRequest(diagnostic: Diagnostic, projectRoot: File): String {
  * somehow outside the project -- which is better than an absolute path the
  * tools will refuse.
  */
-private fun File.relativeToProject(root: File): String {
+internal fun File.relativeToProject(root: File): String {
     val relative = runCatching { relativeTo(root).path }.getOrNull()
     return if (relative.isNullOrBlank() || relative.startsWith("..")) name else relative
 }

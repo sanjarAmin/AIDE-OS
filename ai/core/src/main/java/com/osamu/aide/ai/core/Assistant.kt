@@ -43,6 +43,17 @@ class Assistant(
         )
     }
 
+    /**
+     * A completer, if there is a key. Cheap to build -- it holds no state.
+     *
+     * Its own client for the same reason [session] gets one: the key can change
+     * while the app is running, and a cached client keeps using the old one.
+     */
+    fun completer(): InlineCompleter? {
+        val key = keys.read() ?: return null
+        return InlineCompleter(clientFactory(key), dispatchers)
+    }
+
     private companion object {
         /**
          * One client per session rather than a shared singleton.
