@@ -2,6 +2,7 @@ package com.osamu.aide.ai.core
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -49,7 +50,7 @@ class ProjectToolsetTest {
      * cannot forget, so this checks it fails closed.
      */
     @Test
-    fun a_mutating_tool_will_not_run_without_approval() {
+    fun a_mutating_tool_will_not_run_without_approval() = runTest {
         val outcome = toolset.execute(
             "edit_file",
             mapOf("path" to "src/Main.kt", "content" to "destroyed"),
@@ -66,7 +67,7 @@ class ProjectToolsetTest {
 
     /** And approval is the only thing standing in the way. */
     @Test
-    fun an_approved_mutating_tool_runs() {
+    fun an_approved_mutating_tool_runs() = runTest {
         ok(
             toolset.execute(
                 "edit_file",
@@ -86,7 +87,7 @@ class ProjectToolsetTest {
      * feature and starts being a speed bump people learn to tap through.
      */
     @Test
-    fun read_only_tools_run_without_approval() {
+    fun read_only_tools_run_without_approval() = runTest {
         assertTrue(ok(toolset.execute("list_files", emptyMap())).contains("src/Main.kt"))
         assertTrue(ok(toolset.execute("read_file", mapOf("path" to "src/Main.kt"))).contains("fun main"))
         assertTrue(ok(toolset.execute("grep", mapOf("query" to "fun main"))).contains("Main.kt:1:"))
@@ -99,14 +100,14 @@ class ProjectToolsetTest {
     }
 
     @Test
-    fun an_unknown_tool_is_refused_by_name() {
+    fun an_unknown_tool_is_refused_by_name() = runTest {
         val outcome = toolset.execute("rm_rf", emptyMap())
         assertTrue(outcome is ProjectFiles.Outcome.Refused)
         assertTrue((outcome as ProjectFiles.Outcome.Refused).reason.contains("rm_rf"))
     }
 
     @Test
-    fun a_tool_called_without_its_required_input_is_refused() {
+    fun a_tool_called_without_its_required_input_is_refused() = runTest {
         assertTrue(toolset.execute("read_file", emptyMap()) is ProjectFiles.Outcome.Refused)
         assertTrue(toolset.execute("grep", emptyMap()) is ProjectFiles.Outcome.Refused)
         assertTrue(
@@ -152,7 +153,7 @@ class ProjectToolsetTest {
 
     /** The sandbox still applies when the model reaches a tool through the registry. */
     @Test
-    fun the_path_guard_still_applies_through_the_toolset() {
+    fun the_path_guard_still_applies_through_the_toolset() = runTest {
         val outcome = toolset.execute(
             "edit_file",
             mapOf("path" to "../escaped.txt", "content" to "no"),

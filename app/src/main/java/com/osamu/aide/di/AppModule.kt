@@ -101,7 +101,7 @@ val appModule = module {
         )
     }
 
-    viewModel { AssistantViewModel(get()) }
+    viewModel { AssistantViewModel(get(), get(), get()) }
     viewModel { ProjectsViewModel(get(), get()) }
     viewModel { WorkspaceViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
 }

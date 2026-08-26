@@ -63,6 +63,8 @@ class ChatController(
     private val assistant: Assistant,
     val projectDir: File,
     private val scope: CoroutineScope,
+    /** Contributed by the app layer -- the build tools. See [Assistant.session]. */
+    private val extraTools: List<AideTool> = emptyList(),
 ) {
 
     private val _state = MutableStateFlow(ChatUiState())
@@ -88,7 +90,8 @@ class ChatController(
             // Resolved per send rather than in the constructor: the user may add
             // a key in settings after opening the panel, and a panel that stayed
             // keyless until it was closed and reopened would look broken.
-            val active = session ?: assistant.session(projectDir, ::approve)?.also { session = it }
+            val active = session
+                ?: assistant.session(projectDir, ::approve, extraTools)?.also { session = it }
             if (active == null) {
                 _state.update { it.copy(sending = false, needsKey = true) }
                 return@launch

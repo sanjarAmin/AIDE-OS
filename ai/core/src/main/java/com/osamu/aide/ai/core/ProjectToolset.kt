@@ -20,7 +20,7 @@ class AideTool(
     val risk: ToolRisk,
     private val parameters: Map<String, Parameter>,
     private val required: List<String>,
-    private val handler: (Map<String, String>) -> ProjectFiles.Outcome,
+    private val handler: suspend (Map<String, String>) -> ProjectFiles.Outcome,
 ) {
     data class Parameter(val type: String, val description: String)
 
@@ -52,22 +52,34 @@ class AideTool(
         )
         .build()
 
-    internal fun run(input: Map<String, String>): ProjectFiles.Outcome = handler(input)
+    internal suspend fun run(input: Map<String, String>): ProjectFiles.Outcome = handler(input)
 }
 
 /**
  * The tools the assistant can use against one project.
  *
- * Four of the plan's six. `run_build` and `read_build_errors` need the build
- * engine and belong to whatever owns it -- putting them here would drag
- * `:engine:fast` into a module whose job is talking to an API.
+ * Four of the plan's six are defined here. `run_build` and `read_build_errors`
+ * need the build engine, so they arrive through [extra] from the module that
+ * owns it -- defining them here would drag `:engine:fast` into a module whose
+ * job is talking to an API.
  *
  * Descriptions are written for the model rather than for a reader of this file.
  * They say when to reach for a tool and what it costs, because that is what the
  * model is choosing between; "reads a file" tells it nothing it could not
  * guess from the name.
  */
-class ProjectToolset(private val files: ProjectFiles) {
+class ProjectToolset(
+    private val files: ProjectFiles,
+    /**
+     * Tools contributed by other layers, appended in the order given.
+     *
+     * Appended rather than merged by name, because tool order is part of the
+     * cached prefix -- see [definitions]. A caller that varies this list
+     * between turns of one conversation pays for the whole cache and gets a
+     * perfectly good answer, so the list must be built once per session.
+     */
+    extra: List<AideTool> = emptyList(),
+) {
 
     private val tools: List<AideTool> = listOf(
         AideTool(
@@ -151,7 +163,7 @@ class ProjectToolset(private val files: ProjectFiles) {
                 }
             },
         ),
-    )
+    ) + extra
 
     /** Every tool, in a fixed order — see [definitions]. */
     fun all(): List<AideTool> = tools
@@ -177,7 +189,7 @@ class ProjectToolset(private val files: ProjectFiles) {
      * can ask to overwrite a file on any turn, including one the user is not
      * watching.
      */
-    fun execute(
+    suspend fun execute(
         name: String,
         input: Map<String, String>,
         approved: Boolean = false,

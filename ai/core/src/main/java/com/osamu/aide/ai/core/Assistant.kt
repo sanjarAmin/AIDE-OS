@@ -18,10 +18,21 @@ class Assistant(
     private val clientFactory: (String) -> AnthropicClient = ::defaultClient,
 ) {
 
-    /** Null when the user has not supplied a key. That is the normal state. */
-    fun session(projectDir: File, approver: Approver): AiSession? {
+    /**
+     * Null when the user has not supplied a key. That is the normal state.
+     *
+     * [extraTools] is fixed for the life of the session on purpose: tool
+     * definitions sit at the very front of the cached prefix, so a list that
+     * varies between turns costs the cache on every one of them. Building it
+     * here, once, is what makes that hard to get wrong.
+     */
+    fun session(
+        projectDir: File,
+        approver: Approver,
+        extraTools: List<AideTool> = emptyList(),
+    ): AiSession? {
         val key = keys.read() ?: return null
-        val toolset = ProjectToolset(ProjectFiles(projectDir))
+        val toolset = ProjectToolset(ProjectFiles(projectDir), extraTools)
 
         return AiSession(
             client = clientFactory(key),

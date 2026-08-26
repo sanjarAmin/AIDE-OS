@@ -4,6 +4,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.osamu.aide.ai.core.ApiKeyStore
 import com.osamu.aide.ai.core.Assistant
 import com.osamu.aide.engine.fast.KotlinToolchainProvider
+import com.osamu.aide.ui.workspace.AssistantViewModel
 import com.osamu.aide.ui.workspace.KotlinCompilerSource
 import com.osamu.aide.ui.workspace.LanguageServices
 import com.osamu.aide.ui.workspace.ProjectBuilder
@@ -48,6 +49,10 @@ class AppModuleTest {
         val koin = koin()
 
         assertNotNull(koin.get<ProjectBuilder>())
+        // Resolved here too because it is the newest thing in the graph and
+        // pulls in both the builder and the repository -- which is the shape of
+        // dependency that broke last time.
+        assertNotNull(koin.get<AssistantViewModel>())
         assertNotNull(koin.get<LanguageServices>())
         assertNotNull(koin.get<Assistant>())
         assertNotNull(koin.get<ApiKeyStore>())
