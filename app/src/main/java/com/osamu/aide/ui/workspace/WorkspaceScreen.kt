@@ -25,6 +25,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PlayArrow
@@ -110,6 +111,15 @@ fun WorkspaceScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val chat by assistant.state.collectAsStateWithLifecycle()
     var isChatOpen by remember { mutableStateOf(false) }
+
+    // One tap: open the panel and ask, rather than opening it and leaving the
+    // user to retype an error they are looking at. The message is built where
+    // the project root is known -- see fixRequest, and why the path it puts in
+    // must be relative.
+    val askToFix: (Diagnostic) -> Unit = { diagnostic ->
+        isChatOpen = true
+        assistant.send(fixRequest(diagnostic, projectDir))
+    }
     val snackbarHostState = remember { SnackbarHostState() }
     val editorController = remember { CodeEditorController() }
 
@@ -251,6 +261,7 @@ fun WorkspaceScreen(
                         BuildPane(
                             state = state.build,
                             onDiagnosticClick = viewModel::openDiagnostic,
+                            onFixDiagnostic = askToFix,
                             onLaunchIntent = activityLauncher::launch,
                         )
                     },
@@ -266,6 +277,7 @@ fun WorkspaceScreen(
                             onGoToDefinition = viewModel::goToDefinition,
                             onCursorMoved = viewModel::onCursorMoved,
                             onDiagnosticClick = viewModel::openDiagnostic,
+                            onFixDiagnostic = askToFix,
                             onLaunchIntent = activityLauncher::launch,
                             onCloseDock = viewModel::closeBuildPanel,
                             // The wide layout already has a side tool pane; a
@@ -354,6 +366,7 @@ private fun EditorArea(
     onGoToDefinition: (Int) -> Unit,
     onCursorMoved: (Int) -> Unit,
     onDiagnosticClick: (Diagnostic) -> Unit,
+    onFixDiagnostic: (Diagnostic) -> Unit,
     onLaunchIntent: (Intent) -> Unit,
     onCloseDock: () -> Unit,
     showDock: Boolean,
@@ -435,6 +448,7 @@ private fun EditorArea(
                 // service has since found in the file being edited.
                 problems = state.analysis.diagnostics + state.build.diagnostics,
                 onDiagnosticClick = onDiagnosticClick,
+                onFixDiagnostic = onFixDiagnostic,
                 onLaunchIntent = onLaunchIntent,
                 onClose = onCloseDock,
             )
@@ -554,6 +568,7 @@ private fun CentredMessage(title: String, detail: String) {
 private fun BuildPane(
     state: BuildUiState,
     onDiagnosticClick: (Diagnostic) -> Unit,
+    onFixDiagnostic: (Diagnostic) -> Unit,
     onLaunchIntent: (Intent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -615,7 +630,11 @@ private fun BuildPane(
                     )
                 }
                 items(state.diagnostics) { diagnostic ->
-                    DiagnosticRow(diagnostic, onClick = { onDiagnosticClick(diagnostic) })
+                    DiagnosticRow(
+                        diagnostic = diagnostic,
+                        onClick = { onDiagnosticClick(diagnostic) },
+                        onFix = { onFixDiagnostic(diagnostic) },
+                    )
                 }
             }
         }
@@ -623,26 +642,43 @@ private fun BuildPane(
 }
 
 @Composable
-private fun DiagnosticRow(diagnostic: Diagnostic, onClick: () -> Unit) {
+private fun DiagnosticRow(
+    diagnostic: Diagnostic,
+    onClick: () -> Unit,
+    onFix: () -> Unit,
+) {
     val color = when (diagnostic.severity) {
         DiagnosticSeverity.ERROR -> MaterialTheme.colorScheme.error
         DiagnosticSeverity.WARNING -> MaterialTheme.colorScheme.tertiary
         DiagnosticSeverity.INFO -> MaterialTheme.colorScheme.onSurfaceVariant
     }
-    Surface(
-        color = MaterialTheme.colorScheme.surface,
-        // Only a located diagnostic has anywhere to go. A signing failure has
-        // no file, and a row that looks tappable and does nothing is worse than
-        // one that does not.
-        onClick = onClick,
-        enabled = diagnostic.hasLocation,
-    ) {
-        Text(
-            text = diagnostic.describe(),
-            style = CodeTextStyle,
-            color = color,
-            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            // Only a located diagnostic has anywhere to go. A signing failure
+            // has no file, and a row that looks tappable and does nothing is
+            // worse than one that does not.
+            onClick = onClick,
+            enabled = diagnostic.hasLocation,
+            modifier = Modifier.weight(1f),
+        ) {
+            Text(
+                text = diagnostic.describe(),
+                style = CodeTextStyle,
+                color = color,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            )
+        }
+        // Offered on every diagnostic, located or not: a build failure with no
+        // file is exactly the kind the user has least idea what to do with.
+        IconButton(onClick = onFix, modifier = Modifier.size(32.dp)) {
+            Icon(
+                Icons.Default.AutoFixHigh,
+                contentDescription = "Ask the assistant to fix this",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp),
+            )
+        }
     }
 }
 

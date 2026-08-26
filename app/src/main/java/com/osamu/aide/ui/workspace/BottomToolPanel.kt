@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ListAlt
+import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayCircleOutline
@@ -65,6 +66,7 @@ fun BottomToolDock(
     buildState: BuildUiState,
     problems: List<Diagnostic>,
     onDiagnosticClick: (Diagnostic) -> Unit,
+    onFixDiagnostic: (Diagnostic) -> Unit,
     onLaunchIntent: (Intent) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
@@ -234,17 +236,31 @@ fun BottomToolDock(
                         } else {
                             LazyColumn(Modifier.fillMaxWidth()) {
                                 items(problems) { diagnostic ->
-                                    Text(
-                                        text = diagnostic.describe(),
-                                        style = CodeTextStyle,
-                                        color = MaterialTheme.colorScheme.error,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable(enabled = diagnostic.hasLocation) {
-                                                onDiagnosticClick(diagnostic)
-                                            }
-                                            .padding(vertical = 4.dp),
-                                    )
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = diagnostic.describe(),
+                                            style = CodeTextStyle,
+                                            color = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable(enabled = diagnostic.hasLocation) {
+                                                    onDiagnosticClick(diagnostic)
+                                                }
+                                                .padding(vertical = 4.dp),
+                                        )
+                                        IconButton(
+                                            onClick = { onFixDiagnostic(diagnostic) },
+                                            modifier = Modifier.size(32.dp),
+                                        ) {
+                                            Icon(
+                                                Icons.Default.AutoFixHigh,
+                                                contentDescription =
+                                                    "Ask the assistant to fix this",
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(18.dp),
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
