@@ -336,6 +336,16 @@ M0–M5 is the real v1.0. Everything from M6 on is expansion.
    had been crashing every project open on any device without the Kotlin
    toolchain since M4 — the state every new user is in.
 
+9. **M6 Compose is further along than this table suggests.** Checked, not
+   assumed: spike R2 put the Compose plugin in the same dex archive as the
+   compiler, and `KotlinCompiler` already registers it with `-Xplugin` when it
+   finds `androidx.compose.runtime.Composer` on the classpath. What M6 needs is
+   the acceptance test — a Compose hello-world fixture built end to end on a
+   device — rather than any new compiler work. Note R2's finding 7 when writing
+   it: the plugin transforms nothing and reports nothing if the archive is not
+   named on the command line, so the test must assert the *transformed
+   bytecode*, not the exit code.
+
 ~~Before building `:build:fast`, verify the remaining "pure JVM, therefore fine
 on ART" assumptions — ECJ, D8/R8 and apksig.~~ Done: spike R2b. All three run,
 but not for free — ECJ is pinned to 3.38.0 and needs `platform-stubs.jar` on the
