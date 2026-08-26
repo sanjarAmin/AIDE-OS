@@ -25,6 +25,8 @@ fun interface Approver {
 data class ToolRun(
     val name: String,
     val input: Map<String, String>,
+    /** Carried rather than re-derived from the name -- risk has one owner. */
+    val risk: ToolRisk,
     val approved: Boolean,
     val outcome: ProjectFiles.Outcome,
 )
@@ -133,12 +135,16 @@ class AiSession(
 
     private suspend fun execute(call: ToolUseBlock): ToolRun {
         val input = call.inputAsStrings()
-        val mutating = toolset.find(call.name())?.risk == ToolRisk.MUTATING
-        val approved = mutating && approver.approve(call.name(), input)
+        // An unknown tool is READ_ONLY here only so that it reaches
+        // ProjectToolset.execute, which is what refuses it by name. Prompting
+        // the user to approve a tool that does not exist would be worse.
+        val risk = toolset.find(call.name())?.risk ?: ToolRisk.READ_ONLY
+        val approved = risk == ToolRisk.MUTATING && approver.approve(call.name(), input)
 
         return ToolRun(
             name = call.name(),
             input = input,
+            risk = risk,
             approved = approved,
             // Approval is passed through rather than acted on here: ProjectToolset
             // refuses a mutating tool without it regardless, so a bug in this
