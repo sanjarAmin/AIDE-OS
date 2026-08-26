@@ -1,6 +1,8 @@
 package com.osamu.aide.di
 
 import android.content.Context
+import com.osamu.aide.ai.core.ApiKeyStore
+import com.osamu.aide.ai.core.Assistant
 import com.osamu.aide.core.common.DefaultDispatcherProvider
 import com.osamu.aide.core.common.DispatcherProvider
 import com.osamu.aide.core.fs.FileProjectRepository
@@ -43,6 +45,13 @@ val appModule = module {
     // it and language intelligence reads it back, so the two must agree; a
     // second literal here is how they would quietly stop agreeing.
     single(named(BUILD_OUTPUT_ROOT)) { File(get<Context>().cacheDir, "builds") }
+
+    // The assistant's credential and the seam that builds sessions from it.
+    // ApiKeyStore is a singleton because it holds a handle to a Keystore entry,
+    // not the key itself; Assistant reads through it on every session so a key
+    // changed in settings takes effect on the next message.
+    single { ApiKeyStore(get()) }
+    single { Assistant(get(), get()) }
 
     single<ProjectRepository> { FileProjectRepository(get(), get()) }
     single { ProjectImporter(get(), get(), get()) }

@@ -54,6 +54,10 @@ include(":toolchain:manager")
 // assembly. Bring-your-own-key; see tools/ai/FINDINGS.md for spike R5.
 include(":ai:core")
 
+// The AI layer's Compose surface. Thin on purpose -- the decisions live in
+// :ai:core so they can be tested without a composition.
+include(":ai:ui")
+
 // Java language intelligence: completion, diagnostics, go-to-definition. In
 // process, not over a socket -- see :lsp:client for the transports the C++ and
 // Kotlin servers will need. Spike R3 in tools/javals/FINDINGS.md is the design

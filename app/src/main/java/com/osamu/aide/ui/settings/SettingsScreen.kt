@@ -18,12 +18,17 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.osamu.aide.ai.core.ApiKeyStore
+import org.koin.compose.koinInject
 
 private data class SettingsSection(val title: String, val summary: String)
 
 /**
- * Placeholder settings surface. Deliberately shows no toggles yet -- controls
- * that silently do nothing are worse than an honest list of what is coming.
+ * Settings.
+ *
+ * Only the assistant's key is a real control; the rest is still an honest list
+ * of what is coming, because a toggle that silently does nothing is worse than
+ * an entry that says it does not exist yet.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -32,9 +37,10 @@ fun SettingsScreen(onNavigateBack: () -> Unit) {
         SettingsSection("Editor", "Font size, tab width, line numbers, colour scheme."),
         SettingsSection("Build", "Fast or Gradle engine, JDK level, signing keys."),
         SettingsSection("Toolchains", "Download and manage aapt2, Kotlin and the NDK."),
-        SettingsSection("AI assistant", "Your own API key, model and context settings."),
         SettingsSection("About", "AIDE-OS, an on-device IDE for phones and tablets."),
     )
+
+    val keys = koinInject<ApiKeyStore>()
 
     Scaffold(
         topBar = {
@@ -49,6 +55,8 @@ fun SettingsScreen(onNavigateBack: () -> Unit) {
         },
     ) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding)) {
+            item { ApiKeySection(keys) }
+
             items(sections) { section ->
                 Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp)) {
                     Text(section.title, style = MaterialTheme.typography.titleMedium)

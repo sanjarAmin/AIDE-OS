@@ -75,6 +75,8 @@ android {
 dependencies {
     coreLibraryDesugaring(libs.desugar.jdk.libs)
 
+    implementation(project(":ai:core"))
+    implementation(project(":ai:ui"))
     implementation(project(":core:common"))
     implementation(project(":core:fs"))
     implementation(project(":core:ui"))
