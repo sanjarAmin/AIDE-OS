@@ -27,6 +27,8 @@ emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu host
 ## Layout
 
 ```
+:ai:core             Anthropic client, session loop, tools, prompts. FINDINGS.
+:ai:ui               The chat panel. Thin: the decisions live in :ai:core
 :app                 Compose shell — navigation, DI (Koin), screens
 :core:common         Result types, dispatchers, logging
 :core:fs             Project storage, the file tree, SAF import. FINDINGS.
@@ -39,7 +41,7 @@ emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu host
 tools/               Scripts that produce the toolchains, and their FINDINGS.
 ```
 
-`docs/PLAN.md` lists 22 modules. Nine exist. Do not create the rest
+`docs/PLAN.md` lists 22 modules. Eleven exist. Do not create the rest
 speculatively — each arrives with the milestone that needs it.
 
 ## Conventions
@@ -74,3 +76,10 @@ failed to load still produces a clean compile.
   M4 (kotlinc in the engine) inherits it.
 - **`grep` here is a shell function that skips binary files.** Use
   `/usr/bin/grep -a` when searching class files, jars, or dex.
+
+- **Koin cannot hold `null` in a singleton.** A `single<T?>` that resolves to
+  null throws `Single instance created couldn't return value` and takes every
+  dependent definition with it. This crashed every project open for a whole
+  milestone before anyone noticed. `AppModuleTest` resolves the workspace graph
+  from the real module on a bare device; add to it when something joins the
+  graph. `ai/core/FINDINGS.md` §1.

@@ -313,7 +313,28 @@ M0–M5 is the real v1.0. Everything from M6 on is expansion.
    compiler is downloaded from this project's own releases by
    `:toolchain:manager`, verified against a pinned checksum, and the download
    is tested against the live release rather than a fixture.
-8. **M5 AI** — the current target, and the second starred milestone.
+8. **M5 AI** — **feature-complete, one assertion short of closed.** Chat with
+   project context, six tools behind a confirmation gate that fails closed,
+   one-tap error fix from any diagnostic, and inline completion at the cursor.
+   Keyless where it can be: the session loop, the approval handshake and the
+   completion request are all tested on device against a local Messages API
+   rather than the real one.
+
+   What is *not* closed is the acceptance test as written: "BYO key → chat"
+   needs a key, and so do the two questions a fake cannot answer — whether
+   the live API accepts this request shape, and whether prompt caching reports a
+   hit. Those stay skipped in `:spike:ai`.
+
+   `ai/core/FINDINGS.md` is the milestone's other deliverable. Its theme is that
+   M5's characteristic bug **returns a correct answer** — a lost cache, a
+   dropped thinking block, an absolute path the tools refuse — so almost every
+   rule there has a test that fails when the line is removed rather than a
+   comment asking the next person to be careful.
+
+   It also records the worst bug of the milestone, which was not in the AI layer
+   at all: Koin cannot hold `null` in a singleton, so `single<KotlinCompiler?>`
+   had been crashing every project open on any device without the Kotlin
+   toolchain since M4 — the state every new user is in.
 
 ~~Before building `:build:fast`, verify the remaining "pure JVM, therefore fine
 on ART" assumptions — ECJ, D8/R8 and apksig.~~ Done: spike R2b. All three run,
