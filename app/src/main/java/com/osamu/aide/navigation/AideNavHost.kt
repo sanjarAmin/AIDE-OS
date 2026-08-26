@@ -1,6 +1,6 @@
 package com.osamu.aide.navigation
 
-import android.net.Uri
+import android.util.Base64
 import androidx.compose.runtime.Composable
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -19,8 +19,20 @@ object Routes {
     const val SETTINGS = "settings"
     const val WORKSPACE = "workspace/{projectPath}"
 
-    fun workspace(projectDir: File): String =
-        "workspace/${Uri.encode(projectDir.absolutePath)}"
+    fun workspace(projectDir: File): String {
+        val encoded = Base64.encodeToString(
+            projectDir.absolutePath.toByteArray(Charsets.UTF_8),
+            Base64.URL_SAFE or Base64.NO_WRAP,
+        )
+        return "workspace/$encoded"
+    }
+
+    fun decodeWorkspacePath(encoded: String): String {
+        return String(
+            Base64.decode(encoded, Base64.URL_SAFE or Base64.NO_WRAP),
+            Charsets.UTF_8,
+        )
+    }
 }
 
 private const val ARG_PROJECT_PATH = "projectPath"
@@ -40,9 +52,10 @@ fun AideNavHost(navController: NavHostController = rememberNavController()) {
             route = Routes.WORKSPACE,
             arguments = listOf(navArgument(ARG_PROJECT_PATH) { type = NavType.StringType }),
         ) { entry ->
-            val path = entry.arguments?.getString(ARG_PROJECT_PATH).orEmpty()
+            val encoded = entry.arguments?.getString(ARG_PROJECT_PATH).orEmpty()
+            val path = runCatching { Routes.decodeWorkspacePath(encoded) }.getOrDefault(encoded)
             WorkspaceScreen(
-                projectDir = File(Uri.decode(path)),
+                projectDir = File(path),
                 onNavigateBack = { navController.popBackStack() },
                 viewModel = koinViewModel(),
             )
