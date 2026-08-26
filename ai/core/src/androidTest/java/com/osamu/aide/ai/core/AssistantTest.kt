@@ -26,6 +26,10 @@ class AssistantTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         keys = ApiKeyStore(context)
         keys.clear()
+        // clear() deliberately spares the endpoint -- it is a separate,
+        // visible setting -- so a test that sets one would otherwise leak it
+        // into whatever runs next on the same device.
+        keys.saveBaseUrl(Endpoint.Default)
         root = File(context.cacheDir, "assistant-${System.nanoTime()}").apply { mkdirs() }
         File(root, "src/Main.kt").apply { parentFile?.mkdirs() }.writeText("fun main() = Unit")
         File(root, "build/generated/Junk.kt").apply { parentFile?.mkdirs() }.writeText("x")
@@ -35,13 +39,14 @@ class AssistantTest {
     fun tearDown() {
         api?.stop()
         keys.clear()
+        keys.saveBaseUrl(Endpoint.Default)
         root.deleteRecursively()
     }
 
     private fun assistant() = Assistant(
         keys = keys,
         dispatchers = DefaultDispatcherProvider(),
-        clientFactory = { ScriptedApi(listOf(ScriptedApi.text("hi"))).also { api = it }.client() },
+        clientFactory = { _, _ -> ScriptedApi(listOf(ScriptedApi.text("hi"))).also { api = it }.client() },
     )
 
     /** No key is the state every user starts in, so it must not be an error. */
@@ -71,7 +76,7 @@ class AssistantTest {
         val assistant = Assistant(
             keys = keys,
             dispatchers = DefaultDispatcherProvider(),
-            clientFactory = { key ->
+            clientFactory = { key, _ ->
                 seen += key
                 ScriptedApi(listOf(ScriptedApi.text("hi"))).also { api?.stop(); api = it }.client()
             },
@@ -83,6 +88,34 @@ class AssistantTest {
         assistant.session(root, Approver { _, _ -> true })
 
         assertEquals(listOf("sk-ant-first", "sk-ant-second"), seen)
+    }
+
+    /**
+     * The endpoint is read per session too, for the same reason the key is.
+     *
+     * Passing null when none is set matters as much as passing the value: the
+     * SDK's own default URL is only used when `baseUrl` is left unset, so a
+     * store returning "" here would point every request at a relative address.
+     */
+    @Test
+    fun the_stored_endpoint_reaches_the_client_and_null_means_the_default() {
+        val seen = mutableListOf<String?>()
+        val assistant = Assistant(
+            keys = keys,
+            dispatchers = DefaultDispatcherProvider(),
+            clientFactory = { _, baseUrl ->
+                seen += baseUrl
+                ScriptedApi(listOf(ScriptedApi.text("hi"))).also { api?.stop(); api = it }.client()
+            },
+        )
+
+        keys.save("sk-ant-test")
+        assistant.session(root, Approver { _, _ -> true })
+        keys.saveBaseUrl(Endpoint.Custom("https://gateway.internal"))
+        assistant.session(root, Approver { _, _ -> true })
+        assistant.completer()
+
+        assertEquals(listOf(null, "https://gateway.internal", "https://gateway.internal"), seen)
     }
 
     /** The context is the project and only the project — see PromptAssembler. */

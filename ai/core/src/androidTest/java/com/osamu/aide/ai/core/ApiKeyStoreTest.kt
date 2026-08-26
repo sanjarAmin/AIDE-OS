@@ -33,11 +33,15 @@ class ApiKeyStoreTest {
     fun setUp() {
         store = ApiKeyStore(context)
         store.clear()
+        // See clear()'s doc: the endpoint outlives the key on purpose, so a
+        // test has to reset it or it carries into the next one.
+        store.saveBaseUrl(Endpoint.Default)
     }
 
     @After
     fun tearDown() {
         store.clear()
+        store.saveBaseUrl(Endpoint.Default)
     }
 
     @Test
@@ -126,6 +130,72 @@ class ApiKeyStoreTest {
         val second = ivOnDisk()
 
         assertNotEquals("the same IV was reused across two saves", first, second)
+    }
+
+    // -- the endpoint, which lives beside the key but is not one -------------
+
+    @Test
+    fun no_endpoint_reads_as_null_meaning_the_default() {
+        assertNull("null is what tells the client to use the SDK's own URL", store.baseUrl())
+    }
+
+    @Test
+    fun a_saved_endpoint_reads_back() {
+        store.saveBaseUrl(Endpoint.Custom("https://gateway.internal"))
+
+        assertEquals("https://gateway.internal", store.baseUrl())
+    }
+
+    @Test
+    fun saving_the_default_removes_a_custom_endpoint() {
+        store.saveBaseUrl(Endpoint.Custom("https://gateway.internal"))
+        store.saveBaseUrl(Endpoint.Default)
+
+        assertNull(store.baseUrl())
+    }
+
+    /**
+     * A rejected endpoint changes nothing.
+     *
+     * The UI disables Save while one is on screen, so this is the second line
+     * rather than the first -- but "the validation had a hole" must not become
+     * "the endpoint was silently blanked and every request went to Anthropic
+     * with a key meant for somewhere else".
+     */
+    @Test
+    fun a_rejected_endpoint_leaves_the_stored_one_alone() {
+        store.saveBaseUrl(Endpoint.Custom("https://gateway.internal"))
+        store.saveBaseUrl(Endpoint.Rejected("nope"))
+
+        assertEquals("https://gateway.internal", store.baseUrl())
+    }
+
+    /**
+     * Removing the key does not move the endpoint.
+     *
+     * It is a separate, visible control: silently resetting a setting the user
+     * can read on screen, from a button labelled Remove next to the key, is a
+     * worse surprise than leaving it where they put it.
+     */
+    @Test
+    fun clearing_the_key_leaves_the_endpoint_in_place() {
+        store.saveBaseUrl(Endpoint.Custom("https://gateway.internal"))
+        store.save(KEY)
+
+        store.clear()
+
+        assertFalse(store.hasKey())
+        assertEquals("https://gateway.internal", store.baseUrl())
+    }
+
+    /** Not a secret, and not pretending to be: it is on screen either way. */
+    @Test
+    fun the_endpoint_is_stored_in_the_clear_unlike_the_key() {
+        store.saveBaseUrl(Endpoint.Custom("https://gateway.internal"))
+
+        val preferences = File(context.filesDir.parentFile, "shared_prefs/aide-ai.xml")
+        assertTrue(preferences.isFile)
+        assertTrue(preferences.readText().contains("https://gateway.internal"))
     }
 
     private fun ivOnDisk(): String? = context

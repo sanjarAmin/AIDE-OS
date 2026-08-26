@@ -183,7 +183,60 @@ so.
 
 ---
 
-## 9. Judgements, so they are not re-litigated as bugs
+## 9. A custom endpoint is one builder call and four rejections
+
+`AnthropicOkHttpClient.baseUrl` is all it takes to point this SDK at anything
+that speaks the same wire format. The work is not the wiring — it is that every
+way of mistyping a URL fails at *request* time, several turns later, with an
+error that blames the SDK.
+
+**The SDK appends `/v1/messages`.** Pinned by
+`EndpointTest.the_sdk_appends_v1_messages_to_the_base_url` rather than assumed,
+because two silent corrections in `parseEndpoint` depend on it:
+
+- A **trailing slash** yields `//v1/messages`. `ScriptedApi` has trimmed one off
+  since the first test in this module, which is how easy it is to hit.
+- A **trailing `/v1`** yields `/v1/v1/messages` and a 404. This is the likelier
+  mistake, because `/v1/messages` is what every provider's documentation shows,
+  so the URL gets copied down to the version. Safe to strip rather than warn
+  about: a proxy mounted at `/anything/v1/messages` has base `/anything`, so no
+  correct base URL for this SDK ends in `/v1`.
+
+Both corrections are **shown, not just applied** — the field is rewritten with
+what was stored. A silent fix plus the original text left on screen leaves the
+user believing something other than what is saved.
+
+**`http` is refused, and the reason is about the key rather than about URLs.**
+The API key travels as a request header, so cleartext puts a billable credential
+on the wire in plaintext. It would fail regardless — `:app` ships no
+`network-security-config`, so the platform has blocked cleartext since API 28 —
+but `UnknownServiceException: CLEARTEXT communication to ... not permitted`
+names neither the setting nor the fix. A **local** proxy over `http://localhost`
+would need a loopback exemption in the shipped manifest; that is a security
+decision nobody has asked for, so it is refused rather than quietly allowed.
+
+**The endpoint is stored in the clear, beside the key.** Two deliberate
+asymmetries with §1's neighbour. It is *displayed back*, which the key never is
+— a base URL the user cannot see is one they cannot notice is wrong, while being
+exactly the setting that decides who receives their key. And it *survives*
+`clear()`: "Remove" sits next to the key, and silently resetting a visible field
+from that button is a worse surprise than leaving it. The cost is a test trap —
+`clear()` no longer resets everything, so a test that sets an endpoint leaks it
+into whatever runs next on the device. Every `setUp` here now resets it by hand.
+
+**`Assistant.defaultClient` is `internal`, not `private`, so it can be tested.**
+Every other test in the module injects a fake client factory, which would leave
+the one line that actually reaches the SDK — the line that is the whole feature
+— unexercised. Two tests call the real factory against MockWebServer and assert
+the path the request lands on.
+
+**What this does not buy.** Anything that does not implement `cache_control` or
+thinking blocks silently loses §5 and §2: full price every turn, no error. A
+structurally different provider is a port, not a setting — see `docs/PLAN.md`.
+
+---
+
+## 10. Judgements, so they are not re-litigated as bugs
 
 - **`run_build` is `READ_ONLY`.** It writes only to the build cache, never the
   user's sources, so the plan's "confirm every mutating tool" does not reach it.

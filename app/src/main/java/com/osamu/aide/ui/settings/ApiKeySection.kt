@@ -29,9 +29,11 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.osamu.aide.ai.core.ApiKeyStore
+import com.osamu.aide.ai.core.Endpoint
+import com.osamu.aide.ai.core.parseEndpoint
 
 /**
- * Where the user's Anthropic key is entered.
+ * Where the user's API key and the endpoint it is sent to are entered.
  *
  * The stored key is never read back into the field. [ApiKeyStore] can decrypt
  * it, so this is not about capability -- it is that a screen which renders a
@@ -39,6 +41,13 @@ import com.osamu.aide.ai.core.ApiKeyStore
  * recents thumbnail forever after, and showing "a key is saved" costs nothing
  * and asks none of those questions. Replacing it means typing it again, which
  * is the same thing the user does when they rotate it anyway.
+ *
+ * The endpoint **is** shown back, and that asymmetry is the point: it is not a
+ * secret, and a base URL the user cannot see is a base URL they cannot notice
+ * is wrong -- while being exactly the setting that decides who receives their
+ * key. It is also how the normalisation in `parseEndpoint` stays honest: the
+ * field is rewritten with what was actually stored, so a stripped `/v1` is
+ * visible rather than silent.
  */
 @Composable
 fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
@@ -46,14 +55,27 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
     var draft by remember { mutableStateOf("") }
     var revealed by remember { mutableStateOf(false) }
 
+    var stored by remember { mutableStateOf(keys.baseUrl().orEmpty()) }
+    var endpointDraft by remember { mutableStateOf(stored) }
+
+    val endpoint = parseEndpoint(endpointDraft)
+    // The normalised form the field would save, or null when it cannot save.
+    // Compared against what is stored rather than against the raw text, so
+    // retyping the same URL with a trailing slash is correctly "no change".
+    val normalised = when (endpoint) {
+        is Endpoint.Custom -> endpoint.baseUrl
+        Endpoint.Default -> ""
+        is Endpoint.Rejected -> null
+    }
+
     Column(
         modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text("AI assistant", style = MaterialTheme.typography.titleMedium)
         Text(
-            text = "Your own Anthropic API key. It is encrypted with a key held in " +
-                "this device's hardware keystore and never leaves the device.",
+            text = "Your own API key. It is encrypted with a key held in this " +
+                "device's hardware keystore and never leaves the device.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -107,17 +129,55 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
             },
         )
 
+        OutlinedTextField(
+            value = endpointDraft,
+            onValueChange = { endpointDraft = it },
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics { contentDescription = "API endpoint" },
+            label = { Text("API endpoint") },
+            placeholder = { Text("Anthropic (default)") },
+            singleLine = true,
+            isError = endpoint is Endpoint.Rejected,
+            supportingText = {
+                Text(
+                    text = when (endpoint) {
+                        // The warning is the whole reason this is shown rather
+                        // than hidden behind an "advanced" toggle: a custom
+                        // endpoint means the key above is sent somewhere the
+                        // user chose, and they should be told so plainly.
+                        is Endpoint.Rejected -> endpoint.reason
+                        is Endpoint.Custom -> "Your key will be sent to this address."
+                        Endpoint.Default ->
+                            "Leave blank for Anthropic. Any service that speaks the " +
+                                "same Messages API works here."
+                    },
+                )
+            },
+        )
+
         Button(
             onClick = {
-                keys.save(draft.trim())
-                saved = true
-                draft = ""
-                revealed = false
+                // A blank key field means "leave the key alone", because the
+                // saved one is never rendered back -- so it is blank whenever
+                // the user came here to change only the endpoint.
+                if (draft.isNotBlank()) {
+                    // Trimmed, because a key pasted from a browser arrives with
+                    // a trailing newline often enough that "invalid x-api-key"
+                    // on a key the user can see is correct is worth one call.
+                    keys.save(draft.trim())
+                    saved = true
+                    draft = ""
+                    revealed = false
+                }
+                keys.saveBaseUrl(endpoint)
+                stored = normalised.orEmpty()
+                // Rewritten with what was stored, not what was typed: this is
+                // where the user finds out a trailing slash or `/v1` was taken
+                // off, instead of wondering later why it looks different.
+                endpointDraft = stored
             },
-            // Trimmed, because a key pasted from a browser arrives with a
-            // trailing newline often enough that "invalid x-api-key" on a key
-            // the user can see is correct is worth one call to trim().
-            enabled = draft.isNotBlank(),
-        ) { Text("Save key") }
+            enabled = normalised != null && (draft.isNotBlank() || normalised != stored),
+        ) { Text("Save") }
     }
 }

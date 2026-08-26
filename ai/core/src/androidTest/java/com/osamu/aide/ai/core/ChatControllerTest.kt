@@ -72,7 +72,7 @@ class ChatControllerTest {
                 override val io: CoroutineDispatcher get() = onScheduler
                 override val compiler: CoroutineDispatcher get() = onScheduler
             },
-            clientFactory = { ScriptedApi(responses).also { api = it }.client() },
+            clientFactory = { _, _ -> ScriptedApi(responses).also { api = it }.client() },
         )
         return ChatController(assistant, root, this)
     }

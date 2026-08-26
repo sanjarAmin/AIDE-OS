@@ -28,6 +28,12 @@ import javax.crypto.spec.GCMParameterSpec
  * **Never log the key, never put it in an exception message, never write it to
  * a file.** The tests assert the persisted form is not the plaintext, which is
  * the only way that claim can be checked rather than asserted.
+ *
+ * It also holds the endpoint the key is sent to — see [baseUrl]. That is not a
+ * secret and is stored in the clear, but it belongs beside the key rather than
+ * in some general settings bag, because the two are only meaningful together:
+ * a base URL is *where this credential goes*, and separating them is how a key
+ * for one provider ends up being sent to another.
  */
 class ApiKeyStore(context: Context) {
 
@@ -85,11 +91,50 @@ class ApiKeyStore(context: Context) {
     }
 
     /**
+     * The custom base URL, or null for Anthropic's own API.
+     *
+     * Stored in the clear, unlike the key. It is not a credential — the
+     * settings screen displays it back, which a secret never gets — and
+     * encrypting it would put a Keystore round trip in front of every session
+     * for a value the user can read off their own screen. Encrypting things
+     * that do not need it is how the cost of encrypting the thing that does
+     * stops being noticed.
+     *
+     * Always already validated: [parseEndpoint] is the only way to produce one,
+     * so nothing downstream re-checks the scheme or trims a trailing slash.
+     */
+    fun baseUrl(): String? = preferences.getString(KEY_BASE_URL, null)
+
+    /**
+     * Stores a validated base URL; null restores Anthropic's own API.
+     *
+     * Takes the [Endpoint.Custom] rather than a String so a raw field value
+     * cannot reach it — the type is the check.
+     */
+    fun saveBaseUrl(endpoint: Endpoint) {
+        val editor = preferences.edit()
+        when (endpoint) {
+            is Endpoint.Custom -> editor.putString(KEY_BASE_URL, endpoint.baseUrl)
+            Endpoint.Default -> editor.remove(KEY_BASE_URL)
+            // Unreachable through the UI, which will not offer to save one.
+            // Ignored rather than thrown so a validation bug cannot crash the
+            // settings screen; the endpoint simply stays as it was.
+            is Endpoint.Rejected -> return
+        }
+        editor.commit()
+    }
+
+    /**
      * Forgets the key entirely, Keystore entry included.
      *
      * Deleting the entry as well as the ciphertext matters: leaving the secret
      * behind would mean "signed out" still had usable key material sitting in
      * the Keystore, which is not what a user asking to remove their key means.
+     *
+     * The base URL survives, because it is a separate field whose value is on
+     * screen the whole time -- blanking it and saving is how it is cleared.
+     * Silently resetting a visible setting from a different button is worse
+     * than leaving it: the user can read what it still says.
      */
     fun clear() {
         // commit() here for the same reason inverted: "forget my key" must be
@@ -135,5 +180,6 @@ class ApiKeyStore(context: Context) {
         const val FILE = "aide-ai"
         const val KEY_CIPHERTEXT = "apiKey.ciphertext"
         const val KEY_IV = "apiKey.iv"
+        const val KEY_BASE_URL = "endpoint.baseUrl"
     }
 }

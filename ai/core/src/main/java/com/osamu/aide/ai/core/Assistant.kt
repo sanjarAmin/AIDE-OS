@@ -15,7 +15,7 @@ import java.io.File
 class Assistant(
     private val keys: ApiKeyStore,
     private val dispatchers: DispatcherProvider,
-    private val clientFactory: (String) -> AnthropicClient = ::defaultClient,
+    private val clientFactory: (String, String?) -> AnthropicClient = ::defaultClient,
 ) {
 
     /**
@@ -35,7 +35,7 @@ class Assistant(
         val toolset = ProjectToolset(ProjectFiles(projectDir), extraTools)
 
         return AiSession(
-            client = clientFactory(key),
+            client = clientFactory(key, keys.baseUrl()),
             assembler = PromptAssembler(toolset),
             toolset = toolset,
             approver = approver,
@@ -51,10 +51,14 @@ class Assistant(
      */
     fun completer(): InlineCompleter? {
         val key = keys.read() ?: return null
-        return InlineCompleter(clientFactory(key), dispatchers)
+        return InlineCompleter(clientFactory(key, keys.baseUrl()), dispatchers)
     }
 
-    private companion object {
+    // internal rather than private so the *default* factory can be tested.
+    // Every other test in this module injects a fake one, which would leave
+    // the one line that actually reaches the SDK unexercised -- and that line
+    // is the whole feature.
+    internal companion object {
         /**
          * One client per session rather than a shared singleton.
          *
@@ -63,9 +67,19 @@ class Assistant(
          * keep authenticating with the old one until the process restarted, and
          * the symptom is a 401 the user cannot explain after they just fixed
          * their key.
+         *
+         * [baseUrl] rides along for the same reason and gets it for free: it is
+         * read on the same pass, so changing the endpoint takes effect on the
+         * next session rather than the next launch.
          */
-        fun defaultClient(apiKey: String): AnthropicClient =
-            AnthropicOkHttpClient.builder().apiKey(apiKey).build()
+        fun defaultClient(apiKey: String, baseUrl: String?): AnthropicClient {
+            var builder = AnthropicOkHttpClient.builder().apiKey(apiKey)
+            // Left unset for the default rather than passing Anthropic's own URL
+            // as a literal: the SDK's default is the one that stays right when
+            // the SDK changes it.
+            if (baseUrl != null) builder = builder.baseUrl(baseUrl)
+            return builder.build()
+        }
     }
 }
 

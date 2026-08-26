@@ -1,16 +1,20 @@
 package com.osamu.aide.ui.settings
 
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.test.platform.app.InstrumentationRegistry
 import com.osamu.aide.ai.core.ApiKeyStore
+import com.osamu.aide.ai.core.Endpoint
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -34,18 +38,24 @@ class ApiKeySectionTest {
     @Before
     fun setUp() {
         keys = ApiKeyStore(InstrumentationRegistry.getInstrumentation().targetContext)
-        keys.clear()
+        reset()
     }
 
     @After
-    fun tearDown() = keys.clear()
+    fun tearDown() = reset()
+
+    /** clear() spares the endpoint on purpose, so it has to be reset by hand. */
+    private fun reset() {
+        keys.clear()
+        keys.saveBaseUrl(Endpoint.Default)
+    }
 
     @Test
     fun a_typed_key_is_saved_to_the_keystore() {
         compose.setContent { ApiKeySection(keys) }
 
         compose.onNodeWithContentDescription("API key").performTextInput("sk-ant-typed")
-        compose.onNodeWithText("Save key").performClick()
+        compose.onNodeWithText("Save").performClick()
         compose.waitForIdle()
 
         assertTrue(keys.hasKey())
@@ -64,7 +74,7 @@ class ApiKeySectionTest {
         compose.setContent { ApiKeySection(keys) }
 
         compose.onNodeWithContentDescription("API key").performTextInput("  sk-ant-padded\n")
-        compose.onNodeWithText("Save key").performClick()
+        compose.onNodeWithText("Save").performClick()
         compose.waitForIdle()
 
         assertEquals("sk-ant-padded", keys.read())
@@ -74,7 +84,7 @@ class ApiKeySectionTest {
     fun saving_is_refused_until_something_is_typed() {
         compose.setContent { ApiKeySection(keys) }
 
-        compose.onNodeWithText("Save key").assertIsNotEnabled()
+        compose.onNodeWithText("Save").assertIsNotEnabled()
         assertFalse(keys.hasKey())
     }
 
@@ -86,6 +96,104 @@ class ApiKeySectionTest {
 
         compose.onNodeWithText("A key is saved.").assertExists()
         compose.onNodeWithText("sk-ant-secret").assertDoesNotExist()
+    }
+
+    // -- the endpoint -------------------------------------------------------
+
+    @Test
+    fun a_typed_endpoint_is_saved() {
+        compose.setContent { ApiKeySection(keys) }
+
+        compose.onNodeWithContentDescription("API endpoint")
+            .performTextInput("https://gateway.internal")
+        compose.onNodeWithText("Save").performClick()
+        compose.waitForIdle()
+
+        assertEquals("https://gateway.internal", keys.baseUrl())
+    }
+
+    /**
+     * The endpoint can be changed without retyping the key.
+     *
+     * The key field is empty whenever a key is already saved -- it is never
+     * rendered back -- so a Save that required it would make the endpoint
+     * unchangeable without rotating the credential.
+     */
+    @Test
+    fun the_endpoint_can_be_saved_while_the_key_field_is_empty() {
+        keys.save("sk-ant-existing")
+        compose.setContent { ApiKeySection(keys) }
+
+        compose.onNodeWithContentDescription("API endpoint")
+            .performTextInput("https://gateway.internal")
+        compose.onNodeWithText("Save").assertIsEnabled().performClick()
+        compose.waitForIdle()
+
+        assertEquals("https://gateway.internal", keys.baseUrl())
+        assertEquals("the key was disturbed by an endpoint change", "sk-ant-existing", keys.read())
+    }
+
+    /**
+     * What was corrected is shown, not just applied.
+     *
+     * `parseEndpoint` strips a trailing `/v1` because the SDK appends its own.
+     * Doing that silently and leaving the typed text on screen would leave the
+     * user believing something other than what is stored.
+     */
+    @Test
+    fun the_field_is_rewritten_with_what_was_actually_stored() {
+        compose.setContent { ApiKeySection(keys) }
+
+        compose.onNodeWithContentDescription("API endpoint")
+            .performTextInput("https://gateway.internal/v1/")
+        compose.onNodeWithText("Save").performClick()
+        compose.waitForIdle()
+
+        assertEquals("https://gateway.internal", keys.baseUrl())
+        compose.onNodeWithText("https://gateway.internal").assertExists()
+    }
+
+    /** A blank endpoint field is how the user goes back to Anthropic. */
+    @Test
+    fun blanking_the_endpoint_restores_the_default() {
+        keys.saveBaseUrl(Endpoint.Custom("https://gateway.internal"))
+        compose.setContent { ApiKeySection(keys) }
+
+        compose.onNodeWithContentDescription("API endpoint").performTextClearance()
+        compose.onNodeWithText("Save").performClick()
+        compose.waitForIdle()
+
+        assertNull(keys.baseUrl())
+    }
+
+    /**
+     * A bad endpoint cannot be saved, and says why on the way.
+     *
+     * Without this the failure surfaces on the first chat message as an SDK
+     * transport error, which names neither the field nor the fix.
+     */
+    @Test
+    fun an_endpoint_that_cannot_work_blocks_saving_and_explains_itself() {
+        compose.setContent { ApiKeySection(keys) }
+
+        compose.onNodeWithContentDescription("API key").performTextInput("sk-ant-typed")
+        compose.onNodeWithContentDescription("API endpoint")
+            .performTextInput("http://gateway.internal")
+
+        compose.onNodeWithText("Save").assertIsNotEnabled()
+        compose.onNodeWithText("https is required.", substring = true).assertExists()
+        assertFalse("a refused endpoint must not take the key with it", keys.hasKey())
+    }
+
+    /** A custom endpoint is where the key goes, so the screen says so. */
+    @Test
+    fun a_custom_endpoint_warns_that_the_key_is_sent_there() {
+        compose.setContent { ApiKeySection(keys) }
+
+        compose.onNodeWithContentDescription("API endpoint")
+            .performTextInput("https://gateway.internal")
+
+        compose.onNodeWithText("Your key will be sent to this address.").assertExists()
     }
 
     @Test

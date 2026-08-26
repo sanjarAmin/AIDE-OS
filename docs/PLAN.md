@@ -242,6 +242,7 @@ Bring-your-own-key, no backend infrastructure, no per-user liability for you.
 - **Tool use turns the assistant into an agent:** `read_file`, `edit_file`, `grep`, `list_files`, `run_build`, `read_build_errors`. Gate every mutating tool behind an explicit user confirmation in the UI.
 - **Killer feature:** pipe compiler diagnostics straight into a fix suggestion. On-device builds produce errors on a device with no Stack Overflow tab open — one-tap "explain and fix this error" is worth more here than on desktop.
 - **Key storage:** Android Keystore-backed encrypted preferences. Never log the key; never ship a default key.
+- **The endpoint is configurable, and that is the whole multi-provider story for now.** `AnthropicOkHttpClient.baseUrl` points the same SDK at anything speaking this wire format — a self-hosted proxy, a gateway in front of another model. It costs one builder call and no abstraction. A genuinely different provider (Gemini, an OpenAI-shaped API) is a port rather than a setting: implicit prefix caching and verbatim thinking-block replay have no equivalent elsewhere, so `PromptAssembler`'s entire design would have nothing to do. Do not build a provider interface before something needs one — it would be the intersection of the two, which is the API minus everything M5 was built around.
 
 ---
 
@@ -324,6 +325,12 @@ M0–M5 is the real v1.0. Everything from M6 on is expansion.
    needs a key, and so do the two questions a fake cannot answer — whether
    the live API accepts this request shape, and whether prompt caching reports a
    hit. Those stay skipped in `:spike:ai`.
+
+   **Deliberately parked, not forgotten.** M5 closes when a key exists to run
+   those three against; later milestones do not wait on it. The command is in
+   `ai/core/FINDINGS.md`. Nothing else in the roadmap depends on the answer —
+   if the live API rejects the request shape, the fix is in `PromptAssembler`
+   and touches no other module.
 
    `ai/core/FINDINGS.md` is the milestone's other deliverable. Its theme is that
    M5's characteristic bug **returns a correct answer** — a lost cache, a

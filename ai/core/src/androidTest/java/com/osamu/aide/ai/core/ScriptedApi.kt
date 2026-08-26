@@ -43,12 +43,23 @@ internal class ScriptedApi(responses: List<String>) {
 
     fun client(): AnthropicClient = AnthropicOkHttpClient.builder()
         .apiKey("test-key")
-        .baseUrl(server.url("/").toString().trimEnd('/'))
+        .baseUrl(baseUrl)
         .build()
+
+    /**
+     * Where this server is, in the form the SDK's `baseUrl` wants.
+     *
+     * Trailing slash removed for the same reason `parseEndpoint` removes one:
+     * the SDK appends `/v1/messages`, so leaving it produces `//v1/messages`.
+     */
+    val baseUrl: String get() = server.url("/").toString().trimEnd('/')
 
     val requestCount: Int get() = recorded.size
 
     fun body(index: Int): String = recorded[index].body.readUtf8()
+
+    /** The path the SDK actually requested, which is what pins `/v1`. */
+    fun path(index: Int): String? = recorded[index].path
 
     fun stop() = server.shutdown()
 
