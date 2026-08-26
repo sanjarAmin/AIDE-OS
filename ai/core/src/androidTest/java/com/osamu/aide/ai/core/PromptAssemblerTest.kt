@@ -43,7 +43,7 @@ class PromptAssemblerTest {
 
     @Test
     fun the_system_prompt_is_split_with_the_breakpoint_on_the_context() {
-        val params = assembler.request("file tree here", listOf(Turn(Turn.Role.USER, "hi")))
+        val params = assembler.request("file tree here", listOf(userTurn("hi")))
         val blocks = params.system().orElseThrow().textBlockParams().orElseThrow()
 
         assertEquals("expected instructions and context as separate blocks", 2, blocks.size)
@@ -69,13 +69,13 @@ class PromptAssemblerTest {
     fun the_cacheable_prefix_does_not_change_when_the_user_speaks() {
         val context = "src/Main.kt\nsrc/Other.kt"
 
-        val first = assembler.request(context, listOf(Turn(Turn.Role.USER, "what does Main do?")))
+        val first = assembler.request(context, listOf(userTurn("what does Main do?")))
         val second = assembler.request(
             context,
             listOf(
-                Turn(Turn.Role.USER, "what does Main do?"),
-                Turn(Turn.Role.ASSISTANT, "Nothing yet."),
-                Turn(Turn.Role.USER, "add a greeting, and also what time is it"),
+                userTurn("what does Main do?"),
+                assistantTurn("Nothing yet."),
+                userTurn("add a greeting, and also what time is it"),
             ),
         )
 
@@ -93,9 +93,9 @@ class PromptAssemblerTest {
         val params = assembler.request(
             "context",
             listOf(
-                Turn(Turn.Role.USER, "first question"),
-                Turn(Turn.Role.ASSISTANT, "an answer"),
-                Turn(Turn.Role.USER, "second question"),
+                userTurn("first question"),
+                assistantTurn("an answer"),
+                userTurn("second question"),
             ),
         )
 

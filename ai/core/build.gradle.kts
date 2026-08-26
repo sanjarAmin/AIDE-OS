@@ -48,10 +48,15 @@ android {
 dependencies {
     coreLibraryDesugaring(libs.desugar.jdk.libs)
 
-    implementation(project(":core:common"))
+    api(project(":core:common"))
     api(libs.anthropic.java)
+    implementation(libs.kotlinx.coroutines.android)
 
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.kotlinx.coroutines.test)
+    // The tool loop is tested against a local Messages API rather than the real
+    // one -- see FakeAnthropic. com.sun.net.httpserver does not exist on
+    // Android, so this is not optional; tools/ai/FINDINGS.md section 1.
+    androidTestImplementation(libs.okhttp.mockwebserver)
 }

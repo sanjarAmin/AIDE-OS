@@ -2,15 +2,23 @@ package com.osamu.aide.ai.core
 
 import com.anthropic.models.messages.CacheControlEphemeral
 import com.anthropic.models.messages.MessageCreateParams
+import com.anthropic.models.messages.MessageParam
 import com.anthropic.models.messages.OutputConfig
 import com.anthropic.models.messages.TextBlockParam
 import com.anthropic.models.messages.ThinkingConfigAdaptive
 import com.anthropic.models.messages.ThinkingConfigParam
+import com.anthropic.models.messages.ToolUnion
 
-/** One exchange in a conversation, as the assembler needs it. */
-data class Turn(val role: Role, val text: String) {
-    enum class Role { USER, ASSISTANT }
-}
+/** A plain text turn, for the cases that have no blocks to carry. */
+fun userTurn(text: String): MessageParam = MessageParam.builder()
+    .role(MessageParam.Role.USER)
+    .content(text)
+    .build()
+
+fun assistantTurn(text: String): MessageParam = MessageParam.builder()
+    .role(MessageParam.Role.ASSISTANT)
+    .content(text)
+    .build()
 
 /**
  * Builds requests in the order prompt caching requires.
@@ -42,10 +50,17 @@ class PromptAssembler(private val toolset: ProjectToolset) {
      * [projectContext] must be derived only from the project — never from the
      * cursor, the clock, or which file happens to be focused. Those belong in
      * the user turn.
+     *
+     * [history] is the SDK's own `MessageParam` rather than a type of ours.
+     * That is not laziness: a tool-use round trip has to carry `tool_use`,
+     * `tool_result` and — because thinking is adaptive — `thinking` blocks back
+     * to the API **unchanged**, and a role-plus-text record of the conversation
+     * silently drops all three. See `AiSession`, which replays whole assistant
+     * messages for exactly that reason.
      */
     fun request(
         projectContext: String,
-        history: List<Turn>,
+        history: List<MessageParam>,
         effort: OutputConfig.Effort = OutputConfig.Effort.HIGH,
         maxTokens: Long = DEFAULT_MAX_TOKENS,
         instructions: String = STANDING_INSTRUCTIONS,
@@ -55,22 +70,16 @@ class PromptAssembler(private val toolset: ProjectToolset) {
             .maxTokens(maxTokens)
             .thinking(ThinkingConfigParam.ofAdaptive(ThinkingConfigAdaptive.builder().build()))
             .outputConfig(OutputConfig.builder().effort(effort).build())
-            .tools(toolset.definitions().map { com.anthropic.models.messages.ToolUnion.ofTool(it) })
+            .tools(toolset.definitions().map(ToolUnion::ofTool))
             .systemOfTextBlockParams(systemBlocks(instructions, projectContext))
-            // Set explicitly, because the builder treats messages as required
-            // and throws on build() otherwise. An empty conversation is still
-            // invalid to the API -- but that is the API's judgement to make,
-            // with an error naming the problem, rather than an
-            // IllegalStateException from a builder that says only "`messages`
-            // is required" while the caller is looking at prompt layout.
-            .messages(emptyList())
+            // Passed as a list rather than left to default, because the builder
+            // treats messages as required and throws on build() otherwise. An
+            // empty conversation is still invalid to the API -- but that is the
+            // API's judgement to make, with an error naming the problem, rather
+            // than an IllegalStateException saying only "`messages` is
+            // required" while the caller is looking at prompt layout.
+            .messages(history)
 
-        history.forEach { turn ->
-            when (turn.role) {
-                Turn.Role.USER -> builder.addUserMessage(turn.text)
-                Turn.Role.ASSISTANT -> builder.addAssistantMessage(turn.text)
-            }
-        }
         return builder.build()
     }
 
