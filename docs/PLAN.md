@@ -336,15 +336,24 @@ M0–M5 is the real v1.0. Everything from M6 on is expansion.
    had been crashing every project open on any device without the Kotlin
    toolchain since M4 — the state every new user is in.
 
-9. **M6 Compose is further along than this table suggests.** Checked, not
-   assumed: spike R2 put the Compose plugin in the same dex archive as the
-   compiler, and `KotlinCompiler` already registers it with `-Xplugin` when it
-   finds `androidx.compose.runtime.Composer` on the classpath. What M6 needs is
-   the acceptance test — a Compose hello-world fixture built end to end on a
-   device — rather than any new compiler work. Note R2's finding 7 when writing
-   it: the plugin transforms nothing and reports nothing if the archive is not
-   named on the command line, so the test must assert the *transformed
-   bytecode*, not the exit code.
+9. **M6 Compose — the build half is done and proven.** Spike R2 had already put
+   the Compose plugin in the same dex archive as the compiler, and
+   `KotlinCompiler` already registered it with `-Xplugin` on finding
+   `androidx.compose.runtime.Composer` on the classpath; what was missing was
+   any test that the path worked from a project on disk. `ComposeBuildTest` is
+   that test: 11 artifacts resolved, kotlinc, ECJ, D8 and aapt2 over the lot, a
+   2 MB APK, in ~70 s on the emulator.
+
+   It asserts the **transformed bytecode**, not the exit code, and that
+   distinction is not theoretical. Disabling the `-Xplugin` registration makes
+   the build **still succeed** — it is only the assertion that `GreetingKt`
+   references `Composer`, a class its source never names, that catches it. That
+   is R2's finding 7 reproduced one layer out, and it is why "a Compose project
+   compiles cleanly" would have been a worthless test.
+
+   What is left of M6 is the word **"runs"** in the acceptance column. Building
+   is proven; installing a Compose app and seeing it draw needs a launchable
+   fixture with `compose.ui` and an Activity, which is a separate piece.
 
 ~~Before building `:build:fast`, verify the remaining "pure JVM, therefore fine
 on ART" assumptions — ECJ, D8/R8 and apksig.~~ Done: spike R2b. All three run,
