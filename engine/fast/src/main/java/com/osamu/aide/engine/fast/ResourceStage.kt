@@ -112,6 +112,10 @@ internal class ResourceStage(private val runner: NativeToolRunner) {
         debuggable: Boolean,
         /** Library archives, in overlay order: earliest is weakest. */
         libraryResources: List<File> = emptyList(),
+        /** Packages needing their own `R` class; see [DependencyInputs]. */
+        libraryPackages: List<String> = emptyList(),
+        /** The project's own package, which already gets an `R` class. */
+        applicationId: String = "",
         onDiagnostic: (Diagnostic) -> Unit = {},
     ): StageResult<File?> {
         val compiledResources = workspace.compiledProjectResources
@@ -134,12 +138,43 @@ internal class ResourceStage(private val runner: NativeToolRunner) {
             }
             if (debuggable) add("--debug-mode")
 
+            // **One `R` class per library package, or the app dies on launch.**
+            //
+            // aapt2 generates `R` for the manifest's package and nothing else,
+            // but a library's compiled code references *its own* -- so
+            // `androidx.customview.poolingcontainer.R` is simply not in the
+            // APK, and the build succeeds anyway. The first symptom is
+            // `NoClassDefFoundError` from a Compose app that installed
+            // perfectly. `--extra-packages` is an accumulating flag, so it is
+            // repeated rather than joined. FINDINGS section 12.
+            //
+            // The project's own package is excluded: aapt2 would emit a second,
+            // identical `R.java` for it and the Java compiler would reject the
+            // duplicate.
+            libraryPackages.filter { it.isNotBlank() && it != applicationId }
+                .forEach { add("--extra-packages"); add(it) }
+
             // Order is the overlay rule, and it is the whole reason these are
             // compiled separately: aapt2 lets a later archive override an
             // earlier one, so libraries go first and the project last. Reverse
             // this and a library's `app_name` silently replaces the user's.
-            libraryResources.filter { it.isFile }.forEach { add(it.absolutePath) }
-            if (compiledResources.isFile) add(compiledResources.absolutePath)
+            //
+            // `-R` is what makes that true, and it is not optional. A positional
+            // input is part of the *base* set, where two archives defining one
+            // resource name is a hard error -- and two AndroidX libraries at
+            // matching versions do exactly that: `compose.ui:ui-android` and
+            // `compose.foundation:foundation-android` both ship
+            // `string/autofill`. Under `-R` the last one wins, which is the
+            // documented behaviour and the one AGP's resource merger provides.
+            // The first input has to stay positional: `-R` overlays something,
+            // and with every input an overlay there is no base to overlay onto.
+            // FINDINGS section 12.
+            val inputs = libraryResources.filter { it.isFile } +
+                listOfNotNull(compiledResources.takeIf { it.isFile })
+            inputs.forEachIndexed { index, archive ->
+                if (index > 0) add("-R")
+                add(archive.absolutePath)
+            }
         }
 
         val diagnostics = mutableListOf<Diagnostic>()

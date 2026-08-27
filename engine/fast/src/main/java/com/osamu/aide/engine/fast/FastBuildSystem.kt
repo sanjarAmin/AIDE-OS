@@ -94,6 +94,8 @@ class FastBuildSystem(
                     platform = platform,
                     debuggable = request.debuggable,
                     libraryResources = libraryResources,
+                    libraryPackages = request.dependencies.libraryPackages,
+                    applicationId = request.project.applicationId,
                     onDiagnostic = onDiagnostic,
                 )
             }

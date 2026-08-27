@@ -151,6 +151,42 @@ class DependencyResolverTest {
     }
 
     /**
+     * One Compose era on the classpath, not two.
+     *
+     * `activity-compose` reaches `compose.runtime` far below the version
+     * `compose.ui` in the same graph was built against, and Compose's modules
+     * are not independently versioned: `ui-android:1.12.0` calls into a
+     * `runtime` class that did not exist at 1.9.0. Gradle never sees this
+     * because the AndroidX BOM constrains the whole group; Maven has no
+     * equivalent, so the only thing standing between the user and a
+     * `NoClassDefFoundError` on launch is the resolver's own conflict
+     * semantics.
+     *
+     * Asserted on the group rather than on `runtime-android` alone. The failure
+     * is a *straggler* -- any one Compose module left behind by the rest --
+     * and pinning the specific one that lagged today would miss the next.
+     */
+    @Test
+    fun the_compose_modules_resolve_to_one_version() = runTest(timeout = NETWORK_TIMEOUT) {
+        val resolved = resolve(
+            "androidx.activity:activity-compose:1.13.0",
+            "androidx.compose.foundation:foundation-android:1.12.0",
+        )
+
+        val compose = resolved.dependencies
+            .filter { it.coordinate.group.startsWith("androidx.compose.") }
+            .associate { "${it.coordinate.group}:${it.coordinate.artifact}" to it.coordinate.version }
+        assertTrue("no compose artifacts resolved at all", compose.isNotEmpty())
+
+        val versions = compose.values.toSet()
+        assertEquals(
+            "the Compose modules resolved to more than one version: $compose",
+            1,
+            versions.size,
+        )
+    }
+
+    /**
      * The number that decides whether this is usable day to day.
      *
      * Reported rather than asserted. The first resolve is network-bound and

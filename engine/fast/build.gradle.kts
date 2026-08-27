@@ -95,4 +95,10 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.kotlinx.coroutines.test)
+    // M6's second half is "runs", and the only way to see that a Compose app
+    // drew is to read the screen of a *different* process. Compose publishes
+    // its semantics to the accessibility tree, which is what UiAutomator
+    // queries -- so finding the text there is evidence the composition ran and
+    // laid out, not merely that the process survived launch.
+    androidTestImplementation(libs.androidx.uiautomator)
 }

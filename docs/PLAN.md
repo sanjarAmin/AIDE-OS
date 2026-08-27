@@ -7,7 +7,7 @@
 
 ## Status
 
-*As of 2026-08-23.*
+*As of 2026-08-27.*
 
 | | Milestone | State |
 |---|---|---|
@@ -18,6 +18,10 @@
 | 🟡 | **M0** Skeleton | Built: `:app`, `:core:{common,fs,ui}`, `:editor`, `:toolchain:{native,manager}`, `:engine:{api,fast}`. 9 of 22 planned modules. |
 | 🟢 | **M1** Editor | Highlighting, tabs, symbol row, find/replace, diagnostics gutter, and SAF import. `editor/FINDINGS.md`, `core/fs/FINDINGS.md` |
 | 🟢 | **M2** First APK ⭐ | **The thesis holds, and it is reachable.** A person can create a project, edit it, tap Build, and end up with the app installed — all on the device. |
+| 🟢 | **M3** Intelligence | Completion, diagnostics-as-you-type, go-to-definition, signature hints. **76 ms** warm completion on an AndroidX type against the 200 ms budget. |
+| 🟢 | **M4** Deps + Kotlin | A Kotlin project using `androidx.appcompat` builds on device: 41 artifacts resolved, kotlinc ahead of ECJ. `engine/deps/FINDINGS.md` |
+| 🟡 | **M5** AI ⭐ | Feature-complete; three assertions parked until a live API key exists. Everything testable without one is tested. `ai/core/FINDINGS.md` |
+| 🟢 | **M6** Compose | A Compose app builds, installs, launches and **draws**, on device. Six fixes, none of them visible to a build-only test. `engine/deps/FINDINGS.md` |
 
 **M2 in detail.** All six stages exist in `:engine:fast` and run on a device:
 aapt2 compile → aapt2 link → ECJ → D8 → package → apksig, behind
@@ -256,7 +260,7 @@ Bring-your-own-key, no backend infrastructure, no per-user liability for you.
 | **M3** Intelligence | `:lsp:java`, completion, diagnostics-as-you-type, go-to-definition | Completion on AndroidX types < 200ms |
 | **M4** Deps + Kotlin | maven-resolver, AAR extraction, kotlinc integration | Project with `androidx.appcompat` + Kotlin sources builds |
 | **M5** AI ⭐ | `:ai:core` + `:ai:ui`, chat, inline completion, fix-my-error | BYO key → chat with project context, one-tap error fix works |
-| **M6** Compose | Compose compiler plugin hosted in on-device kotlinc | A Compose hello-world builds and runs |
+| ✅ **M6** Compose | Compose compiler plugin hosted in on-device kotlinc | A Compose hello-world builds and runs |
 | **M7** C/C++ | clang/lld toolchain download, NDK sysroot, clangd | JNI project with a native `.so` builds |
 | **M8** Git + Terminal | JGit, PTY terminal | Clone from GitHub, edit, commit, push |
 | **M9** Gradle path | Rootfs bootstrap, Tooling API bridge | An unmodified Android Studio project builds |
@@ -358,9 +362,22 @@ M0–M5 is the real v1.0. Everything from M6 on is expansion.
    is R2's finding 7 reproduced one layer out, and it is why "a Compose project
    compiles cleanly" would have been a worthless test.
 
-   What is left of M6 is the word **"runs"** in the acceptance column. Building
-   is proven; installing a Compose app and seeing it draw needs a launchable
-   fixture with `compose.ui` and an Activity, which is a separate piece.
+   **M6 is now closed, "runs" included.** `ComposeRunTest` builds a Compose
+   app with `activity-compose` and `foundation`, installs it, launches it, and
+   waits for UiAutomator to find its marker text in the running app's
+   accessibility tree. It draws.
+
+   Getting from "builds" to "runs" took six fixes, and **every one was
+   invisible to a build-only test**: the build reported success, the APK
+   verified, `pm install` succeeded, `am start` said `Status: ok`, and the app
+   crashed. Five were dependency resolution — AndroidX's graph is correct only
+   under Gradle Module Metadata, and maven-resolver reads `.pom`. The sixth was
+   aapt2 generating no `R` class for any library package.
+
+   The new document is `engine/deps/FINDINGS.md`; `engine/fast/FINDINGS.md`
+   section 12 has this module's half. The honest summary is that two of the
+   three gaps are papered over with **curated tables that will rot**, and the
+   fix that does not is reading `.module` files, which is not written.
 
 ~~Before building `:build:fast`, verify the remaining "pure JVM, therefore fine
 on ART" assumptions — ECJ, D8/R8 and apksig.~~ Done: spike R2b. All three run,

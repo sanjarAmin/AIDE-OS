@@ -38,6 +38,12 @@ data class ResolvedDependency(
     val rTxt: File? = null,
     /** An AAR's `AndroidManifest.xml`, which carries its minSdk and permissions. */
     val manifest: File? = null,
+    /**
+     * The package that manifest declares, and so the package this library's
+     * own compiled code looks for its `R` class in. See
+     * [ResolvedDependencies.libraryPackages].
+     */
+    val packageName: String? = null,
 ) {
     val isAndroidLibrary: Boolean get() = resources != null || rTxt != null
 }
@@ -57,6 +63,22 @@ data class ResolvedDependencies(
     val compileClasspath: List<File> get() = dependencies.map { it.classes }
 
     val resourceDirectories: List<File> get() = dependencies.mapNotNull { it.resources }
+
+    /**
+     * Every package that needs an `R` class generated for it.
+     *
+     * A library's compiled code references **its own** `R`, not the app's:
+     * `androidx.customview.poolingcontainer.R`, in the class that crashed
+     * before this existed. aapt2 generates one R class, for the app's package,
+     * so without naming these the classes are simply absent and the app dies on
+     * launch with `NoClassDefFoundError` -- after a build that reported success.
+     *
+     * Only libraries that declare resources are listed: a package with nothing
+     * in it produces an R class no one references, and aapt2 is being asked to
+     * write a file per entry.
+     */
+    val libraryPackages: List<String>
+        get() = dependencies.filter { it.isAndroidLibrary }.mapNotNull { it.packageName }.distinct()
 
     val isEmpty: Boolean get() = dependencies.isEmpty()
 }

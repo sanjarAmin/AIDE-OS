@@ -67,6 +67,47 @@ class AarExtractorTest {
     }
 
     /**
+     * The package the library's own `R` class lives in.
+     *
+     * Read out of the manifest so the engine can ask aapt2 for that `R` as
+     * well as the app's. It is easy to get silently wrong -- an expression that
+     * matches nothing is indistinguishable, downstream, from a graph with no
+     * Android libraries in it, and the build still succeeds. The app then dies
+     * on launch, which is why this is asserted here and again in
+     * `ComposeRunTest`.
+     *
+     * Written the way a real AAR manifest is, attributes and all, rather than
+     * as the bare `package="..."` the parser is looking for.
+     */
+    @Test
+    fun a_library_package_is_read_from_the_manifest() {
+        val archive = aar(entries = mapOf(
+            "classes.jar" to "code",
+            "AndroidManifest.xml" to
+                """<?xml version="1.0" encoding="utf-8"?>
+                   <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+                       package="androidx.customview.poolingcontainer" >
+                       <uses-sdk android:minSdkVersion="14" />
+                   </manifest>""",
+        ))
+
+        val resolved = requireNotNull(AarExtractor.extract(coordinate, archive))
+
+        assertEquals("androidx.customview.poolingcontainer", resolved.packageName)
+    }
+
+    /** No package attribute is not a failure: a namespaced AAR declares none. */
+    @Test
+    fun a_manifest_without_a_package_yields_null() {
+        val archive = aar(entries = mapOf(
+            "classes.jar" to "code",
+            "AndroidManifest.xml" to """<manifest xmlns:android="x"><application/></manifest>""",
+        ))
+
+        assertNull(requireNotNull(AarExtractor.extract(coordinate, archive)).packageName)
+    }
+
+    /**
      * A resource-only library is legal and ships without code.
      *
      * Null rather than an empty classpath entry: there is nothing to compile

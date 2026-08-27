@@ -226,8 +226,94 @@ that question back on the table.
   an APK containing the previous run's classes. Incrementality belongs at the
   stage level keyed on input hashes, and is not written. Section 9 records the
   cheaper design that does not work.
-- **No Kotlin.** Spike R2 proved the compiler and the Compose plugin run on ART;
-  neither is wired into this module. `FastBuildSystem` refuses a Kotlin project
-  by name rather than building one silently missing every Kotlin class.
-- **No dependencies.** No AAR, no Maven resolution, so no AndroidX. The project
-  template uses only framework classes for exactly this reason.
+- **No `.module` parsing.** Maven resolution reads `.pom` only, and AndroidX's
+  graph is correct only under Gradle Module Metadata. Section 12 records the
+  three mechanisms that costs us and the narrow rules standing in for them; two
+  of those rules are curated tables that will rot.
+- **Resources are linked, not merged.** aapt2's `-R` overlay is doing the job
+  AGP gives to a resource merger. It is the right semantics for last-one-wins,
+  but there is no manifest merger at all: a library's `<uses-permission>` or
+  `<provider>` never reaches the app's manifest. `androidx.startup` and
+  `emoji2` both rely on a merged `<provider>`, and a Compose app that needs
+  either will not get it.
+
+## 12. Making a Compose app *run*, not build
+
+Getting a Compose hello-world to run took six fixes across `:engine:deps` and
+this module. Every one was invisible to a build-only test: the build reported
+success, the APK installed cleanly, and the app crashed on launch or drew
+nothing. `ComposeRunTest` exists because of that, and found all six.
+
+Five of the six were resolution, and they are written up where the code is:
+**`engine/deps/FINDINGS.md`**, sections 1 to 3. The one-line version is that
+AndroidX's graph is correct only under Gradle Module Metadata, maven-resolver
+reads `.pom`, and the difference costs duplicate classes at D8 and missing ones
+at runtime. Everything below is this module's half.
+
+### Library resources are `-R` overlays, not positional inputs
+
+A positional input joins aapt2's *base* set, where two archives defining one
+resource name is a hard error — and matched-version AndroidX libraries do
+exactly that: `compose.ui:ui-android` and `compose.foundation:foundation-android`
+both ship `string/autofill`. Verified by downloading both AARs, not inferred
+from the message. Under `-R` the last one wins, which is the documented
+behaviour and the one AGP's resource merger provides.
+
+The first input has to stay positional: `-R` overlays *onto* something, and with
+every input an overlay there is no base to overlay onto. Order is the whole
+rule — libraries first, the project last — so reversing it lets a library's
+`app_name` silently replace the user's.
+
+### `--extra-packages`, or the app dies on launch
+
+aapt2 generates `R` for the manifest's package and nothing else, but a library's
+compiled code references *its own*. So `androidx.customview.poolingcontainer.R`
+is simply not in the APK, the build succeeds, the APK installs, and the app dies
+at `onAttachedToWindow`:
+
+```
+java.lang.NoClassDefFoundError: Failed resolution of:
+    Landroidx/customview/poolingcontainer/R$id;
+```
+
+The flag accumulates, so it is repeated rather than joined. The project's own
+package is excluded, or aapt2 emits a second identical `R.java` and the Java
+compiler rejects the duplicate. The package names come from each AAR's manifest;
+`engine/deps/FINDINGS.md` section 5 records how that parse failed silently.
+
+### No manifest merger
+
+`-R` is doing the job AGP gives to a resource merger, and doing it adequately.
+There is no equivalent for manifests at all: a library's `<uses-permission>`,
+`<provider>` or `<activity>` never reaches the app's manifest. `androidx.startup`
+and `emoji2` both rely on a merged `<provider>` — they initialise through one —
+so an app needing either will link, install, launch, and behave as though the
+library were never initialised. Nothing in the pipeline reports it. This is the
+largest known hole in the fast path after incrementality.
+
+### Instrumented tests need their own `largeHeap`
+
+`androidTest/AndroidManifest.xml` here sets `android:largeHeap="true"`. `:app`
+already had it; this module's test manifest did not, and resolving a Compose
+graph hit ART's 192 MB default and reported only `Process crashed`. **A
+library's instrumented tests run in their own process with their own manifest**,
+and a `largeHeap` on the app under test does not reach them.
+
+Also: XML comments cannot contain `--`, and the manifest merger fails the build
+with `The string "--" is not permitted within comments` rather than pointing at
+the line.
+
+### What the test has to assert
+
+"Builds" and "runs" are different milestones, and the gap between them is where
+all six of these lived. `ComposeRunTest` asserts the app *drew* — UiAutomator
+waiting on a marker string in another process's accessibility tree — because
+every weaker assertion passed while the app was broken:
+
+- the build reported success
+- the APK was well-formed and verified
+- `pm install` succeeded
+- `am start -W` reported `Status: ok`
+
+Only the last of those is even suspicious in hindsight, and only if you know
+that `am start` reports the *launch*, not the process surviving it.

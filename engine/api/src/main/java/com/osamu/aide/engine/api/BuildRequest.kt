@@ -41,6 +41,16 @@ data class BuildRequest(
 data class DependencyInputs(
     val classpath: List<File> = emptyList(),
     val resourceDirectories: List<File> = emptyList(),
+    /**
+     * Packages needing their own generated `R` class -- one per Android library
+     * that declares resources.
+     *
+     * Separate from [resourceDirectories] because they answer different
+     * questions: that one is what to *link*, this is who needs to be able to
+     * *name* the result. A library compiled against its own `R` fails at
+     * runtime, not at build time, when this is missing.
+     */
+    val libraryPackages: List<String> = emptyList(),
 ) {
     val isEmpty: Boolean get() = classpath.isEmpty() && resourceDirectories.isEmpty()
 }

@@ -19,6 +19,8 @@ import java.util.zip.ZipFile
  */
 internal object AarExtractor {
 
+    private val PACKAGE = Regex("""\bpackage\s*=\s*"([^"]+)"""")
+
     /** Where an archive's unpacked form lives: `<name>-1.2.3.aar` -> `<name>-1.2.3/`. */
     private fun unpackedDir(aar: File): File = File(aar.parentFile, aar.nameWithoutExtension)
 
@@ -53,8 +55,29 @@ internal object AarExtractor {
         val rTxt = File(target, "R.txt").takeIf { it.isFile }
         val manifest = File(target, "AndroidManifest.xml").takeIf { it.isFile }
 
-        return ResolvedDependency(coordinate, classes, resources, rTxt, manifest)
+        return ResolvedDependency(
+            coordinate,
+            classes,
+            resources,
+            rTxt,
+            manifest,
+            packageName = manifest?.let(::packageOf),
+        )
     }
+
+    /**
+     * The `package` an AAR's manifest declares, which is the package its
+     * compiled code expects to find its own `R` class in.
+     *
+     * Read with a regex rather than a DOM parse. This runs once per artifact
+     * on a graph that can be seventy of them, the attribute is on the root
+     * element of a file the build system wrote, and the failure mode of a
+     * miss is one library's R class going missing -- which
+     * `ComposeRunTest` catches, because the app crashes on launch.
+     */
+    private fun packageOf(manifest: File): String? = runCatching {
+        PACKAGE.find(manifest.readText())?.groupValues?.get(1)
+    }.getOrNull()
 
     private fun unpack(aar: File, target: File) {
         ZipFile(aar).use { zip ->

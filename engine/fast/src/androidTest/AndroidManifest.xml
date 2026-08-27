@@ -13,4 +13,16 @@
     -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
+    <!--
+        The engine runs kotlinc, ECJ and D8 in-process, and a Compose project's
+        dependency graph is around seventy artifacts. That does not fit the
+        default 192 MB heap: the test process died with `Failed to allocate a
+        152 byte allocation` part way through dexing.
+
+        `:app` has always set this, so the shipped IDE was never affected.
+        Only this harness was, by being quietly stricter than the environment
+        the engine actually runs in. FINDINGS section 12.
+    -->
+    <application android:largeHeap="true" />
+
 </manifest>
