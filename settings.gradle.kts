@@ -75,3 +75,6 @@ include(":spike:deps")
 // Spike R5 -- the Anthropic SDK on ART, which M5 is designed around. Not part
 // of the app.
 include(":spike:ai")
+
+// Spike R6 -- JGit on ART, which M8 is designed around. Not part of the app.
+include(":spike:git")

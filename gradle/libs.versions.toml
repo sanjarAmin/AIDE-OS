@@ -62,6 +62,14 @@ espressoCore = "3.7.0"
 testRunner = "1.7.0"
 uiautomator = "2.3.0"
 
+# Spike R6. Git on ART, for M8. JGit is the fourth "pure JVM, therefore fine"
+# assumption this project has made; the previous three each needed work. 7.x
+# targets Java 17 and leans on java.nio.file, and JGit's FS layer shells out to
+# detect umask and locate a git executable -- neither of which exists at the
+# paths it looks in on Android. Pinned rather than floating: the answer this
+# spike gives is only about the version it was asked about.
+jgit = "7.7.1.202607240634-r"
+
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
@@ -119,6 +127,8 @@ androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "j
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
 androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "testRunner" }
 androidx-uiautomator = { group = "androidx.test.uiautomator", name = "uiautomator", version.ref = "uiautomator" }
+
+jgit = { group = "org.eclipse.jgit", name = "org.eclipse.jgit", version.ref = "jgit" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
 json = { group = "org.json", name = "json", version.ref = "json" }
 

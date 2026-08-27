@@ -14,6 +14,7 @@
 | ✅ | Spike R1 — aapt2 on-device | Resolved. `tools/aapt2/FINDINGS.md` |
 | ✅ | Spike R2 — kotlinc + Compose on ART | Resolved. `tools/kotlinc/FINDINGS.md` |
 | ✅ | Spike R2b — ECJ, D8, apksig on ART | Resolved. `tools/ecj/FINDINGS.md` |
+| ✅ | Spike R6 — JGit on ART | Resolved, and **unmodified** — the first "pure JVM" claim here that held. `tools/git/FINDINGS.md` |
 | ✅ | License | GPLv3 |
 | 🟡 | **M0** Skeleton | Built: `:app`, `:core:{common,fs,ui}`, `:editor`, `:toolchain:{native,manager}`, `:engine:{api,fast}`. 9 of 22 planned modules. |
 | 🟢 | **M1** Editor | Highlighting, tabs, symbol row, find/replace, diagnostics gutter, and SAF import. `editor/FINDINGS.md`, `core/fs/FINDINGS.md` |
@@ -378,6 +379,27 @@ M0–M5 is the real v1.0. Everything from M6 on is expansion.
    section 12 has this module's half. The honest summary is that two of the
    three gaps are papered over with **curated tables that will rot**, and the
    fix that does not is reading `.module` files, which is not written.
+
+10. **M8 Git + Terminal — spiked, and the git half is unblocked.** Spike R6
+   ran JGit 7.7.1 on a device: `FS.detect()`, init, add, commit, `RevWalk`,
+   a shallow clone over HTTPS and a push, all passing on the first run with
+   **no workarounds at all**. That is the first time "pure JVM, therefore fine
+   on ART" has been true in this project, and it is worth saying out loud after
+   kotlinc, ECJ and maven-resolver each cost days.
+
+   What the spike changes about the design, rather than confirms:
+   `FS.detect()` reports no system config and no user home, so there is no
+   `user.name`, no `~/.gitconfig` and no credential helper — **identity and
+   tokens are ours to store**, Keystore-backed, following `ApiKeyStore`. And a
+   depth-1 clone of a large repository took 254 s and 179 MB, which is a
+   bandwidth number rather than a JGit one but still puts clone in the same
+   category as `:toolchain:manager`'s downloads: off the main thread, cancellable,
+   with real progress and a storage figure shown before it is spent.
+
+   SSH is deliberately unanswered; HTTPS with a token is the designed path.
+   `tools/git/FINDINGS.md`.
+
+   The terminal half is untouched and is the larger unknown of M8.
 
 ~~Before building `:build:fast`, verify the remaining "pure JVM, therefore fine
 on ART" assumptions — ECJ, D8/R8 and apksig.~~ Done: spike R2b. All three run,

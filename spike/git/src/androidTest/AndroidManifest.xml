@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- The spike clones a real repository on purpose: the question is whether
+         JGit's HTTP transport works on a device, and a local file:// remote
+         would answer a different one. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+</manifest>
