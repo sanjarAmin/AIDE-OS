@@ -31,6 +31,22 @@ data class GitUiState(
     val notice: String? = null,
     /** False when no identity is stored, which blocks committing rather than faking one. */
     val hasIdentity: Boolean = false,
+    /** The diff being looked at, or null. */
+    val diff: GitDiff? = null,
+)
+
+/**
+ * One file's changes, ready to show.
+ *
+ * [staged] is carried so the view can say *which* diff this is. The working
+ * tree against the index and the index against `HEAD` are different diffs of
+ * the same file, and a screen that showed one while labelling it the other
+ * would be wrong half the time.
+ */
+data class GitDiff(
+    val path: String,
+    val staged: Boolean,
+    val text: String,
 )
 
 /**
@@ -169,6 +185,29 @@ class GitViewModel(
     }
 
     fun setMessage(message: String) = _state.update { it.copy(message = message) }
+
+    /**
+     * Loads one file's diff for display.
+     *
+     * Loaded on demand rather than with the status: a repository can have
+     * hundreds of changed files, and reading every diff to show a list of names
+     * would make opening the panel cost what looking at one file costs.
+     */
+    fun showDiff(path: String, staged: Boolean) {
+        val repo = repository ?: return
+        viewModelScope.launch {
+            when (val result = repo.diff(path, staged)) {
+                is AppResult.Success -> _state.update {
+                    it.copy(diff = GitDiff(path, staged, result.value))
+                }
+                is AppResult.Failure -> _state.update {
+                    it.copy(errorMessage = result.error.message)
+                }
+            }
+        }
+    }
+
+    fun dismissDiff() = _state.update { it.copy(diff = null) }
 
     fun stage(paths: Collection<String>) = mutate { it.stage(paths) }
 

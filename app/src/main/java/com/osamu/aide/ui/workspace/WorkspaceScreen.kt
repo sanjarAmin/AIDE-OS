@@ -137,6 +137,8 @@ fun WorkspaceScreen(
             push = git::push,
             openSettings = onOpenSettings,
             initialise = git::initialise,
+            showDiff = git::showDiff,
+            dismissDiff = git::dismissDiff,
         )
     }
 

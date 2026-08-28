@@ -164,14 +164,38 @@ disagree.
 are layout and one is attribution. A view-model test asserts what the state
 says, and every one of these had correct state.
 
-## 9. Things known missing
+## 9. Staged and unstaged are two different diffs
+
+`diff(path, staged)` takes a flag rather than producing one answer, because
+there are genuinely two: the working tree against the index, and the index
+against `HEAD`. A file can have both at once — edit, stage, edit again — and
+they show different content.
+
+A panel that showed one while labelling it the other would be wrong half the
+time and look right every time, so the dialog says which it is and the test
+asserts both from the same file in one go: staged shows `first -> second` and
+must *not* contain the unstaged `third`, and vice versa. Either assertion alone
+passes against an implementation that ignores the flag.
+
+**The first commit has no `HEAD` to compare against.** An empty tree is the
+correct other side there — everything staged is an addition — and getting it
+wrong throws on the very first commit a user makes, which is the worst possible
+moment. It has its own test.
+
+**Diffs are bounded at 256 kB.** A generated file or a committed binary
+produces text no phone can show and that costs real memory to hold; ART's
+default heap is 192 MB. Past the bound the text is cut and says so, rather than
+the caller meeting the limit as an `OutOfMemoryError`.
+
+## 10. Things known missing
 
 - **No merge, rebase or pull.** `fetch` is deliberately separate: fetching is
   safe and can run in the background, merging can conflict, and a background
   operation that leaves a working tree in conflict is a trap. What to do with
   what arrived is not decided yet.
-- **No diff.** `GitStatus` names files; nothing produces a hunk. The editor
-  needs this before a commit screen is worth using.
+- **Diff has no syntax colouring and no word-level highlighting.** It is the
+  unified text JGit produces, shown monospaced. Adequate to decide what to
+  commit, well short of a review tool.
 - **No branch operations.** No create, switch, delete or list. `currentBranch`
   reads; nothing writes.
 - **No SSH.** Spike R6 left it deliberately unanswered; `org.eclipse.jgit.ssh.apache`

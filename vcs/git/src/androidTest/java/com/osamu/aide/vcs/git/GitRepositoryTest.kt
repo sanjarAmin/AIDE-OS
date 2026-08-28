@@ -255,6 +255,115 @@ class GitRepositoryTest {
         }
     }
 
+    /**
+     * The unstaged diff: the working tree against the index.
+     *
+     * What a user is deciding about when they look at a changed file and have
+     * not staged it yet.
+     */
+    @Test
+    fun an_unstaged_edit_has_a_diff() = runTest {
+        identify()
+        repository().use { repo ->
+            File(repo.workTree, "a.txt").writeText("first\n")
+            repo.stage(listOf("a.txt")).orFail()
+            repo.commit("add a").orFail()
+
+            File(repo.workTree, "a.txt").writeText("second\n")
+
+            val diff = repo.diff("a.txt", staged = false).orFail()
+            assertTrue("no diff header:\n$diff", "a/a.txt" in diff)
+            assertTrue("the removed line is missing:\n$diff", "-first" in diff)
+            assertTrue("the added line is missing:\n$diff", "+second" in diff)
+        }
+    }
+
+    /**
+     * The staged diff: the index against HEAD, which is a *different* diff of
+     * the same file.
+     *
+     * Asserted together with the unstaged one because showing either for both
+     * would be wrong half the time, and each looks plausible alone.
+     */
+    @Test
+    fun staged_and_unstaged_diffs_are_different_views() = runTest {
+        identify()
+        repository().use { repo ->
+            val file = File(repo.workTree, "a.txt").apply { writeText("first\n") }
+            repo.stage(listOf("a.txt")).orFail()
+            repo.commit("add a").orFail()
+
+            file.writeText("second\n")
+            repo.stage(listOf("a.txt")).orFail()
+            file.writeText("third\n")
+
+            val staged = repo.diff("a.txt", staged = true).orFail()
+            assertTrue("staged should be first -> second:\n$staged", "+second" in staged)
+            assertFalse("staged must not show the unstaged edit:\n$staged", "+third" in staged)
+
+            val unstaged = repo.diff("a.txt", staged = false).orFail()
+            assertTrue("unstaged should be second -> third:\n$unstaged", "+third" in unstaged)
+            assertFalse("unstaged must not show the staged edit:\n$unstaged", "+second" in unstaged)
+        }
+    }
+
+    /**
+     * A new file's staged diff works on a repository with no commits at all.
+     *
+     * There is no HEAD to compare against, and an empty tree is the correct
+     * other side: everything staged is an addition. Getting this wrong throws
+     * on the first commit a user ever makes, which is the worst possible time.
+     */
+    @Test
+    fun a_first_commits_staged_diff_works_without_a_head() = runTest {
+        identify()
+        repository().use { repo ->
+            File(repo.workTree, "a.txt").writeText("brand new\n")
+            repo.stage(listOf("a.txt")).orFail()
+
+            val diff = repo.diff("a.txt", staged = true).orFail()
+            assertTrue("a new file's content is missing:\n$diff", "+brand new" in diff)
+            assertTrue("not reported as a new file:\n$diff", "new file" in diff)
+        }
+    }
+
+    /** An untracked file is an addition against the index. */
+    @Test
+    fun an_untracked_file_has_a_diff() = runTest {
+        identify()
+        repository().use { repo ->
+            File(repo.workTree, "new.txt").writeText("never seen\n")
+
+            val diff = repo.diff("new.txt", staged = false).orFail()
+            assertTrue("the new file's content is missing:\n$diff", "+never seen" in diff)
+        }
+    }
+
+    /**
+     * A diff too large to be worth holding is cut, and says so.
+     *
+     * ART's default heap is 192 MB and a generated file can be tens of them.
+     * The alternative to a bound is discovering it as an OutOfMemoryError.
+     */
+    @Test
+    fun a_huge_diff_is_truncated_rather_than_held_whole() = runTest {
+        identify()
+        repository().use { repo ->
+            File(repo.workTree, "big.txt").writeText(
+                buildString {
+                    repeat(40_000) { append("line ").append(it).append('\n') }
+                },
+            )
+
+            val diff = repo.diff("big.txt", staged = false).orFail()
+            assertTrue("not truncated: ${diff.length} chars", diff.endsWith("kB."))
+            assertTrue(
+                "truncated far past the bound: ${diff.length}",
+                diff.length < GitRepository.MAX_DIFF_BYTES + 1_000,
+            )
+        }
+    }
+
     @Test
     fun history_comes_back_newest_first() = runTest {
         identify()

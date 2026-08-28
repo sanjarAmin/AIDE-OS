@@ -255,6 +255,47 @@ class GitViewModelTest {
         assertEquals(listOf("initial"), viewModel.state.value.recent.map { it.summary })
     }
 
+    /**
+     * The panel can show what actually changed, not just which files did.
+     *
+     * Loaded on demand, so this asserts the round trip a tap makes: ask for one
+     * path, get that path's diff back, and be able to put it away.
+     */
+    @Test
+    fun a_changed_file_can_be_looked_at() = runTest(timeout = 2.minutes) {
+        seed()
+        viewModel.open(moduleDir)
+        await("the repository to open") { viewModel.state.value.isRepository == true }
+
+        val file = File(moduleDir, "notes.txt").apply { writeText("before\n") }
+        viewModel.refresh()
+        await("the file") { viewModel.state.value.status.untracked.isNotEmpty() }
+        viewModel.stage(listOf("app/notes.txt"))
+        await("staging") { viewModel.state.value.status.staged.isNotEmpty() }
+        viewModel.commit()
+        // No message set, so that commit is refused -- which is fine, the point
+        // is the file is tracked. Commit it properly.
+        viewModel.setMessage("add notes")
+        viewModel.commit()
+        await("the commit") { viewModel.state.value.recent.firstOrNull()?.summary == "add notes" }
+
+        file.writeText("after\n")
+        viewModel.refresh()
+        await("the edit") { viewModel.state.value.status.modified.isNotEmpty() }
+
+        viewModel.showDiff("app/notes.txt", staged = false)
+        await("the diff") { viewModel.state.value.diff != null }
+
+        val diff = viewModel.state.value.diff!!
+        assertEquals("app/notes.txt", diff.path)
+        assertEquals(false, diff.staged)
+        assertTrue("the old line is missing:\n${diff.text}", "-before" in diff.text)
+        assertTrue("the new line is missing:\n${diff.text}", "+after" in diff.text)
+
+        viewModel.dismissDiff()
+        assertEquals(null, viewModel.state.value.diff)
+    }
+
     /** **"push" in the acceptance test**, asserted on the receiving repository. */
     @Test
     fun pushing_lands_the_commit_on_the_remote() = runTest(timeout = 2.minutes) {

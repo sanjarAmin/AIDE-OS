@@ -8,13 +8,21 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.withContext
 import org.eclipse.jgit.api.Git
 import org.eclipse.jgit.api.errors.EmptyCommitException
+import org.eclipse.jgit.diff.DiffFormatter
+import org.eclipse.jgit.dircache.DirCacheIterator
 import org.eclipse.jgit.lib.Constants
 import org.eclipse.jgit.lib.PersonIdent
 import org.eclipse.jgit.revwalk.RevCommit
+import org.eclipse.jgit.revwalk.RevWalk
 import org.eclipse.jgit.transport.CredentialsProvider
 import org.eclipse.jgit.transport.RefSpec
 import org.eclipse.jgit.transport.RemoteRefUpdate
 import org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider
+import org.eclipse.jgit.treewalk.AbstractTreeIterator
+import org.eclipse.jgit.treewalk.CanonicalTreeParser
+import org.eclipse.jgit.treewalk.EmptyTreeIterator
+import org.eclipse.jgit.treewalk.FileTreeIterator
+import org.eclipse.jgit.treewalk.filter.PathFilter
 import java.io.Closeable
 import java.io.File
 import java.util.Date
@@ -152,6 +160,73 @@ class GitRepository internal constructor(
                 )
             }
             AppResult.Success(commit.toModel())
+        }
+
+    /**
+     * The unified diff for one path, as text.
+     *
+     * [staged] chooses which comparison: false is the working tree against the
+     * index, which is what an unstaged change is; true is the index against
+     * `HEAD`, which is what would be committed. They are different diffs of the
+     * same file and a panel that showed one for both would be lying half the
+     * time.
+     *
+     * **Bounded, and the bound is not a detail.** A generated file or a
+     * committed binary produces a diff that no phone screen can show and that
+     * costs real memory to hold as a string. Past [MAX_DIFF_BYTES] the text is
+     * cut and says so, rather than the caller discovering the limit as an
+     * out-of-memory on a device with a 192 MB heap.
+     *
+     * Empty text is a real answer, not a failure: a file whose mode changed, or
+     * one JGit considers binary, has no textual diff to show.
+     */
+    suspend fun diff(path: String, staged: Boolean): AppResult<String> =
+        io("Could not read the changes") {
+            val repository = git.repository
+            val output = java.io.ByteArrayOutputStream()
+
+            DiffFormatter(output).use { formatter ->
+                formatter.setRepository(repository)
+                formatter.pathFilter = PathFilter.create(path)
+
+                val old: AbstractTreeIterator
+                val new: AbstractTreeIterator
+                if (staged) {
+                    // HEAD against the index. On a repository with no commits
+                    // there is no HEAD to compare against, and an empty tree is
+                    // the correct other side rather than an error: everything
+                    // staged is an addition.
+                    val head = repository.resolve(Constants.HEAD)
+                    old = if (head == null) {
+                        EmptyTreeIterator()
+                    } else {
+                        CanonicalTreeParser().apply {
+                            RevWalk(repository).use { walk ->
+                                reset(repository.newObjectReader(), walk.parseTree(head))
+                            }
+                        }
+                    }
+                    new = DirCacheIterator(repository.readDirCache())
+                } else {
+                    old = DirCacheIterator(repository.readDirCache())
+                    new = FileTreeIterator(repository)
+                }
+
+                formatter.format(formatter.scan(old, new))
+            }
+
+            val bytes = output.toByteArray()
+            val text = String(
+                bytes.copyOf(minOf(bytes.size, MAX_DIFF_BYTES)),
+                Charsets.UTF_8,
+            )
+            AppResult.Success(
+                if (bytes.size > MAX_DIFF_BYTES) {
+                    text + "\n... truncated at ${MAX_DIFF_BYTES / 1024} kB."
+                } else {
+                    text
+                },
+            )
         }
 
     /**
@@ -311,7 +386,11 @@ class GitRepository internal constructor(
         }
     }
 
-    private companion object {
+    /**
+     * Internal rather than private so a test can assert against the bound it
+     * is checking, instead of restating the number and drifting from it.
+     */
+    internal companion object {
         const val REFS_HEADS = "refs/heads/"
         const val REMOTE_SECTION = "remote"
         const val URL_KEY = "url"
@@ -322,6 +401,14 @@ class GitRepository internal constructor(
          * thing to store and to get wrong.
          */
         const val TOKEN_USERNAME = "aide-os"
+
+        /**
+         * As much of one file's diff as is worth holding in memory on a phone.
+         *
+         * 256 kB is far more than anyone reads and far less than a generated
+         * file costs. ART's default heap is 192 MB.
+         */
+        const val MAX_DIFF_BYTES = 256 * 1024
 
         /** Everything else JGit can report is a refusal. */
         val ACCEPTED = setOf(

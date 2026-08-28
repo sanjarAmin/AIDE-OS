@@ -1,10 +1,15 @@
 package com.osamu.aide.ui.workspace
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -12,6 +17,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -43,6 +49,8 @@ data class GitActions(
     val push: () -> Unit,
     val openSettings: () -> Unit,
     val initialise: () -> Unit,
+    val showDiff: (path: String, staged: Boolean) -> Unit,
+    val dismissDiff: () -> Unit,
 )
 
 /**
@@ -89,14 +97,22 @@ fun GitPanel(
                 } else {
                     LazyColumn(Modifier.fillMaxSize()) {
                         items(staged, key = { "staged/$it" }) { path ->
-                            ChangedFile(path, isStaged = true, enabled = !state.isBusy) {
-                                actions.unstage(path)
-                            }
+                            ChangedFile(
+                                path = path,
+                                isStaged = true,
+                                enabled = !state.isBusy,
+                                onToggle = { actions.unstage(path) },
+                                onOpen = { actions.showDiff(path, true) },
+                            )
                         }
                         items(unstaged, key = { "unstaged/$it" }) { path ->
-                            ChangedFile(path, isStaged = false, enabled = !state.isBusy) {
-                                actions.stage(path)
-                            }
+                            ChangedFile(
+                                path = path,
+                                isStaged = false,
+                                enabled = !state.isBusy,
+                                onToggle = { actions.stage(path) },
+                                onOpen = { actions.showDiff(path, false) },
+                            )
                         }
                     }
                 }
@@ -105,6 +121,65 @@ fun GitPanel(
             CommitRow(state, staged.isNotEmpty(), actions)
         }
     }
+
+    state.diff?.let { diff -> DiffDialog(diff, actions.dismissDiff) }
+}
+
+/**
+ * One file's diff.
+ *
+ * A dialog rather than a pane in the dock: the dock is 340dp at its tallest and
+ * a diff is the one thing here that genuinely wants the screen. Monospace and
+ * horizontally scrollable, because a wrapped diff line is unreadable -- the
+ * leading `+`/`-` stops lining up and that column is the whole point.
+ */
+@Composable
+private fun DiffDialog(diff: GitDiff, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text(diff.path.substringAfterLast('/'), style = MaterialTheme.typography.titleMedium)
+                Text(
+                    // Says which of the two diffs this is. They differ, and a
+                    // label that did not distinguish them would be wrong half
+                    // the time.
+                    text = if (diff.staged) "Staged, against the last commit" else "Not staged yet",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        text = {
+            if (diff.text.isBlank()) {
+                Text(
+                    "No text to show. The file may be binary, or only its mode changed.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            } else {
+                Column(
+                    Modifier
+                        .heightIn(max = 420.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    Text(
+                        text = diff.text,
+                        style = CodeTextStyle,
+                        softWrap = false,
+                        modifier = Modifier
+                            .horizontalScroll(rememberScrollState())
+                            .semantics { contentDescription = "Diff" },
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.semantics { contentDescription = "Close diff" },
+            ) { Text("Close") }
+        },
+    )
 }
 
 @Composable
@@ -152,6 +227,7 @@ private fun ChangedFile(
     isStaged: Boolean,
     enabled: Boolean,
     onToggle: () -> Unit,
+    onOpen: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -174,6 +250,9 @@ private fun ChangedFile(
                 },
             )
         }
+        // The path opens the diff; the icon stages. Two targets in one row,
+        // because "look at it" and "commit it" are different decisions and
+        // making one of them require a long press hides it.
         Text(
             text = path,
             style = CodeTextStyle,
@@ -182,6 +261,9 @@ private fun ChangedFile(
             } else {
                 MaterialTheme.colorScheme.onSurfaceVariant
             },
+            modifier = Modifier
+                .clickable(enabled = enabled, onClick = onOpen)
+                .semantics { contentDescription = "Show changes in $path" },
         )
     }
 }
