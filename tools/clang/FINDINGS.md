@@ -250,6 +250,31 @@ the app's own process can answer a question about exec or SELinux here.**
 `run-as` is still useful for looking at files, and it is what §4's diagnosis
 rests on. It is worthless for deciding what the app may execute.
 
+## 8. Distribution: one gzipped tar per ABI, on this repo's releases
+
+Published as `clang-21.1.8`, the same way the Kotlin compiler is, and for the
+same reason: nothing upstream ships a clang that runs on Android, so if this
+project does not host one, there is nothing to point `:toolchain:manager` at.
+
+| Asset | Download | Installed | SHA-1 |
+|---|---|---|---|
+| `clang-21.1.8-aarch64.tar.gz` | 152 MiB | 551 MB | `17ffea7d…` |
+| `clang-21.1.8-x86_64.tar.gz` | 155 MiB | 600 MB | `008cc6f6…` |
+
+**Gzipped, and that is not a detail.** The tar is 538 MB and compresses 3.5×;
+the difference is between a download a phone finishes and one it does not.
+
+**Tar, not zip, and this is not a preference.** A zip cannot carry symlinks, and
+`clang++ -> clang` is the whole of what selects C++ mode. An installer that
+flattened it would produce a toolchain that silently compiles C when asked for
+C++ — not an error, just wrong output.
+
+The alternative considered was fetching Termux's 16 `.deb` packages on the
+device: better provenance, no re-hosting, but sixteen downloads instead of one
+and `ar` plus `xz` handling on the device. Rejected for the download shape.
+`fetch-toolchain.sh` still produces the archives, so the provenance is a script
+away rather than lost.
+
 ## What this means for M7
 
 | Module | What it has to do |
@@ -260,7 +285,8 @@ rests on. It is worthless for deciding what the app may execute.
 
 ## Open
 
-- **Size.** 600 MB installed is a lot to ask of a phone. 107 MB is the sysroot
+- **Size.** 600 MB installed is a lot to ask of a phone, even at 155 MiB
+  down. 107 MB is the sysroot
   headers, 47 MB the clang resource dir, 139 MB `libLLVM.so`, and ~115 MB of
   `bin/` is the `llvm` package — `opt`, `llc` and friends, which a compile
   never touches but which came in through the dependency walk. Trimming looks
