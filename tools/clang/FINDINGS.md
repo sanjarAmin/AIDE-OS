@@ -4,7 +4,7 @@
 unmodified on Android from app-private storage, compiles C and C++ for the
 device, and the shared library it produces loads into the app and executes. Reproduce the
 toolchain with `fetch-toolchain.sh`; the evidence is `spike/clang`, eight
-instrumented tests.
+instrumented tests, green on **API 34 x86_64 and API 36 arm64**.
 
 The two rules, both about what clang cannot do rather than what it can:
 
@@ -20,7 +20,8 @@ both were named there as open questions.
 
 | Property | Value |
 |---|---|
-| clang | 21.1.8, `x86_64-unknown-linux-android24` (and aarch64) |
+| clang | 21.1.8, for `x86_64` and `aarch64-linux-android` |
+| Verified on | API 34 x86_64 emulator; **Android 16 / API 36 arm64** (nubia NX809J) |
 | Download | 100 MB, 16 `.deb` packages |
 | `toolchain.tar` | 549 MB |
 | Installed | 600 MB, ~900 symlinks |
@@ -144,6 +145,8 @@ do for itself.
 Hand-writing the linker command is the alternative. It would be a copy of
 clang's per-target logic and would go stale the first time the toolchain moves.
 
+If you try to reproduce this failure by hand and it *succeeds*, read §7 before concluding anything: `run-as` is allowed to do what the app is not.
+
 This generalises past linking: **any** tool clang wants to spawn has the same
 problem and the same answer. `:engine:fast` should own it as a strategy —
 plan with the driver, execute with the linker — not as a special case for
@@ -199,6 +202,54 @@ APK it is building, beside the library that needs it — which is what the NDK's
 own Gradle plugin does. That copy is a `:engine:fast` job and has no other
 natural owner.
 
+## 6. It holds on Android 16 / arm64, unchanged
+
+The one platform question R10 could not answer from an emulator. Run on a
+nubia NX809J (Red Magic 11S Pro): **Android 16, API 36, arm64-v8a, SELinux
+enforcing**, two API levels above anything else tested here and an OEM ROM
+rather than an AOSP image.
+
+All eight tests pass, and — this is the part that matters — they pass
+*including the two that assert failure*. clang still cannot locate itself,
+still cannot run the linker. The model is not merely "still working"; it is
+identical.
+
+| | API 34 x86_64 | API 36 arm64 |
+|---|---|---|
+| Compile a JNI `.c` | 50–180 ms | 87 ms warm, 125 ms cold |
+| Plan a link (`-###`) | ~50 ms | 101 ms |
+| Whole suite, warm | 2.3 s | 2.7 s |
+| Installed size | 600 MB | 551 MB |
+
+This is the direct answer to risk **R9** — "the `linker64` exec route closing in
+a future Android". Two API levels on, on a vendor ROM, it has not closed.
+
+## 7. `adb shell run-as` is not the app, and will contradict these findings
+
+**Do not verify any of this by hand through `run-as`.** It runs in a different
+SELinux domain — `runas_app`, not `untrusted_app` — and that domain is allowed
+to `execve` out of app-private storage. So the probe that §3 says must fail:
+
+```
+$ adb shell run-as <pkg> sh -c '... clang-21 ... -shared b.o -o direct.so'
+rc=0
+-rwxrwxrwx  5304  direct.so
+```
+
+succeeds, on **both** the phone and the emulator, while the in-process test
+asserting the same thing fails the same link on the same device seconds later.
+Nothing about the platform differs; only who is asking.
+
+This was found by re-checking §3 on the phone and briefly believing Android 16
+had *relaxed* the restriction. It had not — `run-as` had simply never been
+subject to it, and every manual probe during this spike had gone through
+`run-as` without that being noticed.
+
+The consequence is a rule, not a caveat: **only an instrumented test running in
+the app's own process can answer a question about exec or SELinux here.**
+`run-as` is still useful for looking at files, and it is what §4's diagnosis
+rests on. It is worthless for deciding what the app may execute.
+
 ## What this means for M7
 
 | Module | What it has to do |
@@ -215,24 +266,5 @@ natural owner.
   never touches but which came in through the dependency walk. Trimming looks
   possible and is untested; `llvm-ar` and `llvm-strip` are probably wanted for
   static libraries later, so it is not simply "drop the package".
-- **arm64 — the artifacts check out, running them needs hardware.**
-  `fetch-toolchain.sh <dir> aarch64` produces a 538 MB tree, and every piece
-  the design depends on is right: `clang-21` and `ld.lld` are AArch64 ELF64
-  PIE with `/system/bin/linker64` as their interpreter — R9's exact route —
-  alongside the aarch64 sysroot, the clang resource dir, the libc++ headers,
-  `libclang_rt.builtins-aarch64-android.a`, and the
-  `clang++-21 → clang++ → clang-21` symlink chain intact through the tar.
-
-  What is unverified is that they *run*, and that cannot be done here. **The
-  Android emulator refuses arm64 system images on an x86_64 host** — `Avd's CPU
-  Architecture 'arm64' is not supported by the QEMU2 emulator on x86_64 host`
-  — despite shipping a `qemu-system-aarch64` binary, which makes the tree
-  misleading. So this needs a real arm64 device on adb; there is no software
-  route to it from this machine.
-
-  The residual risk is low and worth stating precisely: what is untested is
-  Android's behaviour (the exec route, W^X, SELinux categories), not the
-  architecture, and none of those findings are CPU-dependent. Nothing here
-  suggests arm64 differs — it simply has not been run.
 - **Parallelism.** One job at a time is a correctness rule per *invocation*, not
   a ban on running several invocations concurrently. Untested.

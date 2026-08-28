@@ -74,6 +74,12 @@ failed to load still produces a clean compile.
 - **API 30 is the toolchain floor.** aapt2's libbase needs it, and the compiler
   dex archive is built for it. `minSdk` stays 26 — the editor works below 30 —
   so build features must gate at runtime, not fail at exec time.
+- **`adb shell run-as` is not the app.** It runs in `runas_app`, which *may*
+  `execve` out of app-private storage — so a hand probe through it will
+  cheerfully do things the app is forbidden to do, and appear to disprove a
+  finding. Only an instrumented test in the app's own process settles a
+  question about exec or SELinux. `tools/clang/FINDINGS.md` §7.
+
 - **clang runs on device, but the driver cannot spawn anything.** Compiling
   and linking in one `clang` invocation fails, and so does letting clang run
   `ld.lld` at all — both because a spawned tool has to `execve` out of app
