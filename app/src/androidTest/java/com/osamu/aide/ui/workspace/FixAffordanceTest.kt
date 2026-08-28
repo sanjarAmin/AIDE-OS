@@ -49,6 +49,12 @@ class FixAffordanceTest {
             BottomToolDock(
                 buildState = BuildUiState(),
                 problems = problems,
+                // This test is about the Problems tab. The git tab is passed
+                // its empty state rather than being given a default in the
+                // dock, so a real caller that forgets to wire it fails to
+                // compile instead of silently showing an empty panel.
+                gitState = GitUiState(),
+                gitActions = GitActions({}, {}, {}, {}, {}, {}),
                 onDiagnosticClick = {},
                 onFixDiagnostic = onFix,
                 onLaunchIntent = {},

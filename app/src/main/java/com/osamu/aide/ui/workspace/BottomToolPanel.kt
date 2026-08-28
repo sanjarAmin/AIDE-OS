@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ListAlt
 import androidx.compose.material.icons.filled.AutoFixHigh
+import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayCircleOutline
@@ -44,6 +45,7 @@ import com.osamu.aide.engine.api.Diagnostic
 enum class ToolTab(val title: String, val icon: ImageVector) {
     BUILD("Build", Icons.Default.PlayCircleOutline),
     PROBLEMS("Problems", Icons.Default.BugReport),
+    GIT("Git", Icons.Default.AccountTree),
     LOGCAT("Logcat", Icons.AutoMirrored.Filled.ListAlt),
     TERMINAL("Terminal", Icons.Default.Terminal),
 }
@@ -65,6 +67,8 @@ enum class ToolTab(val title: String, val icon: ImageVector) {
 fun BottomToolDock(
     buildState: BuildUiState,
     problems: List<Diagnostic>,
+    gitState: GitUiState,
+    gitActions: GitActions,
     onDiagnosticClick: (Diagnostic) -> Unit,
     onFixDiagnostic: (Diagnostic) -> Unit,
     onLaunchIntent: (Intent) -> Unit,
@@ -96,6 +100,9 @@ fun BottomToolDock(
                         val badgeCount = when (tab) {
                             ToolTab.PROBLEMS -> problems.size
                             ToolTab.BUILD -> if (buildState.isRunning) 1 else 0
+                            // The number of files a commit would take: the one
+                            // figure worth carrying on a tab nobody is looking at.
+                            ToolTab.GIT -> gitState.status.staged.size
                             else -> 0
                         }
 
@@ -269,6 +276,7 @@ fun BottomToolDock(
                     // stream or shell prompt reads as a working feature, and
                     // the first thing it teaches the user is that the UI lies
                     // about what the app can do.
+                    ToolTab.GIT -> GitPanel(state = gitState, actions = gitActions)
                     ToolTab.LOGCAT -> NotBuiltYet(
                         "Reading the running app's log needs the installed build to be " +
                             "attached to. Nothing here is wired up yet.",

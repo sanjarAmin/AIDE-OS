@@ -104,6 +104,9 @@ fun WorkspaceScreen(
     onOpenSettings: () -> Unit,
     viewModel: WorkspaceViewModel,
     assistant: AssistantViewModel = koinViewModel(),
+    // Its own view model rather than a slice of WorkspaceViewModel: it owns an
+    // open GitRepository, which holds file locks and has to be closed.
+    git: GitViewModel = koinViewModel(),
     // A single instance for the whole app: it holds the compiled tree-sitter
     // queries, and rebuilding them per screen is the cost the cache exists to
     // avoid.
@@ -112,6 +115,7 @@ fun WorkspaceScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val chat by assistant.state.collectAsStateWithLifecycle()
     val isCompleting by assistant.completing.collectAsStateWithLifecycle()
+    val gitState by git.state.collectAsStateWithLifecycle()
     var isChatOpen by remember { mutableStateOf(false) }
 
     // One tap: open the panel and ask, rather than opening it and leaving the
@@ -121,6 +125,17 @@ fun WorkspaceScreen(
     val askToFix: (Diagnostic) -> Unit = { diagnostic ->
         isChatOpen = true
         assistant.send(fixRequest(diagnostic, projectDir))
+    }
+
+    val gitActions = remember(git) {
+        GitActions(
+            stage = { git.stage(listOf(it)) },
+            unstage = { git.unstage(listOf(it)) },
+            setMessage = git::setMessage,
+            commit = git::commit,
+            push = git::push,
+            openSettings = onOpenSettings,
+        )
     }
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -148,6 +163,7 @@ fun WorkspaceScreen(
     LaunchedEffect(projectDir) {
         viewModel.open(projectDir)
         assistant.open(projectDir)
+        git.open(projectDir)
     }
     LaunchedEffect(viewModel) { viewModel.jumps.collect { pendingJump = it } }
 
@@ -281,12 +297,26 @@ fun WorkspaceScreen(
                         )
                     },
                     toolPane = {
-                        BuildPane(
-                            state = state.build,
-                            onDiagnosticClick = viewModel::openDiagnostic,
-                            onFixDiagnostic = askToFix,
-                            onLaunchIntent = activityLauncher::launch,
-                        )
+                        // Stacked rather than tabbed, unlike the phone dock.
+                        // This pane is tall and narrow, and the two things it
+                        // shows are the two a user alternates between while
+                        // finishing a change: what the build said, and what is
+                        // about to be committed. Tabbing them would hide one
+                        // behind the other for no gain in space.
+                        Column(Modifier.fillMaxSize()) {
+                            Box(Modifier.weight(1f)) {
+                                BuildPane(
+                                    state = state.build,
+                                    onDiagnosticClick = viewModel::openDiagnostic,
+                                    onFixDiagnostic = askToFix,
+                                    onLaunchIntent = activityLauncher::launch,
+                                )
+                            }
+                            HorizontalDivider()
+                            Box(Modifier.weight(1f).padding(8.dp)) {
+                                GitPanel(state = gitState, actions = gitActions)
+                            }
+                        }
                     },
                     editor = {
                         EditorArea(
@@ -308,6 +338,8 @@ fun WorkspaceScreen(
                             // The wide layout already has a side tool pane; a
                             // dock as well would report the same build twice.
                             showDock = state.isBuildPanelOpen && !mode.showsToolPane,
+                            gitState = gitState,
+                            gitActions = gitActions,
                         )
                     },
                 )
@@ -397,6 +429,8 @@ private fun EditorArea(
     onLaunchIntent: (Intent) -> Unit,
     onCloseDock: () -> Unit,
     showDock: Boolean,
+    gitState: GitUiState,
+    gitActions: GitActions,
 ) {
     Column(Modifier.fillMaxSize()) {
         if (state.openFiles.isNotEmpty()) {
@@ -474,6 +508,8 @@ private fun EditorArea(
                 // The build's view of the project, plus what the language
                 // service has since found in the file being edited.
                 problems = state.analysis.diagnostics + state.build.diagnostics,
+                gitState = gitState,
+                gitActions = gitActions,
                 onDiagnosticClick = onDiagnosticClick,
                 onFixDiagnostic = onFixDiagnostic,
                 onLaunchIntent = onLaunchIntent,

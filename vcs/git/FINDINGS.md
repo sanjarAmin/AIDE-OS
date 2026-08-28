@@ -104,7 +104,31 @@ Caught by a test asserting the round trip, not by review. **Where a store
 normalises, validation has to normalise first**, or the field refuses what the
 store would take.
 
-## 7. Things known missing
+## 7. A reload that clears the error clears the one you just set
+
+Not a JGit finding, but it happened **twice** in one milestone and both times
+the symptom was a failure with no message anywhere.
+
+Both view models follow the same shape: do something, then reload so the screen
+matches what is now on disk. Both reloads set `errorMessage = null` on success,
+because a successful load means nothing is wrong. And both operations set an
+error *before* reloading, so the reload erased it.
+
+- `ProjectsViewModel`: cloning a repository with no Android module reported
+  "Cloned, but ..." and then `refresh()` wiped it. The user saw a clone that
+  finished and produced nothing.
+- `GitViewModel`: a commit refused for having no identity set the error, and the
+  reload after it cleared it. The commit silently did not happen.
+
+Two different fixes, because the right one differs. `ProjectsViewModel` awaits
+the reload and then reports, so the message is last. `GitViewModel.reload`
+instead only replaces `errorMessage` when the read it just did actually failed,
+because it is called after every operation and cannot know which.
+
+**The rule worth keeping: a refresh may clear only errors it is in a position
+to have resolved.** Anything else it must leave alone.
+
+## 8. Things known missing
 
 - **No merge, rebase or pull.** `fetch` is deliberately separate: fetching is
   safe and can run in the background, merging can conflict, and a background
@@ -121,5 +145,12 @@ store would take.
   cannot yet be completed into a full one.
 - **No `.gitignore` awareness beyond what JGit does for `status`.** Nothing
   helps a user write one, and an Android project without one commits `build/`.
-- **Nothing is wired into `:app`.** M8's acceptance test is "clone from GitHub,
-  edit, commit, push", and this module is only the first three words of it.
+- **No history browser.** The panel shows the last ten commits as one line
+  each. There is no way to see a commit, let alone what it changed.
+- **No conflict resolution.** `GitStatus.conflicting` is reported and blocks a
+  commit; nothing helps the user out of that state, and without `pull` there is
+  currently no way into it either.
+- **Push has no upstream handling.** It pushes the current branch to a
+  same-named branch on `origin` and reports a rejection. It cannot set an
+  upstream, force-push, or push a branch that does not exist on the remote yet
+  under a different name.

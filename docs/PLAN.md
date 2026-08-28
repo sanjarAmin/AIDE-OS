@@ -23,6 +23,7 @@
 | 🟢 | **M4** Deps + Kotlin | A Kotlin project using `androidx.appcompat` builds on device: 41 artifacts resolved, kotlinc ahead of ECJ. `engine/deps/FINDINGS.md` |
 | 🟡 | **M5** AI ⭐ | Feature-complete; three assertions parked until a live API key exists. Everything testable without one is tested. `ai/core/FINDINGS.md` |
 | 🟢 | **M6** Compose | A Compose app builds, installs, launches and **draws**, on device. Six fixes, none of them visible to a build-only test. `engine/deps/FINDINGS.md` |
+| 🟡 | **M8** Git + Terminal | Git works end to end: clone, edit, stage, commit, push, with identity and tokens in the Keystore. The terminal half is untouched. `vcs/git/FINDINGS.md` |
 
 **M2 in detail.** All six stages exist in `:engine:fast` and run on a device:
 aapt2 compile → aapt2 link → ECJ → D8 → package → apksig, behind
@@ -399,7 +400,30 @@ M0–M5 is the real v1.0. Everything from M6 on is expansion.
    SSH is deliberately unanswered; HTTPS with a token is the designed path.
    `tools/git/FINDINGS.md`.
 
-   The terminal half is untouched and is the larger unknown of M8.
+   **The git half is now done, end to end.** `:vcs:git` wraps JGit;
+   `GitViewModelTest` drives the acceptance test's own words at the view-model
+   layer -- edit, stage, commit, push -- and asserts the commit in the object
+   database and again in the *receiving* repository, because JGit reports a
+   rejected push through a status rather than by throwing.
+   `ProjectsCloneTest` covers the other half: a repository clones into the
+   workspace and turns up as a project.
+
+   Two things are parked rather than done. Pushing to **GitHub** specifically
+   needs a real token, which sits in the same category as M5's live-API
+   assertions -- spike R6 proved the HTTPS transport and the tests prove the
+   pack generation, so what is unverified is only whether GitHub accepts the
+   result. And **SSH is deliberately unanswered**: it is a separate JGit
+   artifact and a separate key-management problem, and HTTPS with a token is
+   the designed path.
+
+   Six bugs were found by tests rather than by review, and the two worth
+   remembering are the same bug twice: a refresh that clears `errorMessage` on
+   success, called *after* an operation that set one, made two different
+   failures completely silent. `vcs/git/FINDINGS.md` section 7.
+
+   The terminal half is untouched and is the larger unknown of M8. It needs a
+   PTY, which is the first thing in this project that cannot be done in pure
+   JVM at all.
 
 ~~Before building `:build:fast`, verify the remaining "pure JVM, therefore fine
 on ART" assumptions — ECJ, D8/R8 and apksig.~~ Done: spike R2b. All three run,
