@@ -187,6 +187,33 @@ class DependencyResolverTest {
     }
 
     /**
+     * The same number, for a graph that actually pays for alignment.
+     *
+     * [a_cached_graph_resolves_quickly] measures `appcompat`, which publishes
+     * constraints that raise nothing -- so it never triggers the second
+     * collect and would report a comfortable figure however slow alignment
+     * became. The Compose graph raises twenty modules and does, which makes it
+     * the one worth guarding.
+     *
+     * Reported as well as asserted: the bound is loose because it is a warm
+     * emulator, and the point is to catch a regression of the kind that turned
+     * a 635 ms resolve into 24 s when metadata reads were serial.
+     */
+    @Test
+    fun an_aligned_graph_still_resolves_quickly_warm() = runTest(timeout = NETWORK_TIMEOUT) {
+        val compose = arrayOf(
+            "androidx.activity:activity-compose:1.13.0",
+            "androidx.compose.foundation:foundation-android:1.12.0",
+        )
+        resolve(*compose)
+
+        val warm = measureTimeMillis { resolve(*compose) }
+        Log.i(TAG, "warm resolve of an aligned graph: $warm ms")
+
+        assertTrue("a cached aligned resolve took $warm ms", warm < 15_000)
+    }
+
+    /**
      * The number that decides whether this is usable day to day.
      *
      * Reported rather than asserted. The first resolve is network-bound and

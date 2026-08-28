@@ -21,7 +21,7 @@
 | 🟢 | **M1** Editor | Highlighting, tabs, symbol row, find/replace, diagnostics gutter, and SAF import. `editor/FINDINGS.md`, `core/fs/FINDINGS.md` |
 | 🟢 | **M2** First APK ⭐ | **The thesis holds, and it is reachable.** A person can create a project, edit it, tap Build, and end up with the app installed — all on the device. |
 | 🟢 | **M3** Intelligence | Completion, diagnostics-as-you-type, go-to-definition, signature hints. **76 ms** warm completion on an AndroidX type against the 200 ms budget. |
-| 🟢 | **M4** Deps + Kotlin | A Kotlin project using `androidx.appcompat` builds on device: 41 artifacts resolved, kotlinc ahead of ECJ. `engine/deps/FINDINGS.md` |
+| 🟢 | **M4** Deps + Kotlin | A Kotlin project using `androidx.appcompat` builds on device: 41 artifacts resolved, kotlinc ahead of ECJ. Resolution reads Gradle Module Metadata, so AndroidX aligns the way Gradle aligns it. `engine/deps/FINDINGS.md` |
 | 🟡 | **M5** AI ⭐ | Feature-complete; three assertions parked until a live API key exists. Everything testable without one is tested. `ai/core/FINDINGS.md` |
 | 🟢 | **M6** Compose | A Compose app builds, installs, launches and **draws**, on device. Six fixes, none of them visible to a build-only test. `engine/deps/FINDINGS.md` |
 | 🟡 | **M8** Git + Terminal | Git works end to end: clone, edit, stage, commit, push, with identity and tokens in the Keystore. The terminal half is untouched. `vcs/git/FINDINGS.md` |
@@ -378,9 +378,13 @@ M0–M5 is the real v1.0. Everything from M6 on is expansion.
    aapt2 generating no `R` class for any library package.
 
    The new document is `engine/deps/FINDINGS.md`; `engine/fast/FINDINGS.md`
-   section 12 has this module's half. The honest summary is that two of the
-   three gaps are papered over with **curated tables that will rot**, and the
-   fix that does not is reading `.module` files, which is not written.
+   section 12 has this module's half. The honest summary at the time was that
+   two of the three gaps were papered over with curated tables that would rot,
+   and the fix that does not is reading `.module` files. **That is now
+   written.** `:engine:deps` reads Gradle Module Metadata, which is where all
+   three mechanisms actually live; the absorption table was deleted and
+   verified gone by emptying it and watching this same end-to-end test still
+   build, install and draw.
 
 10. **M8 Git + Terminal — spiked, and the git half is unblocked.** Spike R6
    ran JGit 7.7.1 on a device: `FS.detect()`, init, add, commit, `RevWalk`,

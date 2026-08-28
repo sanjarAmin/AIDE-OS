@@ -3,6 +3,11 @@ package com.osamu.aide.engine.deps
 import com.osamu.aide.core.common.AppError
 import com.osamu.aide.core.common.AppResult
 import com.osamu.aide.core.common.DispatcherProvider
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.apache.maven.repository.internal.MavenRepositorySystemUtils
 import org.eclipse.aether.DefaultRepositorySystemSession
@@ -16,6 +21,7 @@ import org.eclipse.aether.graph.DependencyVisitor
 import org.eclipse.aether.repository.LocalRepository
 import org.eclipse.aether.repository.RemoteRepository
 import org.eclipse.aether.resolution.ArtifactRequest
+import org.eclipse.aether.util.repository.SimpleResolutionErrorPolicy
 import org.eclipse.aether.util.graph.transformer.ChainedDependencyGraphTransformer
 import org.eclipse.aether.util.graph.transformer.ConflictResolver
 import org.eclipse.aether.util.graph.transformer.JavaDependencyContextRefiner
@@ -29,19 +35,30 @@ import java.io.File
 /**
  * Turns declared coordinates into files a build can use.
  *
- * Resolution happens in **two phases**, and that is a requirement rather than a
- * structure choice. Maven's model has no concept of an `aar`: a dependency with
- * no explicit `<type>` defaults to `jar`, and AndroidX puts the real packaging
- * in Gradle Module Metadata, which Maven cannot read. So the collector asks for
- * `lifecycle-runtime-2.6.2.jar`, a file that has never existed, and the
- * all-or-nothing `resolveDependencies` call fails the entire graph over it.
- * Collecting first and resolving each node separately -- falling back from
- * `jar` to `aar` -- is what produces files. In a plain `appcompat` graph exactly
- * one artifact of 46 needs the fallback, and one is enough.
+ * Resolution happens in **phases**, and the shape is forced rather than chosen.
  *
- * The whole of `tools/deps/FINDINGS.md` applies here; the three other
- * workarounds live in [AndroidRepositorySystemSupplier] and
- * [HighestVersionSelector].
+ * *Collect.* Maven's model has no concept of an `aar`: a dependency with no
+ * explicit `<type>` defaults to `jar`, and AndroidX puts the real packaging in
+ * Gradle Module Metadata. So the collector asks for
+ * `lifecycle-runtime-2.6.2.jar`, a file that has never existed, and the
+ * all-or-nothing `resolveDependencies` call fails the whole graph over it.
+ * Collecting first and resolving each node separately -- falling back between
+ * `jar` and `aar` -- is what produces files. In a plain `appcompat` graph
+ * exactly one artifact of 46 needs the fallback, and one is enough.
+ *
+ * *Read metadata.* maven-resolver cannot use a `.module` file, but this can
+ * read one. [ModuleMetadata] takes two things from it that no POM can express:
+ * where a Kotlin Multiplatform root really lives, and the version floors a
+ * module publishes for its own group. Without them an AndroidX graph resolves
+ * to something that compiles and then fails at D8 or at launch. `FINDINGS.md`
+ * sections 1 to 4.
+ *
+ * *Align, filter, resolve.* The floors are applied by collecting once more, the
+ * duplicates a POM cannot see are dropped, and each surviving artifact is
+ * fetched.
+ *
+ * The whole of `tools/deps/FINDINGS.md` applies here; the other workarounds
+ * live in [AndroidRepositorySystemSupplier] and [HighestVersionSelector].
  *
  * Runs on the IO dispatcher, not the compiler one: this is almost entirely
  * network and disk, and it should not compete with a build for CPU.
@@ -75,22 +92,34 @@ class DependencyResolver(
             val system = AndroidRepositorySystemSupplier().get()
             val session = session(system)
 
-            val wanted = withoutAbsorbedModules(
-                withoutDuplicateKmpVariants(
-                    withoutSupersededModules(collect(system, session, coordinates, onProgress)),
+            val collected = collect(system, session, coordinates, onProgress)
+            // Read once and passed down, because every step below asks the same
+            // files the same questions and each read is a network round trip on
+            // a cold repository.
+            val metadata = metadataFor(system, session, collected, onProgress)
+
+            val wanted = withoutDuplicateKmpVariants(
+                withoutSupersededModules(
+                    aligned(system, session, coordinates, collected, metadata, onProgress),
                 ),
+                metadata,
             )
             val resolved = mutableListOf<ResolvedDependency>()
             val unresolved = mutableListOf<String>()
 
+            // What each module resolved to *before* alignment, so a raised
+            // version that turns out not to exist can fall back to one that
+            // does. See [resolveAligned].
+            val beforeAlignment = collected.associateBy { it.module }
+
             wanted.forEachIndexed { index, artifact ->
                 onProgress(ResolutionProgress.Downloading(artifact.label, index + 1, wanted.size))
-                val file = resolveWithAarFallback(system, session, artifact)
+                val (chosen, file) = resolveAligned(system, session, artifact, beforeAlignment)
                 if (file == null) {
                     unresolved += artifact.label
                     return@forEachIndexed
                 }
-                val dependency = asDependency(artifact, file, onProgress)
+                val dependency = asDependency(chosen, file, onProgress)
                 if (dependency == null) unresolved += artifact.label else resolved += dependency
             }
 
@@ -140,15 +169,18 @@ class DependencyResolver(
         // resolved separately and merged, 1.7.0 won on listing order alone, and
         // 1.7.0 still contains the annotations later versions moved into
         // `runtime-annotation` -- so D8 failed on a duplicate
-        // `androidx.compose.runtime.Immutable`. FINDINGS section 3.
-        //
-        // Asked for as aars: AndroidX overwhelmingly is one, and a wrong guess
-        // costs only the fallback that phase two performs anyway.
-        val roots = coordinates.map {
-            Dependency(DefaultArtifact("$it").withExtension("aar"), "compile")
-        }
+        // `androidx.compose.runtime.Immutable`. FINDINGS section 6.
+        return collectOnce(system, session, rootsFor(coordinates))
+    }
 
-        return collectOnce(system, session, roots)
+    /**
+     * The declared coordinates as Aether roots.
+     *
+     * Asked for as aars: AndroidX overwhelmingly is one, and a wrong guess
+     * costs only the fallback that phase two performs anyway.
+     */
+    private fun rootsFor(coordinates: List<Coordinate>): List<Dependency> = coordinates.map {
+        Dependency(DefaultArtifact("$it").withExtension("aar"), "compile")
     }
 
     private fun collectOnce(
@@ -176,89 +208,224 @@ class DependencyResolver(
     }
 
     /**
-     * Keeps one artifact per Kotlin Multiplatform module, preferring Android.
+     * Reads every collected artifact's `.module` file, keyed by `group:artifact`.
      *
-     * **This is the gap between Maven resolution and Gradle Module Metadata.**
-     * A KMP library publishes a root coordinate (`androidx.collection:collection`)
-     * plus one per platform (`collection-jvm`, `compose.ui:ui-android`), and the
-     * `.module` file says the root *redirects* to the platform artifact for a
-     * given target -- so Gradle resolves exactly one. maven-resolver reads
-     * `.pom` only. There each is an ordinary artifact with ordinary
-     * dependencies and nothing marks them as one module, so conflict resolution
-     * has no reason to object: they are, as far as it can tell, unrelated.
+     * Most of them have none, and that is ordinary: a plain Maven library
+     * publishes only a POM. The map is therefore sparse, and every caller has
+     * to work without an entry.
      *
-     * Both shapes of the problem show up in a single Compose graph, and both
-     * end the build at D8 with `Type ... is defined multiple times`:
+     * One pass, before anything else looks at the graph. On a cold local
+     * repository this is one request per artifact, which is why it reports
+     * progress; on a warm one it is a file read.
+     */
+    private suspend fun metadataFor(
+        system: RepositorySystem,
+        session: DefaultRepositorySystemSession,
+        artifacts: List<Artifact>,
+        onProgress: (ResolutionProgress) -> Unit,
+    ): Map<String, ModuleMetadata> = coroutineScope {
+        val done = java.util.concurrent.atomic.AtomicInteger()
+        val gate = Semaphore(METADATA_CONCURRENCY)
+
+        // **In parallel, and that is not an optimisation.** Serially this took
+        // 19 s on a *warm* local repository against a 635 ms collect -- one
+        // round trip per artifact, most of them latency. It made a resolve
+        // that fits in a build loop into one that does not, and the budget test
+        // in DependencyResolverTest is what caught it.
+        val results = artifacts.map { artifact ->
+            async {
+                gate.withPermit {
+                    val metadata = ModuleMetadata.read(system, session, repositories, artifact)
+                    onProgress(
+                        ResolutionProgress.Collecting(
+                            "metadata ${done.incrementAndGet()}/${artifacts.size}",
+                        ),
+                    )
+                    artifact.module to metadata
+                }
+            }
+        }.awaitAll()
+
+        results.mapNotNull { (module, metadata) -> metadata?.let { module to it } }.toMap()
+    }
+
+    /**
+     * Applies the version floors AndroidX publishes for its own group.
+     *
+     * **The third thing Gradle Module Metadata does that a POM cannot**, and
+     * the one that had no fix at all until now. Every AndroidX module carries a
+     * `dependencyConstraints` block pinning its whole group to its own version
+     * -- the alignment a BOM would give, published per module. Without it a
+     * graph keeps whatever version each POM happened to name, and modules that
+     * were split or absorbed end up beside each other at incompatible versions.
+     *
+     * **One extra pass, not a fixpoint.** Gradle iterates until the constraints
+     * stop moving; this collects again exactly once with the floors it found.
+     * That is a deliberate bound: an earlier attempt at group-wide alignment
+     * pinned every module to the highest version *seen* rather than to what was
+     * published, and the resulting graph exhausted ART's 192 MB heap.
+     * `FINDINGS.md` section 1.
+     *
+     * Only modules **already in the graph** are managed, for the same reason.
+     * A constraint naming `lifecycle-reactivestreams` does not put it on the
+     * classpath; it only decides which version is used if something else asks
+     * for it.
+     */
+    private fun aligned(
+        system: RepositorySystem,
+        session: DefaultRepositorySystemSession,
+        declared: List<Coordinate>,
+        collected: List<Artifact>,
+        metadata: Map<String, ModuleMetadata>,
+        onProgress: (ResolutionProgress) -> Unit,
+    ): List<Artifact> {
+        val present = collected.associateBy { it.module }
+        val floors = LinkedHashMap<String, Coordinate>()
+
+        metadata.values.asSequence().flatMap { it.constraints }.forEach { constraint ->
+            val module = "${constraint.group}:${constraint.artifact}"
+            val current = present[module] ?: return@forEach
+            val raises = parseVersion(constraint.version)?.let { wanted ->
+                parseVersion(current.version)?.let { have -> wanted > have }
+            } == true
+            if (!raises) return@forEach
+            // Two modules may both constrain a third. The higher floor wins,
+            // which is what a set of constraints means.
+            val standing = floors[module]?.version?.let(::parseVersion)
+            val candidate = parseVersion(constraint.version)
+            if (standing == null || (candidate != null && candidate > standing)) {
+                floors[module] = constraint
+            }
+        }
+
+        if (floors.isEmpty()) return collected
+
+        onProgress(ResolutionProgress.Collecting("aligning ${floors.size} module(s)"))
+        return collectManaged(system, session, declared, collected, floors.values.toList())
+    }
+
+    /**
+     * Collects again with [floors] added as roots.
+     *
+     * **Roots, not managed dependencies**, and that distinction cost an
+     * afternoon. `CollectRequest.setManagedDependencies` is the obvious way to
+     * express a version floor and it does not reach these: Aether's classic
+     * dependency manager applies the root request's management only from a
+     * certain depth, so `activity-ktx` stayed at the 1.7.0 a transitive POM
+     * asked for while the floor said 1.13.0.
+     *
+     * As a root it is depth 0, and this session's [HighestVersionSelector]
+     * takes the highest of any conflict -- so the floor wins for exactly the
+     * reason every other version does. It also fits what a floor *is*: nothing
+     * new is put on the classpath, because only modules already in the graph
+     * are given one.
+     *
+     * The user's declared coordinates stay roots too. Re-rooting at every
+     * collected artifact would ask for a different graph than the one being
+     * aligned.
+     *
+     * A failure here returns the unaligned graph rather than failing the build.
+     * Alignment makes a correct graph out of a working one; if the second
+     * collect cannot be done, the first still builds something.
+     */
+    private fun collectManaged(
+        system: RepositorySystem,
+        session: DefaultRepositorySystemSession,
+        declared: List<Coordinate>,
+        collected: List<Artifact>,
+        floors: List<Coordinate>,
+    ): List<Artifact> = runCatching {
+        // The extension each floor's module already resolved as, rather than
+        // the aar every declared root is guessed to be: the graph has already
+        // proved what these are, and guessing again would only be wrong.
+        val known = collected.associate { it.module to it.extension }
+        val roots = rootsFor(declared) + floors.map { floor ->
+            val extension = known["${floor.group}:${floor.artifact}"] ?: "aar"
+            Dependency(DefaultArtifact("$floor").withExtension(extension), "compile")
+        }
+        val request = CollectRequest()
+            .setDependencies(roots)
+            .setRepositories(repositories)
+
+        val aligned = LinkedHashMap<String, Artifact>()
+        system.collectDependencies(session, request).root.accept(
+            object : DependencyVisitor {
+                override fun visitEnter(node: DependencyNode): Boolean {
+                    if (node.data[ConflictResolver.NODE_DATA_WINNER] != null) return true
+                    node.dependency?.artifact?.let { aligned.keepHigher(it) }
+                    return true
+                }
+
+                override fun visitLeave(node: DependencyNode) = true
+            },
+        )
+        aligned.values.toList().takeIf { it.isNotEmpty() } ?: collected
+    }.getOrDefault(collected)
+
+    /**
+     * Keeps one artifact per Kotlin Multiplatform module.
+     *
+     * **The gap between Maven resolution and Gradle Module Metadata.** A KMP
+     * library publishes a root coordinate (`androidx.collection:collection`)
+     * plus one artifact per platform (`collection-jvm`,
+     * `compose.ui:ui-android`), and the root's `.module` file says its variants
+     * are *`available-at`* the platform artifact. Gradle follows that and
+     * resolves exactly one. maven-resolver reads `.pom` only, where each is an
+     * ordinary artifact with ordinary dependencies and nothing marks them as
+     * one module -- so conflict resolution has no reason to object, and D8 ends
+     * the build with `Type ... is defined multiple times`.
+     *
+     * Both shapes occur in a single Compose graph:
      *
      * - **root beside variant** -- `compose.ui:ui:1.0.1`, which
      *   `activity-compose` still names, beside `ui-android:1.9.0`.
      * - **variant beside variant** -- `runtime-annotation-jvm:1.9.2` beside
-     *   `runtime-annotation-android:1.12.0`, reached down different branches.
+     *   `runtime-annotation-android:1.12.0`, down different branches.
      *
-     * **`-android` wins, then `-jvm`, then the root**, by target rather than by
-     * version: this is an Android build, so the Android variant is the one that
-     * is right even when an older POM pins the root higher.
+     * **The redirect is read rather than guessed.** This used to collapse any
+     * two artifacts sharing a group and a base name, preferring an `-android`
+     * suffix -- which is the right answer for AndroidX and an assumption
+     * everywhere else: two unrelated modules that happen to be named `foo` and
+     * `foo-android` would have had one silently dropped. Now a root is only
+     * collapsed into a variant when its own metadata says that variant is where
+     * it lives.
      *
-     * Narrow by construction: artifacts only compete when they share a group
-     * *and* a base name, so an unrelated module that merely ends in `-android`
-     * is untouched unless its bare name is genuinely in the graph beside it.
+     * The suffix rule survives as the fallback for the variant-beside-variant
+     * case, which no root's metadata describes: neither `-jvm` nor `-android`
+     * redirects anywhere, and the only thing relating them is the name.
      */
-    private fun withoutDuplicateKmpVariants(artifacts: List<Artifact>): List<Artifact> {
-        fun module(artifact: Artifact): String {
+    private fun withoutDuplicateKmpVariants(
+        artifacts: List<Artifact>,
+        metadata: Map<String, ModuleMetadata>,
+    ): List<Artifact> {
+        val present = artifacts.associateBy { it.module }
+
+        // A root whose metadata redirects to a variant that is also in the
+        // graph is a duplicate of it, and the variant is the one with the
+        // classes an Android build wants.
+        val redirected = artifacts.filter { artifact ->
+            val target = metadata[artifact.module]?.redirect ?: return@filter false
+            present.containsKey("${target.group}:${target.artifact}")
+        }.map { it.module }.toSet()
+
+        fun base(artifact: Artifact): String {
             val suffix = KMP_PLATFORM_SUFFIXES.firstOrNull { artifact.artifactId.endsWith(it) }
             return "${artifact.groupId}:${artifact.artifactId.removeSuffix(suffix.orEmpty())}"
         }
 
-        // Lower is better; KMP_PLATFORM_SUFFIXES is in preference order and the
-        // root, which matches nothing, sorts last.
+        // Lower is better; KMP_PLATFORM_SUFFIXES is in preference order and a
+        // bare name, matching nothing, sorts last.
         fun preference(artifact: Artifact): Int =
             KMP_PLATFORM_SUFFIXES.indexOfFirst { artifact.artifactId.endsWith(it) }
                 .takeIf { it >= 0 } ?: KMP_PLATFORM_SUFFIXES.size
 
-        val kept = artifacts.groupBy(::module)
+        val remaining = artifacts.filterNot { it.module in redirected }
+        val kept = remaining.groupBy(::base)
             .mapValues { (_, candidates) -> candidates.minBy(::preference) }
 
-        // Identity, not equality: it selects the one instance chosen above
-        // rather than anything that merely compares equal to it.
-        return artifacts.filter { kept[module(it)] === it }
-    }
-
-    /**
-     * Drops an AndroidX module whose classes have since moved into another one.
-     *
-     * The third thing Gradle Module Metadata does that a POM cannot: newer
-     * AndroidX modules declare the *capability* of the module they absorbed, so
-     * Gradle sees a capability conflict and keeps one. maven-resolver sees two
-     * unrelated modules and keeps both, and because nothing in the graph asks
-     * for the absorbed module's newer version, it stays pinned at the old one
-     * that still contains the classes -- `lifecycle-common-java8:2.3.0` beside
-     * `lifecycle-common-jvm:2.9.4`, both defining `DefaultLifecycleObserver`.
-     *
-     * Verifiable rather than folklore: at the absorbing version the old
-     * artifact is published as an **empty jar** that only depends on its
-     * successor. `lifecycle-common-java8:2.9.4` is 4.8 kB and contains zero
-     * class files; `savedstate-ktx:1.3.0` is 1.4 kB and the same.
-     *
-     * Gated on the absorbing module's version for the same reason
-     * [withoutSupersededModules] is: a project genuinely pinned to lifecycle
-     * 2.3 throughout has no other source for these classes, and dropping them
-     * there would break a build that works.
-     *
-     * A curated table, and it will rot. The fix that does not is reading the
-     * `.module` files -- see `FINDINGS.md` sections 1 and 6.
-     */
-    private fun withoutAbsorbedModules(artifacts: List<Artifact>): List<Artifact> {
-        fun absorbingIsPresent(absorption: Absorption): Boolean = artifacts.any { candidate ->
-            val module = "${candidate.groupId}:${candidate.artifactId}"
-            val matches = module == absorption.absorbing ||
-                KMP_PLATFORM_SUFFIXES.any { module == "${absorption.absorbing}$it" }
-            matches && candidate.version.isAtLeast(absorption.major, absorption.minor)
-        }
-
-        return artifacts.filterNot { artifact ->
-            val module = "${artifact.groupId}:${artifact.artifactId}"
-            ABSORPTIONS.any { it.absorbed == module && absorbingIsPresent(it) }
-        }
+        // Identity, not equality: this selects the instance chosen above rather
+        // than anything that merely compares equal to it.
+        return remaining.filter { kept[base(it)] === it }
     }
 
     private fun withoutSupersededModules(artifacts: List<Artifact>): List<Artifact> {
@@ -280,6 +447,40 @@ class DependencyResolver(
         return actualMajor > major || (actualMajor == major && actualMinor >= minor)
     }
 
+    /**
+     * Resolves [artifact], falling back to the version it had before alignment.
+     *
+     * **A published constraint can name a version that does not exist as a
+     * file.** `org.jetbrains.kotlin:kotlin-stdlib-common` is the case that
+     * found this: at 2.x it is a metadata-only module for Kotlin
+     * Multiplatform, so a constraint raising it to `2.1.20` produces a
+     * coordinate with a POM and no jar, and the classpath silently loses an
+     * entry it had before.
+     *
+     * Alignment is an improvement to a graph that already worked, so it is not
+     * allowed to make one unresolvable. Where the raised version cannot be
+     * fetched, the version the first collect chose is used instead and the
+     * build carries on.
+     *
+     * Returns the artifact actually used, which is not always the one asked
+     * for -- the caller needs that to record the right coordinate.
+     */
+    private fun resolveAligned(
+        system: RepositorySystem,
+        session: DefaultRepositorySystemSession,
+        artifact: Artifact,
+        beforeAlignment: Map<String, Artifact>,
+    ): Pair<Artifact, File?> {
+        val file = resolveWithAarFallback(system, session, artifact)
+        if (file != null) return artifact to file
+
+        val original = beforeAlignment[artifact.module]
+        if (original == null || original.version == artifact.version) return artifact to null
+
+        val fallback = resolveWithAarFallback(system, session, original)
+        return if (fallback != null) original to fallback else artifact to null
+    }
+
     /** Phase two, per artifact. See the class comment for why this exists. */
     private fun resolveWithAarFallback(
         system: RepositorySystem,
@@ -290,12 +491,19 @@ class DependencyResolver(
             return system.resolveArtifact(session, ArtifactRequest(artifact, repositories, null))
                 .artifact.file
         }
-        if (artifact.extension == "aar") return null
 
+        // **Both directions.** This used to fall back only jar -> aar, on the
+        // assumption that a wrong guess is always "we said jar and AndroidX
+        // publishes an aar". The version floors added for alignment are
+        // declared as aars like every other root, and `lifecycle-common-java8`
+        // is a jar -- so the aligned coordinate failed to resolve, the caller
+        // fell back to the *older* version it was aligning away from, and the
+        // duplicate class it exists to prevent came back.
+        val other = if (artifact.extension == "aar") "jar" else "aar"
         return runCatching {
             system.resolveArtifact(
                 session,
-                ArtifactRequest(artifact.withExtension("aar"), repositories, null),
+                ArtifactRequest(artifact.withExtension(other), repositories, null),
             ).artifact.file
         }.getOrNull()
     }
@@ -322,6 +530,11 @@ class DependencyResolver(
             // declares hard version ranges that nearest-wins cannot solve at
             // all, and where it can it picks older artifacts than the same
             // project gets from Gradle.
+            // **Remember which artifacts do not exist.** Most of a graph
+            // publishes no `.module` file at all, and without this every
+            // resolve asks the remote again for each of them -- which is most
+            // of what made reading metadata cost 19 s on a warm repository.
+            session.resolutionErrorPolicy = SimpleResolutionErrorPolicy(true, false)
             session.dependencyGraphTransformer = ChainedDependencyGraphTransformer(
                 ConflictResolver(
                     HighestVersionSelector(),
@@ -348,7 +561,7 @@ class DependencyResolver(
      * and its `jar` group at 1.9.0, the `jar` one was seen first, and the app
      * built against `compose.ui:1.12.0` died on launch with
      * `NoClassDefFoundError: androidx.compose.runtime.HostDefaultProvider` --
-     * a class 1.9.0 does not have. FINDINGS section 2.
+     * a class 1.9.0 does not have. FINDINGS section 5.
      *
      * Compared with Aether's own version scheme rather than as strings, which
      * would put `1.9.0` above `1.12.0`. An unparseable version keeps the
@@ -380,6 +593,15 @@ class DependencyResolver(
         private const val KOTLIN_GROUP = "org.jetbrains.kotlin"
 
         /**
+         * How many `.module` files to ask for at once.
+         *
+         * Enough to hide per-request latency, few enough not to look like an
+         * attack to a repository that rate-limits. The same shape the artifact
+         * downloads should eventually take, and do not yet.
+         */
+        private const val METADATA_CONCURRENCY = 8
+
+        /**
          * Maven's own ordering, where `1.12.0` is above `1.9.0`. The obvious
          * string comparison gets that backwards.
          */
@@ -399,34 +621,7 @@ class DependencyResolver(
          */
         private val KMP_PLATFORM_SUFFIXES = listOf("-android", "-jvm")
 
-        /** [absorbed] moved into [absorbing] as of [major].[minor]. */
-        private data class Absorption(
-            val absorbed: String,
-            val absorbing: String,
-            val major: Int,
-            val minor: Int,
-        )
 
-        private val ABSORPTIONS = listOf(
-            Absorption(
-                absorbed = "androidx.lifecycle:lifecycle-common-java8",
-                absorbing = "androidx.lifecycle:lifecycle-common",
-                major = 2,
-                minor = 5,
-            ),
-            Absorption(
-                absorbed = "androidx.activity:activity-ktx",
-                absorbing = "androidx.activity:activity",
-                major = 1,
-                minor = 9,
-            ),
-            Absorption(
-                absorbed = "androidx.savedstate:savedstate-ktx",
-                absorbing = "androidx.savedstate:savedstate",
-                major = 1,
-                minor = 3,
-            ),
-        )
 
         /**
          * Google first, then Central.

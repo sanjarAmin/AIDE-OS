@@ -245,10 +245,11 @@ success, the APK installed cleanly, and the app crashed on launch or drew
 nothing. `ComposeRunTest` exists because of that, and found all six.
 
 Five of the six were resolution, and they are written up where the code is:
-**`engine/deps/FINDINGS.md`**, sections 1 to 3. The one-line version is that
-AndroidX's graph is correct only under Gradle Module Metadata, maven-resolver
-reads `.pom`, and the difference costs duplicate classes at D8 and missing ones
-at runtime. Everything below is this module's half.
+**`engine/deps/FINDINGS.md`**. The one-line version is that AndroidX's graph is
+correct only under Gradle Module Metadata, and the difference costs duplicate
+classes at D8 and missing ones at runtime. That module now reads the `.module`
+file rather than approximating it, which is what retired the curated tables the
+first version of this section described. Everything below is this module's half.
 
 ### Library resources are `-R` overlays, not positional inputs
 
