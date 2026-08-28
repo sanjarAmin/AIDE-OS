@@ -87,6 +87,19 @@ class FastBuildSystem(
                 }?.let(libraryResources::add)
             }
 
+            // Merged before linking, because aapt2 reads the manifest once and
+            // whatever it is handed is what the APK declares. A library's
+            // components are absent from the built app otherwise, and nothing
+            // in the build reports it -- see ManifestMerger.
+            val manifest = withContext(dispatchers.io) {
+                ManifestMerger.merge(
+                    projectManifest = layout.manifestFile,
+                    libraries = request.dependencies.libraryManifests,
+                    applicationId = request.project.applicationId,
+                    output = workspace.mergedManifest,
+                )
+            }
+
             reportingStage(BuildStage.LINK_RESOURCES, diagnostics) { onDiagnostic ->
                 resources.link(
                     layout = layout,
@@ -96,6 +109,7 @@ class FastBuildSystem(
                     libraryResources = libraryResources,
                     libraryPackages = request.dependencies.libraryPackages,
                     applicationId = request.project.applicationId,
+                    manifest = manifest,
                     onDiagnostic = onDiagnostic,
                 )
             }

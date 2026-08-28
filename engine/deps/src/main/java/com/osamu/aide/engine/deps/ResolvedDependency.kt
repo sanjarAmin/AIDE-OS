@@ -80,6 +80,16 @@ data class ResolvedDependencies(
     val libraryPackages: List<String>
         get() = dependencies.filter { it.isAndroidLibrary }.mapNotNull { it.packageName }.distinct()
 
+    /**
+     * Each Android library's `AndroidManifest.xml`, in resolution order.
+     *
+     * Extracted since M4 and unread until M8: nothing merged them, so every
+     * `<provider>` and `<uses-permission>` a library declared was absent from
+     * the built APK. `engine/fast/FINDINGS.md` section 13.
+     */
+    val libraryManifests: List<File>
+        get() = dependencies.mapNotNull { it.manifest }
+
     val isEmpty: Boolean get() = dependencies.isEmpty()
 }
 

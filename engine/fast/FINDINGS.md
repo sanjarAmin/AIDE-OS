@@ -232,10 +232,11 @@ that question back on the table.
   of those rules are curated tables that will rot.
 - **Resources are linked, not merged.** aapt2's `-R` overlay is doing the job
   AGP gives to a resource merger. It is the right semantics for last-one-wins,
-  but there is no manifest merger at all: a library's `<uses-permission>` or
-  `<provider>` never reaches the app's manifest. `androidx.startup` and
-  `emoji2` both rely on a merged `<provider>`, and a Compose app that needs
-  either will not get it.
+  but it is not a merger: nothing reconciles two libraries' `values.xml`, and
+  nothing reports when one silently shadows the other.
+- **The manifest merger implements the common rules, not the specification.**
+  Section 13. `tools:replace`, node selectors and priorities are absent, and a
+  library relying on one gets an ordinary merge instead.
 
 ## 12. Making a Compose app *run*, not build
 
@@ -282,15 +283,24 @@ package is excluded, or aapt2 emits a second identical `R.java` and the Java
 compiler rejects the duplicate. The package names come from each AAR's manifest;
 `engine/deps/FINDINGS.md` section 5 records how that parse failed silently.
 
-### No manifest merger
+### The manifest merger, and the shape of the bug it fixed
 
-`-R` is doing the job AGP gives to a resource merger, and doing it adequately.
-There is no equivalent for manifests at all: a library's `<uses-permission>`,
-`<provider>` or `<activity>` never reaches the app's manifest. `androidx.startup`
-and `emoji2` both rely on a merged `<provider>` — they initialise through one —
-so an app needing either will link, install, launch, and behave as though the
-library were never initialised. Nothing in the pipeline reports it. This is the
-largest known hole in the fast path after incrementality.
+`-R` is doing the job AGP gives to a resource merger. For a while there was no
+equivalent for manifests at all: a library's `<uses-permission>`, `<provider>`
+or `<activity>` never reached the app's manifest. `AarExtractor` had unpacked
+every library `AndroidManifest.xml` since M4, and nothing read them.
+
+**The failure mode is why this belongs here rather than on a to-do list.**
+`androidx.startup` ships a `<provider>` whose only job is to run other
+libraries' initialisers, and Compose pulls it in through `emoji2`. Without the
+merge the build succeeds, the APK verifies, it installs, it launches, it draws
+— and the initialisers never run. No crash, no diagnostic. Text renders
+slightly wrong, forever.
+
+`ManifestMerger` closes it; section 13 has the rules. The test that proves it
+is in `ComposeRunTest`, and it asks **Android's own `PackageManager`** whether
+`com.example.composerun.androidx-startup` resolves after install. Nothing
+weaker would do, because the app looks identical either way.
 
 ### Instrumented tests need their own `largeHeap`
 
@@ -318,3 +328,70 @@ every weaker assertion passed while the app was broken:
 
 Only the last of those is even suspicious in hindsight, and only if you know
 that `am start` reports the *launch*, not the process surviving it.
+
+## 13. Merging manifests: what the rules are, and what they are not
+
+`ManifestMerger` is not AGP's. AGP implements a specification with node markers,
+selectors and priorities; this implements the part every ordinary Android build
+depends on, and says so rather than implying more:
+
+- `<uses-permission>` and `<uses-feature>` unioned by `android:name`;
+- the `<application>` element's children added when the project does not already
+  declare one with the same `android:name`;
+- `${applicationId}` substituted.
+
+**The project always wins.** It is the one merge rule a user can reason about
+without reading a specification.
+
+### `tools:node="merge"` is not a marker to skip
+
+The first version dropped every element carrying any `tools:` attribute, on the
+grounds that this implements none of them and aapt2 refuses an unbound prefix.
+That threw away the exact component the merger exists to bring in:
+
+```xml
+<provider
+    android:name="androidx.startup.InitializationProvider"
+    android:authorities="${applicationId}.androidx-startup"
+    tools:node="merge" />
+```
+
+`merge` is the *default*, spelled out. Only `remove` and `removeAll` mean "do
+not include this", and they are the only two honoured. The rest are stripped
+from the output rather than passed through, so a marker this does not implement
+cannot look as though it had been.
+
+### Keying by `android:name` is what keeps the unioned set safe
+
+An element with no `android:name` is never merged, because there is nothing to
+compare it against. That — not its absence from the unioned set, which is the
+reason a reader would give — is what actually protects `<uses-sdk>`.
+
+Found by mutation: adding `uses-sdk` to the unioned set fails no test, because
+it has no name either way. The property doing the work now has a test of its
+own, and reversing it fails.
+
+`<uses-sdk>` genuinely must not be unioned: `androidx.startup` declares
+`minSdkVersion="14"`, and an app that took a library's floor would silently
+claim to run on devices it cannot.
+
+### A bad library manifest costs that library, not the build
+
+These files come out of archives fetched over the network from a coordinate the
+user typed. A malformed one is skipped and the merge continues; a failure of the
+merge as a whole falls back to linking the project's own manifest, which is what
+this project did until now and still produces a working APK.
+
+### The test helper was the bug, and one test hid it
+
+Worth recording because it will happen again. Kotlin's `trimIndent()` runs
+*after* interpolation, so building a fixture as one raw string with a multi-line
+`$body` drops the common indent to zero and leaves the XML declaration indented
+— which is not a well-formed document. Every library manifest failed to parse,
+the merger skipped them exactly as designed, and four tests failed pointing
+squarely at the code under test.
+
+The fifth passed. `a_library_uses_sdk_is_left_alone` asserts that a library's
+`minSdkVersion` does *not* appear, and nothing being merged satisfies that
+perfectly. **A test whose assertion is an absence passes when the fixture is
+broken**, which is the most expensive kind of green.

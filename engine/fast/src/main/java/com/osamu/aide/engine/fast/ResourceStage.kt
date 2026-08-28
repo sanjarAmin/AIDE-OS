@@ -116,6 +116,12 @@ internal class ResourceStage(private val runner: NativeToolRunner) {
         libraryPackages: List<String> = emptyList(),
         /** The project's own package, which already gets an `R` class. */
         applicationId: String = "",
+        /**
+         * The manifest to link, which is the *merged* one when a project has
+         * Android libraries. Defaults to the project's own so a caller with no
+         * dependencies does not have to think about it.
+         */
+        manifest: File = layout.manifestFile,
         onDiagnostic: (Diagnostic) -> Unit = {},
     ): StageResult<File?> {
         val compiledResources = workspace.compiledProjectResources
@@ -124,7 +130,7 @@ internal class ResourceStage(private val runner: NativeToolRunner) {
             add("link")
             add("-o"); add(workspace.linkedApk.absolutePath)
             add("-I"); add(platform.androidJar.absolutePath)
-            add("--manifest"); add(layout.manifestFile.absolutePath)
+            add("--manifest"); add(manifest.absolutePath)
             // Where R.java goes; aapt2 creates the package directories itself.
             add("--java"); add(workspace.generatedJava.absolutePath)
             // Lets a project overlay resources it did not itself declare, which

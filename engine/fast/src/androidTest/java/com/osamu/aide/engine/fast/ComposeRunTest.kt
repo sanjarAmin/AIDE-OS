@@ -200,6 +200,7 @@ class ComposeRunTest {
                     classpath = resolved.compileClasspath,
                     resourceDirectories = resolved.resourceDirectories,
                     libraryPackages = resolved.libraryPackages,
+                    libraryManifests = resolved.libraryManifests,
                 ),
             ),
         ).toList()
@@ -220,6 +221,21 @@ class ComposeRunTest {
         shell("logcat -c")
         val launch = shell("am start -W -n $PACKAGE/.MainActivity")
         assertTrue("am start refused: $launch", "Error" !in launch)
+
+        // **The manifest merge, asked of the platform rather than of the build.**
+        // `androidx.startup` ships a <provider> whose only job is to run other
+        // libraries' initialisers, and Compose pulls it in through emoji2.
+        // Before the merger existed this provider was simply absent: the build
+        // succeeded, the APK installed, and the initialisers never ran with
+        // nothing anywhere to say so. Asking PackageManager is the only way to
+        // see the difference, because the app looks identical either way.
+        val startup = instrumentation.context.packageManager
+            .resolveContentProvider("$PACKAGE.androidx-startup", 0)
+        assertTrue(
+            "androidx.startup's provider is not in the installed package, so no " +
+                "library initialiser ran. The manifest merge did not reach the APK.",
+            startup != null,
+        )
 
         val drew = device.wait(Until.hasObject(By.textContains(MARKER)), DRAW_TIMEOUT_MS)
 

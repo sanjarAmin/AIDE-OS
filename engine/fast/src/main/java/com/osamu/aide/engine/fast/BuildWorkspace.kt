@@ -30,6 +30,15 @@ class BuildWorkspace(val root: File) {
     fun compiledLibraryResources(index: Int): File =
         File(compiledResources, "library-%03d.zip".format(index))
 
+    /**
+     * The project's manifest with its libraries' merged in.
+     *
+     * A build output rather than an edit in place: the user's manifest is the
+     * one they wrote, and a build that rewrites it is a build that loses their
+     * changes the first time a merge goes wrong.
+     */
+    val mergedManifest: File get() = File(root, "AndroidManifest.xml")
+
     /** aapt2's output: resources and a binary manifest, but no code yet. */
     val linkedApk: File get() = File(root, "linked.apk")
     val unsignedApk: File get() = File(root, "unsigned.apk")

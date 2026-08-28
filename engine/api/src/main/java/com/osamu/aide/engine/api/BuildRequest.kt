@@ -51,6 +51,15 @@ data class DependencyInputs(
      * runtime, not at build time, when this is missing.
      */
     val libraryPackages: List<String> = emptyList(),
+    /**
+     * Each Android library's manifest, in resolution order.
+     *
+     * Merged into the project's before anything is linked. A library's
+     * components are not optional decoration: `androidx.startup` ships a
+     * `<provider>` whose only job is to run other libraries' initialisers, and
+     * without it they never run and nothing reports it.
+     */
+    val libraryManifests: List<File> = emptyList(),
 ) {
     val isEmpty: Boolean get() = classpath.isEmpty() && resourceDirectories.isEmpty()
 }
