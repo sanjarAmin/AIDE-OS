@@ -83,3 +83,8 @@ include(":vcs:git")
 
 // Spike R6 -- JGit on ART, which M8 is designed around. Not part of the app.
 include(":spike:git")
+
+// Spike R7 -- a PTY and a shell on an unprivileged device, which M8's terminal
+// half is designed around. The first native question in this project that is
+// about the platform rather than about a library. Not part of the app.
+include(":spike:pty")

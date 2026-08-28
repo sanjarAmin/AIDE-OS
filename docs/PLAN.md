@@ -15,6 +15,7 @@
 | ✅ | Spike R2 — kotlinc + Compose on ART | Resolved. `tools/kotlinc/FINDINGS.md` |
 | ✅ | Spike R2b — ECJ, D8, apksig on ART | Resolved. `tools/ecj/FINDINGS.md` |
 | ✅ | Spike R6 — JGit on ART | Resolved, and **unmodified** — the first "pure JVM" claim here that held. `tools/git/FINDINGS.md` |
+| ✅ | Spike R7 — PTY + shell on a device | Resolved. `forkpty` works from an untrusted app, **job control included**. `tools/pty/FINDINGS.md` |
 | ✅ | License | GPLv3 |
 | 🟡 | **M0** Skeleton | Built: `:app`, `:core:{common,fs,ui}`, `:editor`, `:toolchain:{native,manager}`, `:engine:{api,fast}`. 9 of 22 planned modules. |
 | 🟢 | **M1** Editor | Highlighting, tabs, symbol row, find/replace, diagnostics gutter, and SAF import. `editor/FINDINGS.md`, `core/fs/FINDINGS.md` |
@@ -421,9 +422,31 @@ M0–M5 is the real v1.0. Everything from M6 on is expansion.
    success, called *after* an operation that set one, made two different
    failures completely silent. `vcs/git/FINDINGS.md` section 7.
 
-   The terminal half is untouched and is the larger unknown of M8. It needs a
-   PTY, which is the first thing in this project that cannot be done in pure
-   JVM at all.
+   **The terminal half is spiked, and the platform is not the problem.** Spike
+   R7 asked the question that could have sunk it: can an unprivileged Android
+   app open a pseudoterminal and run a shell with working job control? It can.
+   `forkpty` is permitted from an `untrusted_app` domain, `/system/bin/sh`
+   execs on the slave, a foreground command gets its own process group, and
+   signalling that group returns the terminal to the shell. No root, no rootfs,
+   no PRoot, none of the exec gymnastics R1 needed for aapt2.
+
+   This is the first risk here that was not "does this JVM library run on ART" —
+   there is no PTY API in Java at all — so it is also the first that needed
+   native code. One file of C, built with `ndk-build`.
+
+   Three things came out of it that shape `:terminal` rather than confirm it.
+   The child must reset the signal dispositions it inherits from the JVM, or the
+   shell starts with `SIGINT` ignored and looks exactly like a platform without
+   job control. An app can **exec** from `/system/bin` but cannot **list** it,
+   so command completion cannot work by directory listing. And what remains
+   untested is process lifetime when the app is backgrounded, which decides
+   whether a terminal can be a tab you leave open.
+
+   **The emulator is now the work, not the process handling** — state machine,
+   scrollback, attributes, alternate screen. Termux's `terminal-emulator` is
+   GPLv3 and so is this project, which is one of the reasons that licence was
+   chosen; vendoring it should be evaluated before writing one.
+   `tools/pty/FINDINGS.md`.
 
 ~~Before building `:build:fast`, verify the remaining "pure JVM, therefore fine
 on ART" assumptions — ECJ, D8/R8 and apksig.~~ Done: spike R2b. All three run,

@@ -59,15 +59,31 @@ class GitViewModel(
     private var repository: GitRepository? = null
 
     /**
+     * Set synchronously, before the coroutine that opens the repository starts.
+     *
+     * Guarding on [repository] alone is not enough: `open` is called from a
+     * `LaunchedEffect`, and two recompositions close enough together both see a
+     * null repository and both open one. The second wins the field and the
+     * first is leaked with the index locked against everything after it.
+     */
+    private var opening = false
+
+    /**
      * Points the panel at the repository containing [projectDir].
      *
-     * Idempotent per project: the workspace calls this from a `LaunchedEffect`,
-     * which re-runs on configuration change, and opening a second
-     * [GitRepository] on one directory means two of them fighting over the
-     * index lock.
+     * Runs once per view model, which is once per opened project: the workspace
+     * calls this from a `LaunchedEffect` that re-runs on every configuration
+     * change, and opening a second [GitRepository] on one directory means two
+     * of them fighting over the index lock.
+     *
+     * The guard is not reset on failure, deliberately. Both failures here are
+     * terminal for this screen -- the project is not in a repository, or the
+     * repository will not open -- and retrying on the next recomposition would
+     * do the same work to reach the same answer.
      */
     fun open(projectDir: File) {
-        if (repository != null) return
+        if (opening) return
+        opening = true
         viewModelScope.launch {
             val root = git.enclosingRepository(projectDir, ceiling = workspaceRoot)
             if (root == null) {
