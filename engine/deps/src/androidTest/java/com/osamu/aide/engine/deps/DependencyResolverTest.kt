@@ -234,12 +234,23 @@ class DependencyResolverTest {
         const val TAG = "DepsResolver"
 
         /**
-         * runTest defaults to a minute, and a cold resolve of AndroidX does not
+         * An allowance for the network, **not** a performance budget.
+         *
+         * runTest defaults to a minute and a cold resolve of AndroidX does not
          * fit in one: 46 artifacts is nearer 90 requests once Maven has asked
-         * for a checksum beside each. Measured at ~92 s on this emulator, so
-         * the default fails the suite on a machine with an empty cache while
-         * saying nothing about the code.
+         * for a checksum beside each, and the Compose graph is twice that again
+         * once `.module` files are read. Measured at ~92 s for appcompat and
+         * ~156 s for Compose on this emulator — and over five minutes once the
+         * emulator was restarted onto a slower resolver, which is what made
+         * five too tight.
+         *
+         * Raising it costs nothing, because the figures that *are* assertions
+         * live in their own tests: [a_cached_graph_resolves_quickly] and
+         * [an_aligned_graph_still_resolves_quickly_warm] both measure a warm
+         * resolve and both fail loudly if it regresses. A timeout here only
+         * decides how long a cold cache is allowed to take, and the answer
+         * depends on someone's network rather than on this code.
          */
-        val NETWORK_TIMEOUT = 5.minutes
+        val NETWORK_TIMEOUT = 12.minutes
     }
 }

@@ -24,7 +24,7 @@
 | 🟢 | **M4** Deps + Kotlin | A Kotlin project using `androidx.appcompat` builds on device: 41 artifacts resolved, kotlinc ahead of ECJ. Resolution reads Gradle Module Metadata, so AndroidX aligns the way Gradle aligns it. `engine/deps/FINDINGS.md` |
 | 🟡 | **M5** AI ⭐ | Feature-complete; three assertions parked until a live API key exists. Everything testable without one is tested. `ai/core/FINDINGS.md` |
 | 🟢 | **M6** Compose | A Compose app builds, installs, launches and **draws**, on device, with its libraries' manifests merged. Six fixes, none visible to a build-only test. `engine/deps/FINDINGS.md` |
-| 🟡 | **M8** Git + Terminal | Git works end to end: clone, edit, stage, commit, push, with identity and tokens in the Keystore. The terminal half is untouched. `vcs/git/FINDINGS.md` |
+| 🟢 | **M8** Git + Terminal | Clone, edit, stage, commit, push and diff, with identity and tokens in the Keystore. A real terminal: Termux's emulator vendored unmodified, characters sent as typed. `vcs/git/FINDINGS.md`, `terminal/FINDINGS.md` |
 
 **M2 in detail.** All six stages exist in `:engine:fast` and run on a device:
 aapt2 compile → aapt2 link → ECJ → D8 → package → apksig, behind
@@ -283,6 +283,7 @@ M0–M5 is the real v1.0. Everything from M6 on is expansion.
 | R4 | PRoot broken on Android 15+ seccomp | Medium — bounded by design | Fast path never touches PRoot. Rootfs is opt-in. Fallback exec strategies: `linker64` direct invocation, `termux-exec` LD_PRELOAD interception. |
 | R5 | Google Play policy on code-executing apps | Medium | Primary channels **F-Droid + direct APK + GitHub Releases**. Play as a secondary, possibly feature-reduced build. AIDE is on Play, so it's not categorically banned. |
 | R6 | sora-editor LGPL-2.1 obligations | Low | Consume as an **unmodified** Maven dependency; upstream any changes; document the relink path. Keeps the rest of the app under your chosen license. |
+| R8 | Vendored third-party source drifting from upstream | Low | Termux's terminal emulator is **Apache 2.0** (not GPLv3 — the repo grants that module an exception) and is vendored **byte-identical**, with the commit and checksums in `terminal/vendor/PROVENANCE.md`. One file of ours replaces one upstream interface so the rest need no edits, which makes an update a copy rather than a merge. |
 | R7 | Scope — this is a genuinely large project | **High** | Milestones are ordered so M2 proves the riskiest thesis early. If M2 slips badly, reconsider the AndroidIDE-Rv2 fork before sinking further cost. |
 
 **Licensing: decided — GPLv3.** It keeps the option of vendoring from AndroidIDE / AndroidIDE-Rv2, both GPLv3, which is a meaningful shortcut on a project this size; and it prevents a closed-source fork repeating AIDE's history, which is the reason this project exists. The cost is Google Play friction, already bounded by R5 making F-Droid the primary channel.
@@ -467,12 +468,28 @@ M0–M5 is the real v1.0. Everything from M6 on is expansion.
    character can straddle two reads, and decoding is the emulator's job because
    only it can hold the partial sequence.
 
-   **The emulator is the remaining work, and it is a decision rather than a
-   task** — state machine, scrollback, attributes, alternate screen. Termux's
-   `terminal-emulator` is GPLv3 and so is this project, which is one of the
-   reasons that licence was chosen; vendoring it should be evaluated before
-   writing one, and that evaluation is not something to do unattended.
-   `tools/pty/FINDINGS.md`.
+   **M8 is closed. The emulator is vendored from Termux**, byte-identical, with
+   provenance and checksums in `terminal/vendor/PROVENANCE.md`. It turned out to
+   be **Apache 2.0** rather than GPLv3 — the repository grants `terminal-emulator`
+   an exception because it descends from jackpal's Android-Terminal-Emulator —
+   which is worth knowing, because it changes the obligation from copyleft to
+   attribution.
+
+   Only the emulator was taken; Termux's own process handling was left behind,
+   since spike R7's already existed and was tested. Every vendored file is
+   unmodified, which cost exactly one file of ours: a replacement for the one
+   upstream interface whose signatures would have dragged the rest in.
+
+   The Terminal tab now sends characters as they are typed, and the difference
+   vendoring made is one assertion: `printf 'AAAA\rBB'` leaves `BBAA` on one
+   line. The previous implementation stripped escape sequences and could only
+   have produced two lines. Driven by hand: `ls -a` in a project's own folder.
+
+   Two bugs the tests caught and typing at it would not have: input launched a
+   coroutine per keystroke and therefore **arrived out of order**, so an arrow
+   key landed after the character it should have preceded; and the input channel
+   was reused across restarts, so a dead shell's consumer went on stealing
+   roughly half of what was typed. `terminal/FINDINGS.md` sections 5 and 4.
 
 ~~Before building `:build:fast`, verify the remaining "pure JVM, therefore fine
 on ART" assumptions — ECJ, D8/R8 and apksig.~~ Done: spike R2b. All three run,

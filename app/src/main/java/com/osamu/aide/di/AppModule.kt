@@ -27,6 +27,7 @@ import com.osamu.aide.ui.workspace.KotlinCompilerSource
 import com.osamu.aide.ui.workspace.GitViewModel
 import com.osamu.aide.ui.workspace.LanguageServices
 import com.osamu.aide.ui.workspace.ProjectBuilder
+import com.osamu.aide.ui.workspace.TerminalViewModel
 import com.osamu.aide.ui.workspace.ProjectDependencies
 import com.osamu.aide.ui.workspace.WorkspaceViewModel
 import org.koin.core.module.dsl.viewModel
@@ -118,6 +119,7 @@ val appModule = module {
     viewModel { AssistantViewModel(get(), get(), get()) }
     viewModel { ProjectsViewModel(get(), get(), get(), get(), get()) }
     viewModel { GitViewModel(get(), get(), get()) }
+    viewModel { TerminalViewModel(get()) }
     viewModel { WorkspaceViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
 }
 

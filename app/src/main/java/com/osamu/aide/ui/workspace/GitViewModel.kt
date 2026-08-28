@@ -113,8 +113,14 @@ class GitViewModel(
             when (val opened = git.open(root)) {
                 is AppResult.Success -> {
                     repository = opened.value
-                    _state.update { it.copy(isRepository = true) }
+                    // **Loaded before it is announced.** Publishing
+                    // isRepository = true first left a window where the panel
+                    // had a repository but no branch, status or history yet --
+                    // so it rendered "detached HEAD" and an empty file list for
+                    // an instant on every open. Harmless-looking, wrong, and it
+                    // only failed a test under full-suite timing.
                     reload()
+                    _state.update { it.copy(isRepository = true) }
                 }
                 is AppResult.Failure -> _state.update {
                     it.copy(isRepository = false, errorMessage = opened.error.message)

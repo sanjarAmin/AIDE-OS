@@ -108,6 +108,9 @@ fun WorkspaceScreen(
     // Its own view model rather than a slice of WorkspaceViewModel: it owns an
     // open GitRepository, which holds file locks and has to be closed.
     git: GitViewModel = koinViewModel(),
+    // Also its own: it owns a running shell, which is a child process and has
+    // to be killed when the screen goes away.
+    terminal: TerminalViewModel = koinViewModel(),
     // A single instance for the whole app: it holds the compiled tree-sitter
     // queries, and rebuilding them per screen is the cost the cache exists to
     // avoid.
@@ -117,6 +120,7 @@ fun WorkspaceScreen(
     val chat by assistant.state.collectAsStateWithLifecycle()
     val isCompleting by assistant.completing.collectAsStateWithLifecycle()
     val gitState by git.state.collectAsStateWithLifecycle()
+    val terminalState by terminal.state.collectAsStateWithLifecycle()
     var isChatOpen by remember { mutableStateOf(false) }
 
     // One tap: open the panel and ask, rather than opening it and leaving the
@@ -139,6 +143,16 @@ fun WorkspaceScreen(
             initialise = git::initialise,
             showDiff = git::showDiff,
             dismissDiff = git::dismissDiff,
+        )
+    }
+
+    val terminalActions = remember(terminal) {
+        TerminalActions(
+            type = terminal::type,
+            typeChar = terminal::typeChar,
+            sendKey = { terminal.sendKey(it) },
+            interrupt = terminal::interrupt,
+            restart = terminal::restart,
         )
     }
 
@@ -168,6 +182,7 @@ fun WorkspaceScreen(
         viewModel.open(projectDir)
         assistant.open(projectDir)
         git.open(projectDir)
+        terminal.open(projectDir)
     }
     LaunchedEffect(viewModel) { viewModel.jumps.collect { pendingJump = it } }
 
@@ -356,6 +371,8 @@ fun WorkspaceScreen(
                             showDock = state.isBuildPanelOpen && !mode.showsToolPane,
                             gitState = gitState,
                             gitActions = gitActions,
+                            terminalState = terminalState,
+                            terminalActions = terminalActions,
                         )
                     },
                 )
@@ -447,6 +464,8 @@ private fun EditorArea(
     showDock: Boolean,
     gitState: GitUiState,
     gitActions: GitActions,
+    terminalState: TerminalUiState,
+    terminalActions: TerminalActions,
 ) {
     Column(Modifier.fillMaxSize()) {
         if (state.openFiles.isNotEmpty()) {
@@ -526,6 +545,8 @@ private fun EditorArea(
                 problems = state.analysis.diagnostics + state.build.diagnostics,
                 gitState = gitState,
                 gitActions = gitActions,
+                terminalState = terminalState,
+                terminalActions = terminalActions,
                 onDiagnosticClick = onDiagnosticClick,
                 onFixDiagnostic = onFixDiagnostic,
                 onLaunchIntent = onLaunchIntent,

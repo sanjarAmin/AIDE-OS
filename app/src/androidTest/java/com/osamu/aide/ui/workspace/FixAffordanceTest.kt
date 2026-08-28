@@ -55,6 +55,8 @@ class FixAffordanceTest {
                 // compile instead of silently showing an empty panel.
                 gitState = GitUiState(),
                 gitActions = GitActions({}, {}, {}, {}, {}, {}, {}, { _, _ -> }, {}),
+                terminalState = TerminalUiState(),
+                terminalActions = TerminalActions({}, { _, _ -> }, {}, {}, {}),
                 onDiagnosticClick = {},
                 onFixDiagnostic = onFix,
                 onLaunchIntent = {},

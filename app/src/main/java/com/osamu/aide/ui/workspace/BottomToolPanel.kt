@@ -42,6 +42,9 @@ import androidx.compose.ui.unit.dp
 import com.osamu.aide.core.ui.theme.CodeTextStyle
 import com.osamu.aide.engine.api.Diagnostic
 
+/** Tabs whose content needs more than a strip: see the height below. */
+private val TALL_TABS = setOf(ToolTab.GIT, ToolTab.TERMINAL)
+
 enum class ToolTab(val title: String, val icon: ImageVector) {
     BUILD("Build", Icons.Default.PlayCircleOutline),
     PROBLEMS("Problems", Icons.Default.BugReport),
@@ -69,6 +72,8 @@ fun BottomToolDock(
     problems: List<Diagnostic>,
     gitState: GitUiState,
     gitActions: GitActions,
+    terminalState: TerminalUiState,
+    terminalActions: TerminalActions,
     onDiagnosticClick: (Diagnostic) -> Unit,
     onFixDiagnostic: (Diagnostic) -> Unit,
     onLaunchIntent: (Intent) -> Unit,
@@ -183,17 +188,17 @@ fun BottomToolDock(
 
             // Tool Content Body
             //
-            // **Taller for Git.** 200dp was sized when this dock held build
-            // output and nothing else. The git panel spends most of that on
-            // chrome it cannot drop -- a branch line, an identity warning, a
-            // commit field -- and what was left for the list of changed files
-            // was about one row, overlapping the row beneath it. Verified in
-            // the running app: a repository with three untracked files showed
-            // one, clipped.
+            // **Taller for the tabs that need it.** 200dp was sized when this
+            // dock held build output and nothing else. Git spends most of that
+            // on chrome it cannot drop -- a branch line, an identity warning, a
+            // commit field -- and what was left for the changed files was about
+            // one row, overlapping the row beneath it, verified in the running
+            // app. The terminal has the same problem for the same reason: a
+            // command field and a status line leave almost nothing for output.
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(if (selectedTab == ToolTab.GIT) 340.dp else 200.dp)
+                    .height(if (selectedTab in TALL_TABS) 340.dp else 200.dp)
                     .padding(8.dp),
             ) {
                 when (selectedTab) {
@@ -289,9 +294,9 @@ fun BottomToolDock(
                         "Reading the running app's log needs the installed build to be " +
                             "attached to. Nothing here is wired up yet.",
                     )
-                    ToolTab.TERMINAL -> NotBuiltYet(
-                        "A shell needs the PTY terminal widget, which arrives with M8 " +
-                            "alongside Git.",
+                    ToolTab.TERMINAL -> TerminalPanel(
+                        state = terminalState,
+                        actions = terminalActions,
                     )
                 }
             }

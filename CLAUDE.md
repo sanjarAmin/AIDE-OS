@@ -40,7 +40,7 @@ emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu host
 :lsp:java            nb-javac kept warm: completion, diagnostics, definitions
 :toolchain:native    aapt2 in jniLibs, and the harness that execs it
 :toolchain:manager   Downloads android.jar & co: pin, verify, install. FINDINGS.
-:terminal            forkpty and the shell in it. No emulator yet. FINDINGS in tools/pty
+:terminal            forkpty, plus Termux's emulator vendored verbatim. FINDINGS.
 :vcs:git             JGit, plus the identity and token stores a device needs. FINDINGS.
 tools/               Scripts that produce the toolchains, and their FINDINGS.
 ```
