@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- One test clones a real repository. JGit reports no progress at all for
+         a local file:// clone, and with no progress there is nothing to cancel
+         from, so the cancellation path cannot be driven without the network.
+         See GitWorkspaceTest. (No double hyphens in here: XML forbids them in
+         comments and the manifest merger reports it as a SAXParseException.) -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+</manifest>

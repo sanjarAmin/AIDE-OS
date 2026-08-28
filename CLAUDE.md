@@ -40,10 +40,11 @@ emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu host
 :lsp:java            nb-javac kept warm: completion, diagnostics, definitions
 :toolchain:native    aapt2 in jniLibs, and the harness that execs it
 :toolchain:manager   Downloads android.jar & co: pin, verify, install. FINDINGS.
+:vcs:git             JGit, plus the identity and token stores a device needs. FINDINGS.
 tools/               Scripts that produce the toolchains, and their FINDINGS.
 ```
 
-`docs/PLAN.md` lists 22 modules. Thirteen exist, plus four spikes. Do not
+`docs/PLAN.md` lists 22 modules. Fourteen exist, plus four spikes. Do not
 create the rest speculatively — each arrives with the milestone that needs it.
 
 ## Conventions

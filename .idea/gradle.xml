@@ -27,10 +27,13 @@
             <option value="$PROJECT_DIR$/spike" />
             <option value="$PROJECT_DIR$/spike/ai" />
             <option value="$PROJECT_DIR$/spike/deps" />
+            <option value="$PROJECT_DIR$/spike/git" />
             <option value="$PROJECT_DIR$/spike/javals" />
             <option value="$PROJECT_DIR$/toolchain" />
             <option value="$PROJECT_DIR$/toolchain/manager" />
             <option value="$PROJECT_DIR$/toolchain/native" />
+            <option value="$PROJECT_DIR$/vcs" />
+            <option value="$PROJECT_DIR$/vcs/git" />
           </set>
         </option>
       </GradleProjectSettings>

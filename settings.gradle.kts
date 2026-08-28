@@ -76,5 +76,10 @@ include(":spike:deps")
 // of the app.
 include(":spike:ai")
 
+// Version control. JGit, which spike R6 found needs no workarounds on ART --
+// but which gets no global config or credential helper there, so identity and
+// tokens are this module's to store.
+include(":vcs:git")
+
 // Spike R6 -- JGit on ART, which M8 is designed around. Not part of the app.
 include(":spike:git")
