@@ -16,6 +16,7 @@
 | ✅ | Spike R2b — ECJ, D8, apksig on ART | Resolved. `tools/ecj/FINDINGS.md` |
 | ✅ | Spike R6 — JGit on ART | Resolved, and **unmodified** — the first "pure JVM" claim here that held. `tools/git/FINDINGS.md` |
 | ✅ | Spike R7 — PTY + shell on a device | Resolved, and retired into `:terminal`. `forkpty` works from an untrusted app, **job control included**. `tools/pty/FINDINGS.md` |
+| ✅ | Spike R9 — executing a downloaded binary | Resolved. Via `/system/bin/linker64`, from **internal** storage only. `tools/nativeexec/FINDINGS.md` |
 | ✅ | License | GPLv3 |
 | 🟡 | **M0** Skeleton | Built: `:app`, `:core:{common,fs,ui}`, `:editor`, `:toolchain:{native,manager}`, `:engine:{api,fast}`. 9 of 22 planned modules. |
 | 🟢 | **M1** Editor | Highlighting, tabs, symbol row, find/replace, diagnostics gutter, and SAF import. `editor/FINDINGS.md`, `core/fs/FINDINGS.md` |
@@ -226,7 +227,7 @@ Ordered by (value × feasibility), matching your stated priority:
 
 **Phase A — Java + Kotlin (fast path).** The baseline. ECJ + kotlinc + D8 + aapt2, full LSP intelligence. Compose support was flagged as a real risk here; spike R2 settled it — the plugin is dexed *beside* the compiler in one archive and registered with `-Xplugin`. Compose is fast-path.
 
-**Phase B — C/C++ (fast path).** clang/lld for aarch64 + NDK sysroot headers/libs, shipped via `:toolchain:manager` as an optional ~400 MB download. Compile to `.so`, package into the APK, `clangd` for intelligence. **This is the exact capability the AIDE cmods scene pirates the app for** — shipping it free is a strong wedge.
+**Phase B — C/C++ (fast path).** clang/lld for aarch64 + NDK sysroot headers/libs, shipped via `:toolchain:manager` as an optional ~400 MB download **into internal storage, executed through `/system/bin/linker64`** — see spike R9. This paragraph originally contradicted the W^X note above it: a download lands in app data, where `execve` is refused. It is the dynamic linker that makes it possible, and external storage cannot host it at all. Compile to `.so`, package into the APK, `clangd` for intelligence. **This is the exact capability the AIDE cmods scene pirates the app for** — shipping it free is a strong wedge.
 
 **Phase C — JavaScript.** Two tiers: QuickJS built with the NDK (small, embeddable, runs as a scripting/automation engine with zero rootfs) and full Node.js aarch64 in the rootfs for real npm projects. React Native / Capacitor Android builds need Node **and** Gradle, so they're rootfs-track.
 
@@ -283,6 +284,7 @@ M0–M5 is the real v1.0. Everything from M6 on is expansion.
 | R4 | PRoot broken on Android 15+ seccomp | Medium — bounded by design | Fast path never touches PRoot. Rootfs is opt-in. Fallback exec strategies: `linker64` direct invocation, `termux-exec` LD_PRELOAD interception. |
 | R5 | Google Play policy on code-executing apps | Medium | Primary channels **F-Droid + direct APK + GitHub Releases**. Play as a secondary, possibly feature-reduced build. AIDE is on Play, so it's not categorically banned. |
 | R6 | sora-editor LGPL-2.1 obligations | Low | Consume as an **unmodified** Maven dependency; upstream any changes; document the relink path. Keeps the rest of the app under your chosen license. |
+| R9 | The `linker64` exec route closing in a future Android | Medium — M7 rests on it | The gap it uses (`noexec` mount, `PROT_EXEC` mapping permitted) is not a documented guarantee. Measured working on API 34; `tools/nativeexec/FINDINGS.md`. The manual device matrix is the early warning, and `:toolchain:native`'s harness already supports more than one strategy. |
 | R8 | Vendored third-party source drifting from upstream | Low | Termux's terminal emulator is **Apache 2.0** (not GPLv3 — the repo grants that module an exception) and is vendored **byte-identical**, with the commit and checksums in `terminal/vendor/PROVENANCE.md`. One file of ours replaces one upstream interface so the rest need no edits, which makes an update a copy rather than a merge. |
 | R7 | Scope — this is a genuinely large project | **High** | Milestones are ordered so M2 proves the riskiest thesis early. If M2 slips badly, reconsider the AndroidIDE-Rv2 fork before sinking further cost. |
 

@@ -76,6 +76,11 @@ include(":spike:deps")
 // of the app.
 include(":spike:ai")
 
+// Spike R9 -- executing a downloaded native binary, which M7 is designed
+// around and which docs/PLAN.md is currently inconsistent about. Not part of
+// the app.
+include(":spike:nativeexec")
+
 // A pseudoterminal and the shell in it. Spike R7 answered the platform
 // questions; the terminal *emulator* is a separate decision and is not here.
 include(":terminal")
