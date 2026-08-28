@@ -438,9 +438,11 @@ M0–M5 is the real v1.0. Everything from M6 on is expansion.
    The child must reset the signal dispositions it inherits from the JVM, or the
    shell starts with `SIGINT` ignored and looks exactly like a platform without
    job control. An app can **exec** from `/system/bin` but cannot **list** it,
-   so command completion cannot work by directory listing. And what remains
-   untested is process lifetime when the app is backgrounded, which decides
-   whether a terminal can be a tab you leave open.
+   so command completion cannot work by directory listing. And a shell survives
+   the app being backgrounded, unthrottled — 44 heartbeats in 45 seconds, three
+   times over — though that was measured under instrumentation, which is
+   precisely the state in which Android relaxes cached-app handling, so
+   `:terminal` should still plan for a foreground service.
 
    **The emulator is now the work, not the process handling** — state machine,
    scrollback, attributes, alternate screen. Termux's `terminal-emulator` is

@@ -12,7 +12,7 @@ about platform policy rather than about a library.
 
 Measured on the `aideos_test` AVD (API 34, x86_64), NDK 28.2. Reproduce with
 `:spike:pty:connectedDebugAndroidTest` and read the answers out of logcat under
-the tag `PtySpike`. Seven tests, six consecutive clean runs.
+the tag `PtySpike`. Eight tests, six consecutive clean runs of the seven core ones and three of the background one.
 
 ## What works
 
@@ -25,6 +25,7 @@ the tag `PtySpike`. Seven tests, six consecutive clean runs.
 | `SIGINT` to that group returns the terminal | yes |
 | `TIOCSWINSZ`, and the child seeing it | yes — `stty size` reports what was set |
 | Exit status through `waitpid` | yes |
+| A shell running while the app is backgrounded | yes, unthrottled — but see section 8 |
 
 ## 1. `forkpty` is permitted, and that was the real question
 
@@ -125,12 +126,40 @@ Three things that cost time in the tests, and will cost the same time again in
   wrong — the `echo` never runs, correctly. What proves an interrupt worked is
   that the terminal came *back* to the shell and it accepts a new command.
 
-## 8. Not answered
+## 8. A backgrounded app's shell keeps running, at full speed
 
-- **Lifetime when the app is backgrounded.** Android kills process groups under
-  memory pressure and freezes backgrounded apps; what happens to a shell
-  mid-command decides whether the terminal can be a tab you leave open. **This
-  was not tested**, and it is the biggest remaining unknown.
+This was the biggest open question, and it has an answer. A shell appending a
+line a second, with the app sent to the home screen:
+
+```
+shell produced 2 lines while in the foreground
+after 45s in the background: 46 lines (+44 while away)
+```
+
+44 lines in 45 seconds, repeated three times identically. Not merely alive:
+**unthrottled**. Neither the freezer nor a process-group kill touched it.
+
+Asked with a real `Activity` in a real task, because the instrumentation process
+is never *cached* and a shell forked from it would never meet the treatment
+Android gives a backgrounded app.
+
+**Two caveats, and the second is the load-bearing one.**
+
+- This is an emulator on API 34. Process lifetime is the area where OEM
+  behaviour diverges most, and a device with an aggressive vendor policy is a
+  different measurement.
+- **A process under instrumentation may not be frozen at all.** The app is
+  being debugged, in the platform's terms, and that is exactly the state in
+  which Android relaxes cached-app handling. So the honest reading is: *nothing
+  in the PTY or the process handling stops a shell running in the background* —
+  not *the platform will let a released app do this indefinitely*.
+
+`:terminal` should therefore still plan for a foreground service if a shell is
+meant to outlive the user switching away, the same shape `:toolchain:manager`
+already uses for downloads. What this rules out is the worse possibility: that
+a PTY child is killed immediately and the design is impossible.
+
+## 9. Not answered
 - **Throughput.** Nothing here measures how fast output can be pumped through
   the master fd, and a terminal that stalls the UI on `cat` of a large file is a
   real failure mode.
@@ -147,12 +176,13 @@ Three things that cost time in the tests, and will cost the same time again in
 
 ## What M8's terminal half should take from this
 
-1. **No further platform spike is owed.** The PTY, the shell, and job control
-   all work. Build `:terminal` on `forkpty`.
+1. **No further platform spike is owed.** The PTY, the shell, job control and
+   background survival all work. Build `:terminal` on `forkpty`.
 2. **The emulator is the work**, not the process handling. Evaluate vendoring
    Termux's before writing one.
-3. **Test lifetime early.** Whether a shell survives backgrounding shapes the
-   feature and is not yet known.
+3. **Plan for a foreground service anyway**, per section 8's second caveat: the
+   background result was measured under instrumentation, which is the state in
+   which the platform relaxes cached-app handling.
 4. **Design around not being able to list `/system/bin`.**
 
 Delete `:spike:pty` once `:terminal` answers the same questions under its own

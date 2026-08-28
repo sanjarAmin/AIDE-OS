@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- A real Activity in a real task, because the instrumentation process
+             is never cached and a shell forked from it never meets the
+             treatment Android gives a backgrounded app. See
+             BackgroundSurvivalTest. -->
+        <activity
+            android:name="com.osamu.aide.spike.pty.ShellHostActivity"
+            android:exported="true" />
+    </application>
+
+</manifest>

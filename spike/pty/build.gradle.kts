@@ -66,4 +66,7 @@ android {
 dependencies {
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.test.runner)
+    // Pressing HOME from a test: the only way to put the app in the state whose
+    // effect on a running shell is the question.
+    androidTestImplementation(libs.androidx.uiautomator)
 }
