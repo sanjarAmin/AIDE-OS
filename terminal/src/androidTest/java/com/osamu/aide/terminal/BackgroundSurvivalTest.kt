@@ -1,4 +1,4 @@
-package com.osamu.aide.spike.pty
+package com.osamu.aide.terminal
 
 import android.content.Intent
 import android.util.Log
@@ -13,7 +13,7 @@ import java.io.File
 /**
  * **Does a shell survive the app being backgrounded?**
  *
- * The one question spike R7 left open, and the one that decides whether a
+ * The question spike R7 left open longest, and the one that decides whether a
  * terminal can be a tab you leave open rather than something that has to be
  * restarted every time the user checks a message.
  *
@@ -90,7 +90,7 @@ class BackgroundSurvivalTest {
         runCatching { readLines().filter { it.isNotBlank() } }.getOrDefault(emptyList())
 
     private companion object {
-        const val TAG = "PtySpike"
+        const val TAG = "Terminal"
         const val BACKGROUND_MS = 45_000L
     }
 }

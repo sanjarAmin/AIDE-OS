@@ -1,4 +1,4 @@
-package com.osamu.aide.spike.pty
+package com.osamu.aide.terminal
 
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -12,13 +12,16 @@ import org.junit.runner.RunWith
 import java.io.File
 
 /**
- * Spike R7: a PTY and a shell on an unprivileged device.
+ * The platform questions spike R7 asked, now owned by the module.
  *
- * Each test isolates one layer so a failure names the layer rather than the
- * spike: (1) the kernel gives us a PTY at all, (2) a shell execs on it and
- * echoes, (3) the shell really owns the terminal, (4) job control can interrupt
- * a foreground command, (5) the size is reported, and (6) an exit status comes
- * back.
+ * `tools/pty/FINDINGS.md` is the write-up; these are the assertions behind it,
+ * moved here from `:spike:pty` so the module carries its own evidence and the
+ * spike could be deleted.
+ *
+ * Each test isolates one layer so a failure names the layer: (1) the kernel
+ * gives us a PTY at all, (2) a shell execs on it and echoes, (3) the shell
+ * really owns the terminal, (4) job control can interrupt a foreground command,
+ * (5) the size is reported, and (6) an exit status comes back.
  *
  * Ordered by how early a failure would stop everything after it. `forkpty` is
  * first because everything else is downstream of it, and because it is the one
@@ -88,20 +91,32 @@ class PtyOnDeviceTest {
         Log.i(TAG, "forkpty gave pid ${pty.processId}")
     }
 
-    /** Question 2: does a shell exec on it, and does it talk back? */
+    /**
+     * Question 2: does a shell exec on it, and does it talk back?
+     *
+     * **The marker is split by shell quoting so it cannot appear in the echo.**
+     * `AIDE-OS-PTY'-WORKS'` is echoed with the quotes and printed without them,
+     * so finding the unquoted form proves the shell ran the command rather than
+     * the terminal repeating it back. The first version of this asserted the
+     * marker appeared "at least once", which the echo satisfies on its own --
+     * it would have passed against a shell that never started.
+     *
+     * That the echo happens at all is itself evidence the fd is a terminal
+     * rather than a pipe, so both forms are checked.
+     */
     @Test
     fun a_shell_runs_and_answers() {
         val pty = open()
 
-        pty.type("echo AIDE-OS-PTY-WORKS\n")
+        pty.type("echo AIDE-OS-PTY'-WORKS'\n")
         val transcript = pty.readUntil("AIDE-OS-PTY-WORKS")
 
-        // Twice: once echoed by the terminal, once printed by the shell. That
-        // is itself evidence the fd is a terminal rather than a pipe, since a
-        // pipe would not echo.
-        val occurrences = Regex("AIDE-OS-PTY-WORKS").findAll(transcript).count()
-        Log.i(TAG, "marker appeared $occurrences time(s)")
-        assertTrue("the shell did not answer", occurrences >= 1)
+        Log.i(TAG, "shell answered with the unquoted marker")
+        assertTrue(
+            "the terminal did not echo, so this fd is not a terminal",
+            "AIDE-OS-PTY'-WORKS'" in transcript,
+        )
+        assertTrue("the shell did not answer", "AIDE-OS-PTY-WORKS" in transcript)
     }
 
     /**
@@ -115,7 +130,7 @@ class PtyOnDeviceTest {
     @Test
     fun the_shell_owns_the_terminal() {
         val pty = open()
-        pty.type("echo READY\n")
+        pty.type("echo READ'Y'\n")
         pty.readUntil("READY")
 
         val group = pty.foregroundGroup()
@@ -143,7 +158,7 @@ class PtyOnDeviceTest {
     @Test
     fun a_foreground_command_can_be_interrupted() {
         val pty = open()
-        pty.type("echo READY\n")
+        pty.type("echo READ'Y'\n")
         pty.readUntil("READY")
 
         pty.type("sleep 30\n")
@@ -163,7 +178,7 @@ class PtyOnDeviceTest {
         )
 
         // And it is a working shell, not just one holding the terminal.
-        pty.type("echo INTERRUPTED-AND-BACK\n")
+        pty.type("echo INTERRUPTED'-AND-BACK'\n")
         pty.readUntil("INTERRUPTED-AND-BACK", timeoutMs = 10_000)
     }
 
@@ -193,7 +208,7 @@ class PtyOnDeviceTest {
     @Test
     fun the_size_reaches_the_shell() {
         val pty = open()
-        pty.type("echo READY\n")
+        pty.type("echo READ'Y'\n")
         pty.readUntil("READY")
 
         assertEquals("TIOCSWINSZ failed", 0, pty.resize(columns = 132, rows = 43))
@@ -203,7 +218,7 @@ class PtyOnDeviceTest {
         // Followed by a marker, because reading until a newline reads back the
         // *echo* of what was typed and stops before the answer arrives. Every
         // read from a terminal has to be anchored on something the test chose.
-        pty.type("stty size; echo SIZE-DONE\n")
+        pty.type("stty size; echo SIZE'-DONE'\n")
         val transcript = pty.readUntil("SIZE-DONE", timeoutMs = 5_000)
         Log.i(TAG, "stty size said: ${transcript.trim().takeLast(60)}")
         assertTrue(
@@ -216,7 +231,7 @@ class PtyOnDeviceTest {
     @Test
     fun the_exit_status_comes_back() {
         val pty = open()
-        pty.type("echo READY\n")
+        pty.type("echo READ'Y'\n")
         pty.readUntil("READY")
 
         pty.type("exit 3\n")
@@ -236,10 +251,10 @@ class PtyOnDeviceTest {
     @Test
     fun what_is_on_path() {
         val pty = open()
-        pty.type("echo READY\n")
+        pty.type("echo READ'Y'\n")
         pty.readUntil("READY")
 
-        pty.type("echo PATH=${'$'}PATH; ls /system/bin | wc -l; echo DONE-PROBE\n")
+        pty.type("echo PATH=${'$'}PATH; ls /system/bin | wc -l; echo DONE'-PROBE'\n")
         val transcript = pty.readUntil("DONE-PROBE", timeoutMs = 10_000)
         Log.i(TAG, "environment probe:\n${transcript.trim()}")
 
@@ -248,7 +263,7 @@ class PtyOnDeviceTest {
     }
 
     private companion object {
-        const val TAG = "PtySpike"
+        const val TAG = "Terminal"
         const val SIGINT = 2
     }
 }

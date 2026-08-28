@@ -11,8 +11,8 @@ thing here that cannot be attempted without native code, and the questions were
 about platform policy rather than about a library.
 
 Measured on the `aideos_test` AVD (API 34, x86_64), NDK 28.2. Reproduce with
-`:spike:pty:connectedDebugAndroidTest` and read the answers out of logcat under
-the tag `PtySpike`. Eight tests, six consecutive clean runs of the seven core ones and three of the background one.
+`:terminal:connectedDebugAndroidTest` and read the answers out of logcat under
+the tag `Terminal`. Eight tests, six consecutive clean runs of the seven core ones and three of the background one.
 
 ## What works
 
@@ -174,10 +174,27 @@ a PTY child is killed immediately and the design is impossible.
   only `x86_64` has been run. Nothing here is architecture-sensitive, but that
   is a reasoned expectation rather than a measurement.
 
+## 10. Reading a terminal in a test: the echo is not the answer
+
+Learned twice, the second time expensively. The terminal echoes what was typed,
+so a test that waits for a marker literally present in the command it sent
+matches the **echo** and returns before the shell has run anything.
+
+The spike's own `a_shell_runs_and_answers` asserted its marker appeared "at
+least once" and would have passed against a shell that never started. It was
+only caught when `TerminalSessionTest`'s resize test waited the same way and
+then asserted on output that had not arrived yet.
+
+The fix is to split the marker with shell quoting: `AIDE-OS-PTY'-WORKS'` is
+echoed **with** the quotes and printed **without** them, so the unquoted form
+appears only in the shell's answer. Both forms are now checked in that test --
+the quoted one proves the fd echoes, which is itself evidence it is a terminal
+and not a pipe.
+
 ## What M8's terminal half should take from this
 
 1. **No further platform spike is owed.** The PTY, the shell, job control and
-   background survival all work. Build `:terminal` on `forkpty`.
+   background survival all work. `:terminal` is built on `forkpty`.
 2. **The emulator is the work**, not the process handling. Evaluate vendoring
    Termux's before writing one.
 3. **Plan for a foreground service anyway**, per section 8's second caveat: the
@@ -185,5 +202,7 @@ a PTY child is killed immediately and the design is impossible.
    which the platform relaxes cached-app handling.
 4. **Design around not being able to list `/system/bin`.**
 
-Delete `:spike:pty` once `:terminal` answers the same questions under its own
-tests. Keep this file.
+`:spike:pty` is **gone**: `:terminal` carries these assertions now, in
+`PtyOnDeviceTest` and `BackgroundSurvivalTest`, which is what the spike existed
+to establish. This file stays, because the answers are why the module is shaped
+the way it is.

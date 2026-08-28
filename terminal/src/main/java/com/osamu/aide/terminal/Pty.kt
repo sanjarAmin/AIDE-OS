@@ -1,4 +1,4 @@
-package com.osamu.aide.spike.pty
+package com.osamu.aide.terminal
 
 import java.io.FileDescriptor
 import java.io.FileInputStream
@@ -68,7 +68,7 @@ class Pty private constructor(private val pid: Int, private val fd: Int) {
 
     companion object {
         init {
-            System.loadLibrary("aide-pty")
+            System.loadLibrary("aide-terminal")
         }
 
         /**

@@ -15,7 +15,7 @@
 | ✅ | Spike R2 — kotlinc + Compose on ART | Resolved. `tools/kotlinc/FINDINGS.md` |
 | ✅ | Spike R2b — ECJ, D8, apksig on ART | Resolved. `tools/ecj/FINDINGS.md` |
 | ✅ | Spike R6 — JGit on ART | Resolved, and **unmodified** — the first "pure JVM" claim here that held. `tools/git/FINDINGS.md` |
-| ✅ | Spike R7 — PTY + shell on a device | Resolved. `forkpty` works from an untrusted app, **job control included**. `tools/pty/FINDINGS.md` |
+| ✅ | Spike R7 — PTY + shell on a device | Resolved, and retired into `:terminal`. `forkpty` works from an untrusted app, **job control included**. `tools/pty/FINDINGS.md` |
 | ✅ | License | GPLv3 |
 | 🟡 | **M0** Skeleton | Built: `:app`, `:core:{common,fs,ui}`, `:editor`, `:toolchain:{native,manager}`, `:engine:{api,fast}`. 9 of 22 planned modules. |
 | 🟢 | **M1** Editor | Highlighting, tabs, symbol row, find/replace, diagnostics gutter, and SAF import. `editor/FINDINGS.md`, `core/fs/FINDINGS.md` |
@@ -460,10 +460,18 @@ M0–M5 is the real v1.0. Everything from M6 on is expansion.
    precisely the state in which Android relaxes cached-app handling, so
    `:terminal` should still plan for a foreground service.
 
-   **The emulator is now the work, not the process handling** — state machine,
-   scrollback, attributes, alternate screen. Termux's `terminal-emulator` is
-   GPLv3 and so is this project, which is one of the reasons that licence was
-   chosen; vendoring it should be evaluated before writing one.
+   **The process half now exists as `:terminal`**, and the spike is deleted:
+   `TerminalSession` runs a shell, pumps its output as a flow of bytes, reports
+   the size, interrupts the foreground group and separates stopping the reader
+   from stopping the shell. Bytes rather than text on purpose — a multi-byte
+   character can straddle two reads, and decoding is the emulator's job because
+   only it can hold the partial sequence.
+
+   **The emulator is the remaining work, and it is a decision rather than a
+   task** — state machine, scrollback, attributes, alternate screen. Termux's
+   `terminal-emulator` is GPLv3 and so is this project, which is one of the
+   reasons that licence was chosen; vendoring it should be evaluated before
+   writing one, and that evaluation is not something to do unattended.
    `tools/pty/FINDINGS.md`.
 
 ~~Before building `:build:fast`, verify the remaining "pure JVM, therefore fine

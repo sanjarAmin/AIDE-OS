@@ -1,4 +1,4 @@
-package com.osamu.aide.spike.pty
+package com.osamu.aide.terminal
 
 import android.app.Activity
 import android.os.Bundle

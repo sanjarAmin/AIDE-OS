@@ -31,7 +31,7 @@
  * rather than "it did not work".
  */
 JNIEXPORT jint JNICALL
-Java_com_osamu_aide_spike_pty_Pty_nativeOpen(
+Java_com_osamu_aide_terminal_Pty_nativeOpen(
         JNIEnv *env, jclass clazz, jstring j_shell, jstring j_cwd,
         jint columns, jint rows, jintArray out_fd) {
     (void) clazz;
@@ -106,7 +106,7 @@ Java_com_osamu_aide_spike_pty_Pty_nativeOpen(
 
 /** The size the child believes its terminal is. Drives SIGWINCH. */
 JNIEXPORT jint JNICALL
-Java_com_osamu_aide_spike_pty_Pty_nativeResize(
+Java_com_osamu_aide_terminal_Pty_nativeResize(
         JNIEnv *env, jclass clazz, jint fd, jint columns, jint rows) {
     (void) env;
     (void) clazz;
@@ -126,7 +126,7 @@ Java_com_osamu_aide_spike_pty_Pty_nativeResize(
  * fd is a pipe wearing a terminal's clothes.
  */
 JNIEXPORT jint JNICALL
-Java_com_osamu_aide_spike_pty_Pty_nativeForegroundGroup(JNIEnv *env, jclass clazz, jint fd) {
+Java_com_osamu_aide_terminal_Pty_nativeForegroundGroup(JNIEnv *env, jclass clazz, jint fd) {
     (void) env;
     (void) clazz;
     pid_t group = tcgetpgrp(fd);
@@ -135,7 +135,7 @@ Java_com_osamu_aide_spike_pty_Pty_nativeForegroundGroup(JNIEnv *env, jclass claz
 
 /** Waits for the child, returning its exit status or -errno. */
 JNIEXPORT jint JNICALL
-Java_com_osamu_aide_spike_pty_Pty_nativeWait(JNIEnv *env, jclass clazz, jint pid) {
+Java_com_osamu_aide_terminal_Pty_nativeWait(JNIEnv *env, jclass clazz, jint pid) {
     (void) env;
     (void) clazz;
     int status = 0;
@@ -148,7 +148,7 @@ Java_com_osamu_aide_spike_pty_Pty_nativeWait(JNIEnv *env, jclass clazz, jint pid
 
 /** Non-blocking check: has the child exited yet? -1 means still running. */
 JNIEXPORT jint JNICALL
-Java_com_osamu_aide_spike_pty_Pty_nativePoll(JNIEnv *env, jclass clazz, jint pid) {
+Java_com_osamu_aide_terminal_Pty_nativePoll(JNIEnv *env, jclass clazz, jint pid) {
     (void) env;
     (void) clazz;
     int status = 0;
@@ -161,7 +161,7 @@ Java_com_osamu_aide_spike_pty_Pty_nativePoll(JNIEnv *env, jclass clazz, jint pid
 }
 
 JNIEXPORT jint JNICALL
-Java_com_osamu_aide_spike_pty_Pty_nativeKill(JNIEnv *env, jclass clazz, jint pid, jint sig) {
+Java_com_osamu_aide_terminal_Pty_nativeKill(JNIEnv *env, jclass clazz, jint pid, jint sig) {
     (void) env;
     (void) clazz;
     /* Negated: the whole process group, which is what a terminal signals. */
@@ -169,7 +169,7 @@ Java_com_osamu_aide_spike_pty_Pty_nativeKill(JNIEnv *env, jclass clazz, jint pid
 }
 
 JNIEXPORT void JNICALL
-Java_com_osamu_aide_spike_pty_Pty_nativeClose(JNIEnv *env, jclass clazz, jint fd) {
+Java_com_osamu_aide_terminal_Pty_nativeClose(JNIEnv *env, jclass clazz, jint fd) {
     (void) env;
     (void) clazz;
     close(fd);

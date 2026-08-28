@@ -7,7 +7,7 @@
              treatment Android gives a backgrounded app. See
              BackgroundSurvivalTest. -->
         <activity
-            android:name="com.osamu.aide.spike.pty.ShellHostActivity"
+            android:name="com.osamu.aide.terminal.ShellHostActivity"
             android:exported="true" />
     </application>
 
