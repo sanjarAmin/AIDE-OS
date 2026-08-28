@@ -45,30 +45,58 @@ class NativeToolRunner(
             else -> return AppResult.Failure(AppError(describe(availability)))
         }
 
-        return withContext(dispatchers.compiler) {
-            try {
-                val process = ProcessBuilder(listOf(executable.absolutePath) + args)
-                    .apply { workingDir?.let { directory(it) } }
-                    .start()
+        return run(
+            plan = LaunchPlan(listOf(executable.absolutePath) + args),
+            workingDir = workingDir,
+            describedAs = tool.libraryName,
+            onLine = onLine,
+        )
+    }
 
-                // Both pipes must be drained concurrently. aapt2 can emit more
-                // output than a pipe buffer holds, and reading them in sequence
-                // deadlocks: the process blocks writing to the stream we are
-                // not reading yet, so it never exits and waitFor never returns.
-                val sink = Any()
-                coroutineScope {
-                    val out = async { drain(process.inputStream, ToolStream.STDOUT, sink, onLine) }
-                    val err = async { drain(process.errorStream, ToolStream.STDERR, sink, onLine) }
-                    out.await()
-                    err.await()
+    /**
+     * Runs an arbitrary [LaunchPlan].
+     *
+     * The overload above is for the tools bundled in the APK; this one is for
+     * everything else, which in practice means a downloaded toolchain started
+     * through [LinkerLaunch]. Both end up here, so streaming, the concurrent
+     * drain and the failure shape are identical either way -- which matters
+     * because the deadlock the drain avoids is not specific to aapt2, and a
+     * second copy of this loop would be a second chance to get it wrong.
+     *
+     * [describedAs] appears in the failure message. A plan is a list of strings
+     * by the time it arrives here, and `Could not run /system/bin/linker64`
+     * would name the launcher rather than the tool that failed to start.
+     */
+    suspend fun run(
+        plan: LaunchPlan,
+        workingDir: File? = null,
+        describedAs: String = plan.command.first(),
+        onLine: (ToolLine) -> Unit = {},
+    ): AppResult<ToolResult> = withContext(dispatchers.compiler) {
+        try {
+            val process = ProcessBuilder(plan.command)
+                .apply {
+                    workingDir?.let { directory(it) }
+                    // Added to the inherited environment, never replacing it.
+                    environment().putAll(plan.environment)
                 }
+                .start()
 
-                AppResult.Success(ToolResult(process.waitFor()))
-            } catch (e: Exception) {
-                AppResult.Failure(
-                    AppError("Could not run ${tool.libraryName}: ${e.message}", e),
-                )
+            // Both pipes must be drained concurrently. aapt2 can emit more
+            // output than a pipe buffer holds, and reading them in sequence
+            // deadlocks: the process blocks writing to the stream we are
+            // not reading yet, so it never exits and waitFor never returns.
+            val sink = Any()
+            coroutineScope {
+                val out = async { drain(process.inputStream, ToolStream.STDOUT, sink, onLine) }
+                val err = async { drain(process.errorStream, ToolStream.STDERR, sink, onLine) }
+                out.await()
+                err.await()
             }
+
+            AppResult.Success(ToolResult(process.waitFor()))
+        } catch (e: Exception) {
+            AppResult.Failure(AppError("Could not run $describedAs: ${e.message}", e))
         }
     }
 
