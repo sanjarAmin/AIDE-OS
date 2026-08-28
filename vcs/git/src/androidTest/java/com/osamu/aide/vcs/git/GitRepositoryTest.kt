@@ -208,6 +208,40 @@ class GitRepositoryTest {
         }
     }
 
+    /**
+     * Editing a tracked file stages as `changed`, not `added`.
+     *
+     * `GitStatus` has seven fields and every one defaults to empty, so a
+     * mapping that dropped one would report a file as permanently unstaged and
+     * nothing would fail. `added`, `removed`, `modified`, `missing` and
+     * `untracked` are each asserted by another test here; this is `changed`,
+     * which is the state an edit to an existing file passes through and the one
+     * a real commit is usually made of.
+     */
+    @Test
+    fun editing_a_tracked_file_stages_as_changed() = runTest {
+        identify()
+        repository().use { repo ->
+            val file = File(repo.workTree, "a.txt").apply { writeText("first\n") }
+            repo.stage(listOf("a.txt")).orFail()
+            repo.commit("add a").orFail()
+
+            file.writeText("second\n")
+            assertEquals(setOf("a.txt"), repo.status().orFail().modified)
+
+            repo.stage(listOf("a.txt")).orFail()
+            val staged = repo.status().orFail()
+            assertEquals("an edit to a tracked file is 'changed'", setOf("a.txt"), staged.changed)
+            assertEquals("it is not a new file", emptySet<String>(), staged.added)
+            // The panel commits `staged`, which is added + changed + removed.
+            assertEquals(setOf("a.txt"), staged.staged)
+
+            repo.commit("edit a").orFail()
+            assertTrue(repo.status().orFail().isClean)
+            assertEquals("second\n", file.readText())
+        }
+    }
+
     @Test
     fun unstaging_leaves_the_working_tree_alone() = runTest {
         identify()

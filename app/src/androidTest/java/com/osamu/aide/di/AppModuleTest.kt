@@ -7,6 +7,7 @@ import com.osamu.aide.engine.fast.KotlinToolchainProvider
 import com.osamu.aide.ui.workspace.AssistantViewModel
 import com.osamu.aide.ui.workspace.KotlinCompilerSource
 import com.osamu.aide.ui.workspace.LanguageServices
+import com.osamu.aide.ui.workspace.GitViewModel
 import com.osamu.aide.ui.workspace.ProjectBuilder
 import com.osamu.aide.vcs.git.GitCredentialStore
 import com.osamu.aide.vcs.git.GitIdentityStore
@@ -66,6 +67,12 @@ class AppModuleTest {
         assertNotNull(koin.get<GitWorkspace>())
         assertNotNull(koin.get<GitIdentityStore>())
         assertNotNull(koin.get<GitCredentialStore>())
+        // Resolved rather than assumed because it takes an unqualified `File`,
+        // and the module defines two: the workspace root and, under a name, the
+        // build output root. Koin picks the unnamed one, which is correct and
+        // is exactly the kind of binding that breaks silently when a third
+        // `File` is added.
+        assertNotNull(koin.get<GitViewModel>())
     }
 
     /**
