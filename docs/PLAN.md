@@ -405,7 +405,19 @@ M0–M5 is the real v1.0. Everything from M6 on is expansion.
    SSH is deliberately unanswered; HTTPS with a token is the designed path.
    `tools/git/FINDINGS.md`.
 
-   **The git half is now done, end to end.** `:vcs:git` wraps JGit;
+   **The git half is now done, end to end, and driven by hand on a device.**
+   Create a repository from the panel, stage, commit with the identity entered
+   in Settings: `master / add4029 First commit from a phone`, with the ref on
+   disk. Cloning, its progress dialog and its cancel were driven the same way.
+
+   That exercise found four bugs no test could have: the git panel was
+   unreachable without first starting a build, a created project could never
+   become a repository, the changed-files list was laid out at zero height in a
+   dock sized for build output, and identity validation reddened the wrong
+   field. None is a logic error, which is why a suite that drives view models
+   saw none of them. `vcs/git/FINDINGS.md` section 8.
+
+   `:vcs:git` wraps JGit;
    `GitViewModelTest` drives the acceptance test's own words at the view-model
    layer -- edit, stage, commit, push -- and asserts the commit in the object
    database and again in the *receiving* repository, because JGit reports a
