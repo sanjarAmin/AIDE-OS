@@ -76,6 +76,12 @@ include(":spike:deps")
 // of the app.
 include(":spike:ai")
 
+// Spike R10 -- clang on a device. It runs, and the .so it builds loads: the
+// tests here are what says so, and they are also where the two rules M7 has
+// to obey are pinned. Kept rather than retired, because a toolchain update
+// is exactly when they need re-checking. Not part of the app.
+include(":spike:clang")
+
 // Spike R9 -- executing a downloaded native binary, which M7 is designed
 // around and which docs/PLAN.md is currently inconsistent about. Not part of
 // the app.

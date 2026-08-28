@@ -45,7 +45,7 @@ emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu host
 tools/               Scripts that produce the toolchains, and their FINDINGS.
 ```
 
-`docs/PLAN.md` lists 22 modules. Fifteen exist, plus four spikes. Do not
+`docs/PLAN.md` lists 22 modules. Fifteen exist, plus six spikes. Do not
 create the rest speculatively — each arrives with the milestone that needs it.
 
 ## Conventions
@@ -74,6 +74,12 @@ failed to load still produces a clean compile.
 - **API 30 is the toolchain floor.** aapt2's libbase needs it, and the compiler
   dex archive is built for it. `minSdk` stays 26 — the editor works below 30 —
   so build features must gate at runtime, not fail at exec time.
+- **clang runs on device, but the driver cannot spawn anything.** Compiling
+  and linking in one `clang` invocation fails, and so does letting clang run
+  `ld.lld` at all — both because a spawned tool has to `execve` out of app
+  storage. One job per invocation, and links are planned with `-###` and
+  executed by us. `tools/clang/FINDINGS.md`.
+
 - **The kotlinc dex archive's inputs are not in git.** ~100 MB of third-party
   jars, consumed by `tools/kotlinc/build-shim.sh` and `build-kotlinc-dex.py`.
   Nothing in the repo assembles that jar set; the gap is real and known, and
