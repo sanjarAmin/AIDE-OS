@@ -616,6 +616,17 @@ class WorkspaceViewModel(
         buildJob?.cancel()
     }
 
+    /**
+     * Shows or hides the tool dock.
+     *
+     * The dock used to open only when a build started, which made sense while
+     * it held nothing but build output. It now holds the git panel too, and
+     * requiring a build before a commit is not a workflow anyone would choose.
+     */
+    fun toggleToolPanel() {
+        _state.update { it.copy(isBuildPanelOpen = !it.isBuildPanelOpen) }
+    }
+
     fun closeBuildPanel() {
         _state.update { it.copy(isBuildPanelOpen = false) }
     }

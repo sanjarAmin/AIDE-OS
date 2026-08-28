@@ -182,10 +182,18 @@ fun BottomToolDock(
             HorizontalDivider()
 
             // Tool Content Body
+            //
+            // **Taller for Git.** 200dp was sized when this dock held build
+            // output and nothing else. The git panel spends most of that on
+            // chrome it cannot drop -- a branch line, an identity warning, a
+            // commit field -- and what was left for the list of changed files
+            // was about one row, overlapping the row beneath it. Verified in
+            // the running app: a repository with three untracked files showed
+            // one, clipped.
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(200.dp)
+                    .height(if (selectedTab == ToolTab.GIT) 340.dp else 200.dp)
                     .padding(8.dp),
             ) {
                 when (selectedTab) {

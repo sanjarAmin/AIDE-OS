@@ -28,22 +28,53 @@ data class GitIdentity(val name: String, val email: String) {
      * that are unambiguous: nothing typed, and something that cannot be an
      * address at all.
      */
-    fun validate(): String? {
-        // Trimmed first, because [GitIdentityStore.save] stores the trimmed
-        // form: validating the raw text would reject a padded address that
-        // would have been stored perfectly well, and the two disagreeing is
-        // how a field ends up refusing what the store would accept.
-        val identity = trimmed()
+    /**
+     * The first thing wrong with this identity, or null.
+     *
+     * Composed from the per-field checks so a caller wanting one message and a
+     * caller wanting to mark one field cannot disagree about what is wrong.
+     */
+    fun validate(): String? = nameProblem() ?: emailProblem()
+
+    /**
+     * What is wrong with the name specifically.
+     *
+     * Separate from [emailProblem] so a field is only marked when it is the
+     * field at fault. A single combined check made the name turn red because
+     * the *email* was empty, which tells the user to fix the wrong thing.
+     */
+    fun nameProblem(): String? {
+        val name = trimmed().name
         return when {
-            identity.name.isEmpty() -> "A name is needed -- it is what appears on every commit."
-            identity.email.isEmpty() ->
+            name.isEmpty() -> "A name is needed -- it is what appears on every commit."
+            // git's commit object format uses '<' and '>' to delimit the
+            // address, so these cannot survive a round trip.
+            '<' in name || '>' in name ->
+                "Angle brackets are not allowed: git uses them to delimit the address."
+            else -> null
+        }
+    }
+
+    /**
+     * What is wrong with the email specifically.
+     *
+     * Deliberately not an email validator. `git` accepts anything without
+     * whitespace, hosting providers differ on what they will match to an
+     * account, and a stricter rule would reject addresses that work while
+     * still admitting ones that do not. Only the unambiguous mistakes.
+     *
+     * Checks the **trimmed** form, because that is what
+     * [GitIdentityStore.save] stores: validating the raw text would refuse a
+     * padded address the store would have accepted perfectly well.
+     */
+    fun emailProblem(): String? {
+        val email = trimmed().email
+        return when {
+            email.isEmpty() ->
                 "An email is needed. Hosting providers match commits to accounts by it."
-            '@' !in identity.email -> "That does not look like an email address."
-            identity.email.any { it.isWhitespace() } -> "An email address cannot contain spaces."
-            // git's own commit object format is line-based and uses '<' and '>'
-            // to delimit the address, so these cannot survive a round trip.
-            '<' in identity.name || '>' in identity.name ||
-                '<' in identity.email || '>' in identity.email ->
+            '@' !in email -> "That does not look like an email address."
+            email.any { it.isWhitespace() } -> "An email address cannot contain spaces."
+            '<' in email || '>' in email ->
                 "Angle brackets are not allowed: git uses them to delimit the address."
             else -> null
         }

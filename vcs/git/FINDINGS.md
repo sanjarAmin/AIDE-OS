@@ -128,7 +128,43 @@ because it is called after every operation and cannot know which.
 **The rule worth keeping: a refresh may clear only errors it is in a position
 to have resolved.** Anything else it must leave alone.
 
-## 8. Things known missing
+## 8. Four bugs the tests could not see
+
+Every one of these was found by installing the app and using it, and every one
+was invisible to a suite that drives view models. Recorded together because the
+pattern is the finding.
+
+**The git panel was unreachable.** The tool dock opened only when a build
+started, which was right while it held nothing but build output. It now holds
+git too, so committing required building first. The dock has its own toolbar
+button now.
+
+**A created project could never become a repository.** The panel correctly said
+"not a git repository" and offered nothing further. `GitWorkspace.init` had
+existed since the module was written and nothing called it.
+
+**The changed-files list was laid out at zero height.** The dock is a fixed
+200dp, sized for build output; the git panel's branch line, identity warning and
+commit field nearly fill that on their own. The list was `weight(1f, fill =
+false)`, so it took only the height it was given -- which was none. A repository
+with three untracked files showed one, clipped, overlapping the row beneath it.
+
+The route to seeing that was `adb shell uiautomator dump`, which shows the
+rendered tree with bounds. The screenshot showed blank space; the dump showed a
+`Stage aide.json` node with bounds overlapping the identity row, which named
+the problem immediately.
+
+**The wrong field turned red.** Identity validation returned one message for the
+pair, so an empty *email* marked the *name* as an error. `nameProblem()` and
+`emailProblem()` are now separate and `validate()` composes them, so a caller
+that wants one message and a caller that wants to mark one field cannot
+disagree.
+
+**None of these are logic errors**, which is why the tests missed them: three
+are layout and one is attribution. A view-model test asserts what the state
+says, and every one of these had correct state.
+
+## 9. Things known missing
 
 - **No merge, rebase or pull.** `fetch` is deliberately separate: fetching is
   safe and can run in the background, merging can conflict, and a background

@@ -68,6 +68,9 @@ class GitViewModel(
      */
     private var opening = false
 
+    /** Remembered so [initialise] knows where to create the repository. */
+    private var projectDir: File? = null
+
     /**
      * Points the panel at the repository containing [projectDir].
      *
@@ -82,6 +85,7 @@ class GitViewModel(
      * do the same work to reach the same answer.
      */
     fun open(projectDir: File) {
+        this.projectDir = projectDir
         if (opening) return
         opening = true
         viewModelScope.launch {
@@ -98,6 +102,39 @@ class GitViewModel(
                 }
                 is AppResult.Failure -> _state.update {
                     it.copy(isRepository = false, errorMessage = opened.error.message)
+                }
+            }
+        }
+    }
+
+    /**
+     * Creates a repository for a project that has none.
+     *
+     * A project that was created rather than cloned is not under version
+     * control, and until this existed there was no way to change that from the
+     * app: the panel said so and offered nothing. `git init` is the whole of
+     * the answer and it was already implemented one layer down.
+     *
+     * The repository is created at the project directory, not at its parent.
+     * A created project has no enclosing repository to belong to, so there is
+     * no parent to prefer -- and initialising one above the project would put
+     * every other project in the workspace inside it.
+     */
+    fun initialise() {
+        val directory = projectDir ?: return
+        if (_state.value.isBusy || _state.value.isRepository == true) return
+        viewModelScope.launch {
+            _state.update { it.copy(isBusy = true, errorMessage = null, notice = null) }
+            when (val created = git.init(directory)) {
+                is AppResult.Success -> {
+                    repository = created.value
+                    _state.update {
+                        it.copy(isRepository = true, isBusy = false, notice = "Repository created.")
+                    }
+                    reload()
+                }
+                is AppResult.Failure -> _state.update {
+                    it.copy(isBusy = false, errorMessage = created.error.message)
                 }
             }
         }

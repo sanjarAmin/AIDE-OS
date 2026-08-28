@@ -54,7 +54,7 @@ class FixAffordanceTest {
                 // dock, so a real caller that forgets to wire it fails to
                 // compile instead of silently showing an empty panel.
                 gitState = GitUiState(),
-                gitActions = GitActions({}, {}, {}, {}, {}, {}),
+                gitActions = GitActions({}, {}, {}, {}, {}, {}, {}),
                 onDiagnosticClick = {},
                 onFixDiagnostic = onFix,
                 onLaunchIntent = {},

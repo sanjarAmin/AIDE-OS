@@ -71,6 +71,25 @@ class GitIdentityTest {
         assertNotNull(GitIdentity("Ada", "<ada@example.com>").validate())
     }
 
+    /**
+     * Each field reports only its own problem.
+     *
+     * The settings screen marks a field red when that field is at fault, and a
+     * single combined check made the *name* turn red because the *email* was
+     * empty -- pointing the user at the wrong box. Found by typing into the
+     * running app.
+     */
+    @Test
+    fun a_problem_is_attributed_to_the_field_it_is_about() {
+        val noEmail = GitIdentity("Ada", "")
+        assertNull("the name is fine", noEmail.nameProblem())
+        assertNotNull("the email is what is missing", noEmail.emailProblem())
+
+        val noName = GitIdentity("", "ada@example.com")
+        assertNotNull("the name is what is missing", noName.nameProblem())
+        assertNull("the email is fine", noName.emailProblem())
+    }
+
     /** Unusual but legal addresses are not the validator's business. */
     @Test
     fun an_unusual_address_is_accepted() {

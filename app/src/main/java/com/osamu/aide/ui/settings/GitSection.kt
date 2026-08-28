@@ -83,7 +83,12 @@ private fun IdentityFields(identities: GitIdentityStore) {
     val draft = GitIdentity(name, email)
     // Only complained about once there is something to complain about: an
     // empty form on first open is not a mistake the user has made yet.
-    val problem = if (name.isBlank() && email.isBlank()) null else draft.validate()
+    val untouched = name.isBlank() && email.isBlank()
+    // Per field, so the one that is wrong is the one that turns red. A single
+    // combined check reddened the name because the email was empty.
+    val nameProblem = if (untouched) null else draft.nameProblem()
+    val emailProblem = if (untouched) null else draft.emailProblem()
+    val problem = nameProblem ?: emailProblem
     val changed = draft.trimmed() != stored
 
     OutlinedTextField(
@@ -91,7 +96,7 @@ private fun IdentityFields(identities: GitIdentityStore) {
         onValueChange = { name = it },
         label = { Text("Name") },
         singleLine = true,
-        isError = problem != null && name.isNotBlank(),
+        isError = nameProblem != null,
         modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Git name" },
     )
     OutlinedTextField(
@@ -99,7 +104,7 @@ private fun IdentityFields(identities: GitIdentityStore) {
         onValueChange = { email = it },
         label = { Text("Email") },
         singleLine = true,
-        isError = problem != null && email.isNotBlank(),
+        isError = emailProblem != null,
         supportingText = {
             Text(
                 text = problem

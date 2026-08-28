@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Redo
+import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Stop
@@ -135,6 +136,7 @@ fun WorkspaceScreen(
             commit = git::commit,
             push = git::push,
             openSettings = onOpenSettings,
+            initialise = git::initialise,
         )
     }
 
@@ -266,6 +268,18 @@ fun WorkspaceScreen(
                             if (state.isDocumentDirty) {
                                 IconButton(onClick = viewModel::save) {
                                     Icon(Icons.Default.Save, contentDescription = "Save")
+                                }
+                            }
+                            // The dock holds git as well as build output, so it
+                            // needs a way open that is not "start a build".
+                            // Hidden on the wide layout, where the same panels
+                            // are always on screen in the side pane.
+                            if (!mode.showsToolPane) {
+                                IconButton(onClick = viewModel::toggleToolPanel) {
+                                    Icon(
+                                        Icons.Default.AccountTree,
+                                        contentDescription = "Show build and git tools",
+                                    )
                                 }
                             }
                             if (state.build.isRunning) {

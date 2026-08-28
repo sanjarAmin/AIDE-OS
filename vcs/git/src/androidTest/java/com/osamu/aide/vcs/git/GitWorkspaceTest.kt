@@ -14,6 +14,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -126,6 +127,83 @@ class GitWorkspaceTest {
         assertNull(workspace.enclosingRepository(sibling, ceiling = workDir))
         // The ceiling itself is examined, but nothing above it.
         assertNull(workspace.enclosingRepository(workDir, ceiling = workDir))
+    }
+
+    /**
+     * **Does a repository work on external app storage?**
+     *
+     * The workspace root is `getExternalFilesDir(null)` — chosen in M0 because
+     * it survives app updates, needs no permission, and is reachable over MTP
+     * so a desktop can pick up the same tree. It is also FUSE-backed, and
+     * `tools/git/FINDINGS.md` finding 1 warned that a git work tree wants a
+     * filesystem it can set attributes on.
+     *
+     * This asks the question directly, on both filesystems, and compares. If
+     * the two disagree, projects cannot live where they currently live and this
+     * test says so in one line rather than leaving it to be discovered as an
+     * empty panel in the running app — which is exactly how it was found.
+     */
+    @Test
+    fun status_sees_untracked_files_on_external_storage_too() = runTest {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val external = context.getExternalFilesDir(null)
+        assumeTrue("no external storage mounted", external != null)
+
+        val outside = File(external, "git-external-test").apply {
+            deleteRecursively()
+            mkdirs()
+        }
+        try {
+            identities.save(GitIdentity("AIDE-OS", "test@example.invalid"))
+            val repoDir = File(outside, "repo")
+            val externalRepo = workspace.init(repoDir)
+            (externalRepo as AppResult.Success).value.use { repo ->
+                File(repo.workTree, "a.txt").writeText("hello\n")
+
+                val status = (repo.status() as AppResult.Success).value
+                assertEquals(
+                    "git status on external storage does not see an untracked file",
+                    setOf("a.txt"),
+                    status.untracked,
+                )
+
+                repo.stage(listOf("a.txt"))
+                repo.commit("on external storage")
+                assertTrue(
+                    "a commit on external storage left the tree dirty",
+                    (repo.status() as AppResult.Success).value.isClean,
+                )
+            }
+        } finally {
+            outside.deleteRecursively()
+        }
+    }
+
+    /**
+     * `init` on a directory that already has files in it.
+     *
+     * The order the app takes: a project exists, the user taps "Create a
+     * repository", and everything already there should show up as untracked
+     * and be committable. The other tests here init an empty directory first
+     * and write afterwards, which is the opposite order and does not exercise
+     * this.
+     */
+    @Test
+    fun init_on_a_directory_with_existing_files_sees_them() = runTest {
+        identities.save(GitIdentity("AIDE-OS", "test@example.invalid"))
+        val directory = File(workDir, "existing").apply { mkdirs() }
+        File(directory, "aide.json").writeText("{}\n")
+        File(directory, "src/main").mkdirs()
+        File(directory, "src/main/Main.java").writeText("class Main {}\n")
+
+        (workspace.init(directory) as AppResult.Success).value.use { repo ->
+            val status = (repo.status() as AppResult.Success).value
+            assertEquals(
+                "init did not see the files that were already there",
+                setOf("aide.json", "src/main/Main.java"),
+                status.untracked,
+            )
+        }
     }
 
     @Test

@@ -128,6 +128,41 @@ class GitViewModelTest {
         assertEquals(false, viewModel.state.value.isRepository)
     }
 
+    /**
+     * A created project can be put under version control from the app.
+     *
+     * Found by driving the running app rather than by a test: the panel
+     * correctly reported "not a git repository" and offered no way to change
+     * that, so a project that was created rather than cloned could never be
+     * committed to at all. `GitWorkspace.init` already existed; nothing called
+     * it.
+     */
+    @Test
+    fun a_project_with_no_repository_can_be_given_one() = runTest(timeout = 2.minutes) {
+        identify()
+        val plain = File(workspaceRoot, "created").apply { mkdirs() }
+
+        viewModel.open(plain)
+        await("the answer") { viewModel.state.value.isRepository != null }
+        assertEquals(false, viewModel.state.value.isRepository)
+
+        viewModel.initialise()
+        await("the repository") { viewModel.state.value.isRepository == true }
+
+        assertTrue("no .git directory was created", File(plain, ".git").isDirectory)
+        assertEquals("Repository created.", viewModel.state.value.notice)
+
+        // And it is a working repository, not just a directory: a commit lands.
+        File(plain, "a.txt").writeText("first\n")
+        viewModel.refresh()
+        await("the file") { viewModel.state.value.status.untracked.isNotEmpty() }
+        viewModel.stage(listOf("a.txt"))
+        await("staging") { viewModel.state.value.status.staged.isNotEmpty() }
+        viewModel.setMessage("first commit")
+        viewModel.commit()
+        await("the commit") { viewModel.state.value.recent.firstOrNull()?.summary == "first commit" }
+    }
+
     @Test
     fun editing_staging_and_committing_writes_a_commit() = runTest(timeout = 2.minutes) {
         seed()

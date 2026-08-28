@@ -1,8 +1,10 @@
 package com.osamu.aide.ui.workspace
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -40,6 +42,7 @@ data class GitActions(
     val commit: () -> Unit,
     val push: () -> Unit,
     val openSettings: () -> Unit,
+    val initialise: () -> Unit,
 )
 
 /**
@@ -61,30 +64,39 @@ fun GitPanel(
 ) {
     when (state.isRepository) {
         null -> Text("Looking for a repository…", style = MaterialTheme.typography.bodySmall)
-        false -> NotARepository(modifier)
-        true -> Column(modifier.fillMaxWidth()) {
+        false -> NotARepository(modifier, state.isBusy, actions.initialise)
+        true -> Column(modifier.fillMaxSize()) {
             Header(state, actions.push)
 
             val staged = state.status.staged.sorted()
             val unstaged = (state.status.unstaged + state.status.untracked).sorted()
 
-            if (staged.isEmpty() && unstaged.isEmpty()) {
-                Text(
-                    text = "Nothing has changed since the last commit.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(vertical = 6.dp),
-                )
-            } else {
-                LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false)) {
-                    items(staged, key = { "staged/$it" }) { path ->
-                        ChangedFile(path, isStaged = true, enabled = !state.isBusy) {
-                            actions.unstage(path)
+            // **`weight(1f)`, filling.** With `fill = false` the list took only
+            // the height it wanted, and the dock is a fixed 200dp that the
+            // header and commit row nearly fill on their own -- so the list was
+            // laid out at zero height and a repository full of changes showed
+            // nothing at all. Found by opening the panel in the running app;
+            // every test asserts through the view model, where the layout does
+            // not exist.
+            Box(Modifier.fillMaxWidth().weight(1f)) {
+                if (staged.isEmpty() && unstaged.isEmpty()) {
+                    Text(
+                        text = "Nothing has changed since the last commit.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 6.dp),
+                    )
+                } else {
+                    LazyColumn(Modifier.fillMaxSize()) {
+                        items(staged, key = { "staged/$it" }) { path ->
+                            ChangedFile(path, isStaged = true, enabled = !state.isBusy) {
+                                actions.unstage(path)
+                            }
                         }
-                    }
-                    items(unstaged, key = { "unstaged/$it" }) { path ->
-                        ChangedFile(path, isStaged = false, enabled = !state.isBusy) {
-                            actions.stage(path)
+                        items(unstaged, key = { "unstaged/$it" }) { path ->
+                            ChangedFile(path, isStaged = false, enabled = !state.isBusy) {
+                                actions.stage(path)
+                            }
                         }
                     }
                 }
@@ -219,7 +231,7 @@ private fun CommitRow(state: GitUiState, hasStagedFiles: Boolean, actions: GitAc
 }
 
 @Composable
-private fun NotARepository(modifier: Modifier) {
+private fun NotARepository(modifier: Modifier, isBusy: Boolean, onInitialise: () -> Unit) {
     Column(modifier.fillMaxWidth().padding(8.dp)) {
         Text(
             text = "Not a git repository",
@@ -227,11 +239,17 @@ private fun NotARepository(modifier: Modifier) {
             color = MaterialTheme.colorScheme.onSurface,
         )
         Text(
-            text = "This project was created or imported rather than cloned, so there " +
-                "is nothing to commit to yet.",
+            text = "This project was created or imported rather than cloned. Start " +
+                "tracking it and every change from here on can be committed.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 4.dp),
         )
+        Button(
+            onClick = onInitialise,
+            enabled = !isBusy,
+            modifier = Modifier.padding(top = 10.dp)
+                .semantics { contentDescription = "Create a repository" },
+        ) { Text("Create a repository") }
     }
 }
