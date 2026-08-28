@@ -215,8 +215,24 @@ natural owner.
   never touches but which came in through the dependency walk. Trimming looks
   possible and is untested; `llvm-ar` and `llvm-strip` are probably wanted for
   static libraries later, so it is not simply "drop the package".
-- **arm64.** The device tested is x86_64 (the emulator). The toolchain builds
-  for aarch64 from the same script and the mechanism is architecture-independent,
-  but nothing here has run on real hardware.
+- **arm64 — the artifacts check out, running them needs hardware.**
+  `fetch-toolchain.sh <dir> aarch64` produces a 538 MB tree, and every piece
+  the design depends on is right: `clang-21` and `ld.lld` are AArch64 ELF64
+  PIE with `/system/bin/linker64` as their interpreter — R9's exact route —
+  alongside the aarch64 sysroot, the clang resource dir, the libc++ headers,
+  `libclang_rt.builtins-aarch64-android.a`, and the
+  `clang++-21 → clang++ → clang-21` symlink chain intact through the tar.
+
+  What is unverified is that they *run*, and that cannot be done here. **The
+  Android emulator refuses arm64 system images on an x86_64 host** — `Avd's CPU
+  Architecture 'arm64' is not supported by the QEMU2 emulator on x86_64 host`
+  — despite shipping a `qemu-system-aarch64` binary, which makes the tree
+  misleading. So this needs a real arm64 device on adb; there is no software
+  route to it from this machine.
+
+  The residual risk is low and worth stating precisely: what is untested is
+  Android's behaviour (the exec route, W^X, SELinux categories), not the
+  architecture, and none of those findings are CPU-dependent. Nothing here
+  suggests arm64 differs — it simply has not been run.
 - **Parallelism.** One job at a time is a correctness rule per *invocation*, not
   a ban on running several invocations concurrently. Untested.
