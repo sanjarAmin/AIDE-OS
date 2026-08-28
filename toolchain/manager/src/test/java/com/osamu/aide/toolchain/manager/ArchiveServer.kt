@@ -64,7 +64,8 @@ class ArchiveServer(
         archiveUrl = url,
         archiveSha1 = sha1,
         archiveBytes = archive.size.toLong(),
-        entries = mapOf(entryName to "android.jar"),
+        archive = ComponentArchive.ZipEntries(mapOf(entryName to "android.jar")),
+        installedBytes = 300_000L,
     )
 
     fun stop() = server.stop(0)

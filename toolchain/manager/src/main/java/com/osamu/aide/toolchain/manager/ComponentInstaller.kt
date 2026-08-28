@@ -14,7 +14,10 @@ import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
+import java.nio.file.Files
+import java.util.zip.GZIPInputStream
 import java.util.zip.ZipFile
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 
 /**
  * Downloads a component, checks it, and installs the one file that matters.
@@ -50,8 +53,12 @@ class ComponentInstaller(
         val archive = storage.downloadFor(component)
 
         // Checked before starting rather than discovered 60 MB in. The archive
-        // and the file extracted from it are both on disk at once, briefly.
-        val needed = component.archiveBytes * 2
+        // and what comes out of it are both on disk at once, briefly -- so the
+        // requirement is the sum, not twice either. For the C/C++ toolchain
+        // those two numbers differ by a factor of three and a half, and
+        // doubling the download would have let a 710 MB install begin on a
+        // device with 320 MB free.
+        val needed = component.archiveBytes + component.installedBytes
         val available = archive.parentFile?.usableSpace ?: Long.MAX_VALUE
         if (available < needed) {
             emit(
@@ -212,13 +219,92 @@ class ComponentInstaller(
      * otherwise persist for the life of the app and surface as a compiler that
      * is present and cannot start.
      */
-    private fun extract(component: ToolchainComponent, archive: File): File {
+    private fun extract(component: ToolchainComponent, archive: File): File =
+        when (component.archive) {
+            is ComponentArchive.ZipEntries -> extractEntries(component, archive)
+            is ComponentArchive.GzippedTar -> extractTree(component, archive)
+        }
+
+    /**
+     * Unpacks a whole tree, preserving what makes it a toolchain.
+     *
+     * **Symlinks are recreated as symlinks.** Following them instead would
+     * triple the install and, worse, lose the thing they encode: a clang driver
+     * decides which language it compiles from the name it was invoked under, so
+     * `clang++` being a link to `clang` is not a space optimisation, it is the
+     * mechanism. The executable bit is carried across for the same class of
+     * reason -- a compiler that is not executable is a confusing silence.
+     *
+     * Unpacked into a sibling directory and moved into place at the end. A
+     * 551 MB extraction interrupted by the user backgrounding the app is the
+     * common case, not the rare one, and a half-tree that answered "installed"
+     * would fail later inside a header with nothing pointing back here.
+     */
+    private fun extractTree(component: ToolchainComponent, archive: File): File {
+        val target = storage.directoryFor(component)
+        val staging = File(target.parentFile, "${target.name}.partial")
+        staging.deleteRecursively()
+        staging.mkdirs()
+
+        archive.inputStream().buffered().use { raw ->
+            TarArchiveInputStream(GZIPInputStream(raw)).use { tar ->
+                var entry = tar.nextEntry
+                while (entry != null) {
+                    val destination = File(staging, entry.name)
+                    // A tar can name `../` and write outside the directory it
+                    // was extracted into. Ours does not; an archive that did
+                    // would be an attack, and this is cheap.
+                    if (!destination.canonicalPath.startsWith(staging.canonicalPath + File.separator)) {
+                        throw IOException("${component.displayName} contains an unsafe path: ${entry.name}")
+                    }
+                    when {
+                        entry.isDirectory -> destination.mkdirs()
+                        entry.isSymbolicLink -> {
+                            destination.parentFile?.mkdirs()
+                            Files.createSymbolicLink(
+                                destination.toPath(),
+                                File(entry.linkName).toPath(),
+                            )
+                        }
+                        else -> {
+                            destination.parentFile?.mkdirs()
+                            destination.outputStream().buffered().use { tar.copyTo(it) }
+                            if (entry.mode and OWNER_EXECUTE != 0) destination.setExecutable(true)
+                        }
+                    }
+                    entry = tar.nextEntry
+                }
+            }
+        }
+
+        // The zip path fails loudly when a named entry is absent; a tree needs
+        // the same guarantee, and its marker is the only thing that expresses
+        // it. Without this an archive of the wrong shape installs "successfully"
+        // and every later use reports the toolchain as not installed, with
+        // nothing pointing at the download that was actually wrong.
+        if (!File(staging, component.archive.installedMarker).exists()) {
+            staging.deleteRecursively()
+            throw IOException(
+                "${component.displayName} does not contain ${component.archive.installedMarker}.",
+            )
+        }
+
+        target.deleteRecursively()
+        if (!staging.renameTo(target)) {
+            staging.deleteRecursively()
+            throw IOException("${component.displayName} could not be installed.")
+        }
+        return storage.fileFor(component)
+    }
+
+    private fun extractEntries(component: ToolchainComponent, archive: File): File {
+        val entries = (component.archive as ComponentArchive.ZipEntries).entries
         val directory = storage.directoryFor(component).apply { mkdirs() }
         val primary = storage.fileFor(component)
         val staged = mutableMapOf<File, File>()
 
         ZipFile(archive).use { zip ->
-            component.entries.forEach { (name, installedName) ->
+            entries.forEach { (name, installedName) ->
                 val entry = zip.getEntry(name)
                     ?: throw IOException("${component.displayName} does not contain $name.")
                 val partial = File(directory, "$installedName.partial")
@@ -242,6 +328,7 @@ class ComponentInstaller(
     private companion object {
         const val BUFFER_BYTES = 64 * 1024
         const val PROGRESS_INTERVAL_BYTES = 512L * 1024
+        const val OWNER_EXECUTE = 0b001_000_000
         const val MEGABYTE = 1024 * 1024
         const val CONNECT_TIMEOUT_MILLIS = 30_000
         const val READ_TIMEOUT_MILLIS = 60_000

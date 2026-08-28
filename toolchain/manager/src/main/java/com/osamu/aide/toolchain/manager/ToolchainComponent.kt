@@ -19,26 +19,22 @@ data class ToolchainComponent(
     val archiveUrl: String,
     val archiveSha1: String,
     val archiveBytes: Long,
+    /** What the archive holds, and what installing it means. */
+    val archive: ComponentArchive,
     /**
-     * The entries to keep, each mapped to the name it takes once installed.
-     * Everything else in the archive is discarded.
+     * Roughly what the install occupies once unpacked.
      *
-     * A map rather than a single entry because components differ in shape, not
-     * because it is more general: the Android platform wants one file out of a
-     * 63 MB zip, and the Kotlin compiler wants two out of its own archive. Two
-     * components for one logical install would mean showing a user two download
-     * prompts for one feature.
+     * Carried rather than inferred from [archiveBytes]. For a zip of which two
+     * files are kept the installed size is smaller than the download; for a
+     * gzipped tree it is three and a half times larger, and guessing either way
+     * means either refusing an install that would have fitted or starting one
+     * that fills the device.
      */
-    val entries: Map<String, String>,
+    val installedBytes: Long,
     val requiresSdkLicense: Boolean = true,
 ) {
-    /**
-     * The file a caller means when it asks for "the" component.
-     *
-     * The first entry, which is why [entries] is written in a deliberate order:
-     * for Kotlin that is the compiler archive, not the stdlib beside it.
-     */
-    val primaryInstalledName: String get() = entries.values.first()
+    /** The file a caller means when it asks for "the" component. */
+    val primaryInstalledName: String get() = archive.installedMarker
 
     companion object {
 
@@ -62,7 +58,10 @@ data class ToolchainComponent(
             archiveUrl = "https://dl.google.com/android/repository/platform-36_r02.zip",
             archiveSha1 = "2c1a80dd4d9f7d0e6dd336ec603d9b5c55a6f576",
             archiveBytes = 65_878_410L,
-            entries = mapOf("android-36/android.jar" to "android.jar"),
+            archive = ComponentArchive.ZipEntries(
+                mapOf("android-36/android.jar" to "android.jar"),
+            ),
+            installedBytes = 27_000_000L,
         )
 
         /**
@@ -86,10 +85,74 @@ data class ToolchainComponent(
             archiveBytes = 56_196_599L,
             // Both are needed: the compiler cannot start without a stdlib to
             // put in the kotlin-home it is given. See tools/kotlinc/FINDINGS.md.
-            entries = mapOf(
-                "kotlinc.jar" to "kotlinc.jar",
-                "kotlin-stdlib.jar" to "kotlin-stdlib.jar",
+            archive = ComponentArchive.ZipEntries(
+                mapOf(
+                    "kotlinc.jar" to "kotlinc.jar",
+                    "kotlin-stdlib.jar" to "kotlin-stdlib.jar",
+                ),
             ),
+            installedBytes = 57_000_000L,
+            requiresSdkLicense = false,
+        )
+
+        /**
+         * clang and lld, for building native code on the device.
+         *
+         * Ours, like the Kotlin compiler and for the same reason: nothing
+         * upstream ships a clang that runs on Android. Assembled by
+         * `tools/clang/fetch-toolchain.sh` from Termux's packages, which are
+         * built for Bionic and link as PIE -- the NDK's clang targets glibc
+         * hosts and cannot start on a device at all.
+         *
+         * Kept whole rather than reduced to a few entries. 551 MB is a great
+         * deal to ask, and roughly 115 MB of it is LLVM tools a compile never
+         * touches; trimming is a real opportunity and is deliberately not taken
+         * blind, because `llvm-ar` and `llvm-strip` are wanted the moment
+         * static libraries are.
+         *
+         * No SDK licence: LLVM is Apache-2.0 with the LLVM exception, and
+         * Google's terms have nothing to do with it.
+         */
+        fun nativeToolchain(abi: String): ToolchainComponent? = when (abi) {
+            "arm64-v8a" -> nativeToolchain(
+                abi = abi,
+                architecture = "aarch64",
+                sha1 = "17ffea7d5fd511e5d8ce2bc853d05aae5f29922d",
+                archiveBytes = 159_090_036L,
+                installedBytes = 551_000_000L,
+            )
+            "x86_64" -> nativeToolchain(
+                abi = abi,
+                architecture = "x86_64",
+                sha1 = "008cc6f6fce539eb3472d7521c4dbc771dfda613",
+                archiveBytes = 162_163_743L,
+                installedBytes = 600_000_000L,
+            )
+            // The toolchain is not built for the 32-bit ABIs. Returning null
+            // rather than a component that cannot install lets the caller say
+            // "not on this device" instead of failing mid-download.
+            else -> null
+        }
+
+        private fun nativeToolchain(
+            abi: String,
+            architecture: String,
+            sha1: String,
+            archiveBytes: Long,
+            installedBytes: Long,
+        ) = ToolchainComponent(
+            // The ABI is in the id, so two of them can be installed side by
+            // side and neither is mistaken for the other.
+            id = "clang-21.1.8-$abi",
+            displayName = "C/C++ toolchain (clang 21.1.8)",
+            archiveUrl = "https://github.com/sanjarAmin/AIDE-OS/releases/download/" +
+                "clang-21.1.8/clang-21.1.8-$architecture.tar.gz",
+            archiveSha1 = sha1,
+            archiveBytes = archiveBytes,
+            // `usr/bin/clang` is a symlink; it resolves once the tree is whole,
+            // which is exactly the condition worth testing for.
+            archive = ComponentArchive.GzippedTar("usr/bin/clang"),
+            installedBytes = installedBytes,
             requiresSdkLicense = false,
         )
     }

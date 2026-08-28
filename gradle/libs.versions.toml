@@ -70,7 +70,14 @@ uiautomator = "2.3.0"
 # spike gives is only about the version it was asked about.
 jgit = "7.7.1.202607240634-r"
 
+# Reading the C/C++ toolchain's tar. Hand-rolling one would mean handling
+# GNU long names and symlink entries correctly across ~9,700 entries, which is
+# exactly the kind of thing that fails on the next toolchain rather than this
+# one. Apache-2.0.
+commons-compress = "1.27.1"
+
 [libraries]
+commons-compress = { group = "org.apache.commons", name = "commons-compress", version.ref = "commons-compress" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle" }

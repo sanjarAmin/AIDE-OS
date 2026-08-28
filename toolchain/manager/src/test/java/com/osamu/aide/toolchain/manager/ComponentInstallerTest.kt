@@ -158,7 +158,7 @@ class ComponentInstallerTest {
     @Test
     fun `an archive missing the entry fails rather than installing nothing`() = runTest {
         val component = server.component()
-            .copy(entries = mapOf("android-36/not-here.jar" to "android.jar"))
+            .copy(archive = ComponentArchive.ZipEntries(mapOf("android-36/not-here.jar" to "android.jar")))
 
         val progress = install(component)
 

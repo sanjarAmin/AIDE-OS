@@ -29,8 +29,10 @@ android {
 
 dependencies {
     api(project(":core:common"))
+    implementation(libs.commons.compress)
 
     testImplementation(libs.junit)
+    testImplementation(libs.commons.compress)
     testImplementation(libs.kotlinx.coroutines.test)
 
     androidTestImplementation(libs.androidx.junit)
