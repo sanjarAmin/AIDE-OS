@@ -395,3 +395,31 @@ The fifth passed. `a_library_uses_sdk_is_left_alone` asserts that a library's
 `minSdkVersion` does *not* appear, and nothing being merged satisfies that
 perfectly. **A test whose assertion is an absence passes when the fixture is
 broken**, which is the most expensive kind of green.
+
+## 14. An input wired only into a test is not wired
+
+`DependencyInputs` gained `libraryPackages` in M6 and `libraryManifests` in M8.
+Both were passed by `:engine:fast`'s own instrumented tests, which is how each
+was proved to work. Neither was passed by `ProjectDependencies.inputsFor`, which
+is the only path a project built **through the app** takes.
+
+So for the whole of M6 the engine was correct and the app was not. A user
+opening an AndroidX project and tapping Build got a successful build, a valid
+APK, a clean install, and a crash on launch — `NoClassDefFoundError` on a
+library's own `R` class, the exact failure `--extra-packages` was added to
+prevent. The test that proved the fix could not see the app, and the app had no
+test that looked at what it handed the engine.
+
+**A data class with defaulted fields compiles either way.** That is what makes
+this shape of bug survivable: adding a field breaks no call site, so the one
+that matters silently keeps the default. Every existing test still passed.
+
+`ProjectDependenciesTest` now asserts the shape of the object the app hands the
+engine, rather than trusting a call site. It is a seam test and it is worth its
+run time: two of the four fields were missing when it was written, and both
+failures happen *after* a successful build.
+
+The rule this leaves behind: **when a stage gains an input, the test that proves
+the stage is not enough.** Something has to assert that the caller supplies it,
+and the caller is usually in another module.
+

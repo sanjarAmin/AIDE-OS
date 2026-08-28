@@ -44,6 +44,16 @@ class ProjectDependencies(private val resolver: DependencyResolver) {
         return DependencyInputs(
             classpath = resolved.compileClasspath,
             resourceDirectories = resolved.resourceDirectories,
+            // **All four, and each one is load-bearing.** These two were added
+            // to the engine with M6 and wired only into its own tests, so a
+            // project built through the app got neither: no per-library `R`
+            // class, and no library components in the manifest. Both fail after
+            // a successful build -- one crashes on launch, the other never
+            // reports anything at all -- which is why
+            // ProjectDependenciesTest asserts the shape of this object rather
+            // than trusting the call site.
+            libraryPackages = resolved.libraryPackages,
+            libraryManifests = resolved.libraryManifests,
         )
     }
 
