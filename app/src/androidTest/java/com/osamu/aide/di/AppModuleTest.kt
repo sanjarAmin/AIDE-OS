@@ -8,6 +8,9 @@ import com.osamu.aide.ui.workspace.AssistantViewModel
 import com.osamu.aide.ui.workspace.KotlinCompilerSource
 import com.osamu.aide.ui.workspace.LanguageServices
 import com.osamu.aide.ui.workspace.ProjectBuilder
+import com.osamu.aide.vcs.git.GitCredentialStore
+import com.osamu.aide.vcs.git.GitIdentityStore
+import com.osamu.aide.vcs.git.GitWorkspace
 import org.junit.After
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -56,6 +59,13 @@ class AppModuleTest {
         assertNotNull(koin.get<LanguageServices>())
         assertNotNull(koin.get<Assistant>())
         assertNotNull(koin.get<ApiKeyStore>())
+        // Version control joined the graph with M8. GitWorkspace takes four
+        // constructor arguments, two of which have defaults that Koin does not
+        // use -- so a definition that named them in the wrong order would
+        // compile and fail only here.
+        assertNotNull(koin.get<GitWorkspace>())
+        assertNotNull(koin.get<GitIdentityStore>())
+        assertNotNull(koin.get<GitCredentialStore>())
     }
 
     /**

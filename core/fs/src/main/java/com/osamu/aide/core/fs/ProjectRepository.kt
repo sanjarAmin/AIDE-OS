@@ -40,12 +40,38 @@ class FileProjectRepository(
     private val dispatchers: DispatcherProvider,
 ) : ProjectRepository {
 
+    /**
+     * Every project in the workspace.
+     *
+     * Looks **one level deeper** as well as at the top, and that is not a
+     * convenience. A cloned repository is usually a Gradle root holding `app/`,
+     * so the project is the module and the repository is its parent -- which
+     * makes the descriptor a grandchild of the workspace root rather than a
+     * child. Scanning only the top level meant a repository could clone
+     * perfectly and never appear, with no error anywhere to say why.
+     *
+     * Exactly one level, not a walk. Deeper is someone's `build/` output or a
+     * vendored copy of another project, and a projects list that turns those up
+     * is worse than one that misses an unusual layout.
+     *
+     * A directory that has its own descriptor is not descended into: a project
+     * containing a project is one project.
+     */
     override suspend fun listProjects(): AppResult<List<Project>> =
         withContext(dispatchers.io) {
             runCatchingResult {
                 workspaceRoot.mkdirs()
                 (workspaceRoot.listFiles() ?: emptyArray())
-                    .filter { it.isDirectory && File(it, Project.DESCRIPTOR_NAME).exists() }
+                    .filter { it.isDirectory }
+                    .flatMap { entry ->
+                        if (File(entry, Project.DESCRIPTOR_NAME).exists()) {
+                            listOf(entry)
+                        } else {
+                            (entry.listFiles() ?: emptyArray())
+                                .filter { it.isDirectory && File(it, Project.DESCRIPTOR_NAME).exists() }
+                                .toList()
+                        }
+                    }
                     .mapNotNull { readDescriptor(it) }
                     .sortedByDescending { it.lastOpenedAt }
             }

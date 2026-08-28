@@ -87,6 +87,7 @@ dependencies {
     implementation(project(":lsp:java"))
     implementation(project(":toolchain:native"))
     implementation(project(":toolchain:manager"))
+    implementation(project(":vcs:git"))
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.material3)

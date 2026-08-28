@@ -19,6 +19,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.osamu.aide.ai.core.ApiKeyStore
+import com.osamu.aide.vcs.git.GitCredentialStore
+import com.osamu.aide.vcs.git.GitIdentityStore
 import org.koin.compose.koinInject
 
 private data class SettingsSection(val title: String, val summary: String)
@@ -41,6 +43,8 @@ fun SettingsScreen(onNavigateBack: () -> Unit) {
     )
 
     val keys = koinInject<ApiKeyStore>()
+    val identities = koinInject<GitIdentityStore>()
+    val credentials = koinInject<GitCredentialStore>()
 
     Scaffold(
         topBar = {
@@ -56,6 +60,7 @@ fun SettingsScreen(onNavigateBack: () -> Unit) {
     ) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding)) {
             item { ApiKeySection(keys) }
+            item { GitSection(identities, credentials) }
 
             items(sections) { section ->
                 Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp)) {

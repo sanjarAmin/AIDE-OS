@@ -6,6 +6,7 @@ import com.osamu.aide.ai.core.Assistant
 import com.osamu.aide.core.common.DefaultDispatcherProvider
 import com.osamu.aide.core.common.DispatcherProvider
 import com.osamu.aide.core.fs.FileProjectRepository
+import com.osamu.aide.core.fs.ProjectAdoption
 import com.osamu.aide.core.fs.ProjectImporter
 import com.osamu.aide.core.fs.ProjectRepository
 import com.osamu.aide.editor.DocumentStore
@@ -18,6 +19,9 @@ import com.osamu.aide.toolchain.manager.ToolchainManager
 import com.osamu.aide.toolchain.nativetools.NativeToolRunner
 import com.osamu.aide.toolchain.nativetools.NativeToolchain
 import com.osamu.aide.ui.projects.ProjectsViewModel
+import com.osamu.aide.vcs.git.GitCredentialStore
+import com.osamu.aide.vcs.git.GitIdentityStore
+import com.osamu.aide.vcs.git.GitWorkspace
 import com.osamu.aide.ui.workspace.AssistantViewModel
 import com.osamu.aide.ui.workspace.KotlinCompilerSource
 import com.osamu.aide.ui.workspace.LanguageServices
@@ -54,8 +58,17 @@ val appModule = module {
     single { ApiKeyStore(get()) }
     single { Assistant(get(), get()) }
 
+    // Version control. The two stores are singletons for the same reason
+    // ApiKeyStore is: each holds a handle to preferences and a Keystore entry
+    // rather than the secret itself, and GitWorkspace reads through them on
+    // every operation so a token added in settings works on the next push.
+    single { GitIdentityStore(get()) }
+    single { GitCredentialStore(get()) }
+    single { GitWorkspace(get(), get(), get(), get()) }
+
     single<ProjectRepository> { FileProjectRepository(get(), get()) }
     single { ProjectImporter(get(), get(), get()) }
+    single { ProjectAdoption(get()) }
 
     // Holds the tree-sitter query sources, so opening a second Java file does
     // not go back to assets for them.
@@ -102,7 +115,7 @@ val appModule = module {
     }
 
     viewModel { AssistantViewModel(get(), get(), get()) }
-    viewModel { ProjectsViewModel(get(), get()) }
+    viewModel { ProjectsViewModel(get(), get(), get(), get(), get()) }
     viewModel { WorkspaceViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
 }
 

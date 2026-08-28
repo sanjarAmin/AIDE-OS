@@ -69,6 +69,29 @@ class GitWorkspace(
         }
 
     /**
+     * The repository [directory] belongs to, or null.
+     *
+     * Walks up, which [open] deliberately refuses to do -- and the difference
+     * is that this is asked for. A project's root is usually *not* the
+     * repository root: a cloned Android repository is a Gradle root holding
+     * `app/`, and `app/` is what the editor and the build engine open. Version
+     * control still means the whole clone.
+     *
+     * Bounded by [ceiling] so the walk cannot leave the workspace and adopt
+     * some enclosing repository the user never asked about -- on a device with
+     * the workspace on shared storage, that would otherwise be reachable.
+     */
+    fun enclosingRepository(directory: File, ceiling: File): File? {
+        val stop = runCatching { ceiling.canonicalFile }.getOrNull() ?: return null
+        var current = runCatching { directory.canonicalFile }.getOrNull() ?: return null
+        while (true) {
+            if (isRepository(current)) return current
+            if (current == stop) return null
+            current = current.parentFile ?: return null
+        }
+    }
+
+    /**
      * Initialises a repository at [directory], creating it if needed.
      *
      * Refuses an existing repository rather than re-initialising one. `git
@@ -132,10 +155,15 @@ class GitWorkspace(
                 AppError("${directory.name} already exists and is not empty."),
             )
         }
+        // A host is what a token is keyed on, **not** what makes a URL valid: a
+        // `file://` remote has none and is perfectly cloneable. Requiring one
+        // here refused every local clone, which is how the tests found it.
         val host = GitCredentialStore.hostOf(url)
-            ?: return@withContext AppResult.Failure(
+        if (runCatching { java.net.URI(url.trim()).scheme }.getOrNull().isNullOrBlank()) {
+            return@withContext AppResult.Failure(
                 AppError("That does not look like a repository URL."),
             )
+        }
 
         val scope = CoroutineScope(currentCoroutineContext())
 
@@ -147,7 +175,7 @@ class GitWorkspace(
                 // and sending one to a host the user did not mean to would be
                 // worse than a prompt.
                 .apply {
-                    credentials.read(host)?.let {
+                    host?.let(credentials::read)?.let {
                         setCredentialsProvider(UsernamePasswordCredentialsProvider(TOKEN_USERNAME, it))
                     }
                     depth?.let { setDepth(it) }

@@ -12,6 +12,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -93,6 +94,38 @@ class GitWorkspaceTest {
         val inner = File(outer, "module").apply { mkdirs() }
 
         assertTrue("not a git repository" in workspace.open(inner).failureMessage())
+    }
+
+    /**
+     * A project rooted at `app/` still finds the repository that contains it.
+     *
+     * This is the shape every cloned Android repository has, and it is the
+     * reason [GitWorkspace.enclosingRepository] exists alongside an [open] that
+     * refuses to walk up: the walk is fine when it is asked for and wrong when
+     * it is guessed.
+     */
+    @Test
+    fun the_enclosing_repository_is_found_from_a_module_inside_it() = runTest {
+        val repo = File(workDir, "clone")
+        (workspace.init(repo) as AppResult.Success).value.close()
+        val module = File(repo, "app/src/main").apply { mkdirs() }
+
+        assertEquals(
+            repo.canonicalFile,
+            workspace.enclosingRepository(module, ceiling = workDir),
+        )
+    }
+
+    /** And the walk stops at the ceiling rather than escaping the workspace. */
+    @Test
+    fun the_walk_up_stops_at_the_ceiling() = runTest {
+        val outer = File(workDir, "outer")
+        (workspace.init(outer) as AppResult.Success).value.close()
+        val sibling = File(workDir, "not-in-a-repo/deep").apply { mkdirs() }
+
+        assertNull(workspace.enclosingRepository(sibling, ceiling = workDir))
+        // The ceiling itself is examined, but nothing above it.
+        assertNull(workspace.enclosingRepository(workDir, ceiling = workDir))
     }
 
     @Test

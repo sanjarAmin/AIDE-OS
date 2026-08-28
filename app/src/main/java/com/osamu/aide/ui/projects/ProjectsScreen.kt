@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.DriveFolderUpload
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
@@ -44,6 +45,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -63,6 +66,7 @@ fun ProjectsScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var showCreateDialog by remember { mutableStateOf(false) }
+    var showCloneDialog by remember { mutableStateOf(false) }
 
     // OpenDocumentTree rather than OpenDocument: a project is a folder, and
     // picking its files one by one is not a thing anyone would do.
@@ -82,6 +86,15 @@ fun ProjectsScreen(
             TopAppBar(
                 title = { Text("Projects") },
                 actions = {
+                    IconButton(
+                        onClick = { showCloneDialog = true },
+                        enabled = state.cloneStatus == null,
+                    ) {
+                        Icon(
+                            Icons.Default.CloudDownload,
+                            contentDescription = "Clone a repository",
+                        )
+                    }
                     IconButton(
                         onClick = { importLauncher.launch(null) },
                         enabled = !state.isImporting,
@@ -131,6 +144,20 @@ fun ProjectsScreen(
                 }
             }
         }
+    }
+
+    state.cloneStatus?.let { status ->
+        CloneProgressDialog(status = status, onCancel = viewModel::cancelClone)
+    }
+
+    if (showCloneDialog) {
+        CloneRepositoryDialog(
+            onDismiss = { showCloneDialog = false },
+            onClone = { url ->
+                viewModel.cloneRepository(url)
+                showCloneDialog = false
+            },
+        )
     }
 
     if (showCreateDialog) {
@@ -252,5 +279,87 @@ private fun CreateProjectDialog(
             ) { Text("Create") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/**
+ * Where a repository URL is typed.
+ *
+ * Only `https` is offered. SSH is a separate JGit artifact and a separate
+ * key-management problem that this app has not solved, and letting a user paste
+ * an `ssh://` URL that can only fail is worse than not accepting one.
+ */
+@Composable
+private fun CloneRepositoryDialog(onDismiss: () -> Unit, onClone: (String) -> Unit) {
+    var url by remember { mutableStateOf("") }
+    val trimmed = url.trim()
+    val usable = trimmed.startsWith("https://") && trimmed.length > "https://".length
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Clone a repository") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it },
+                    label = { Text("HTTPS URL") },
+                    placeholder = { Text("https://github.com/owner/repo.git") },
+                    singleLine = true,
+                    isError = trimmed.isNotEmpty() && !usable,
+                    supportingText = {
+                        Text(
+                            if (trimmed.isNotEmpty() && !usable) {
+                                "An https:// URL. SSH is not supported yet."
+                            } else {
+                                "A private repository needs an access token in Settings."
+                            },
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                        .semantics { contentDescription = "Repository URL" },
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onClone(trimmed) },
+                enabled = usable,
+                modifier = Modifier.semantics { contentDescription = "Start clone" },
+            ) { Text("Clone") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/**
+ * Progress, and a cancel that actually stops it.
+ *
+ * Not dismissible by tapping away: a clone is minutes long and writes hundreds
+ * of megabytes, so leaving it running behind a dismissed dialog is exactly the
+ * failure the cancellation plumbing exists to prevent. The only way out is the
+ * button that really cancels.
+ *
+ * The indicator is indeterminate because JGit reports a total it does not
+ * always know, and a bar that sits at zero reads as a hang. The phase text is
+ * what changes.
+ */
+@Composable
+private fun CloneProgressDialog(status: String, onCancel: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = {},
+        title = { Text("Cloning") },
+        text = {
+            Column {
+                Text(status, modifier = Modifier.semantics { contentDescription = "Clone status" })
+                LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 12.dp))
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onCancel,
+                modifier = Modifier.semantics { contentDescription = "Cancel clone" },
+            ) { Text("Cancel") }
+        },
     )
 }
