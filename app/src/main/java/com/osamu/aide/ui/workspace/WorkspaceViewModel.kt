@@ -71,6 +71,15 @@ data class PlatformUiState(
     val component: ToolchainComponent,
     val licenseText: String,
     val licenseAccepted: Boolean,
+    /**
+     * Why this download is being asked for, in the user's terms.
+     *
+     * Carried rather than derived in the dialog because the components differ
+     * in kind: one is Google's platform under Google's licence, another is half
+     * a gigabyte of compiler. "A component is required" would be true of both
+     * and useful for neither.
+     */
+    val rationale: String,
     val progress: InstallProgress? = null,
 ) {
     val isInstalling: Boolean
@@ -585,6 +594,21 @@ class WorkspaceViewModel(
                 )
                 return@launch
             }
+            builder.missingNativeToolchain(project)?.let { component ->
+                // Offered before the build starts rather than after it fails,
+                // for the same reason the platform is: the refusal names a
+                // download, and a message naming a download with no way to
+                // start it is a dead end.
+                val megabytes = component.archiveBytes / (1024 * 1024)
+                offerComponentInstall(
+                    component = component,
+                    rationale = "This project has C or C++ in src/main/cpp. " +
+                        "Compiling it needs clang, which is about $megabytes MB " +
+                        "to download and roughly ${component.installedBytes / (1024 * 1024)} MB " +
+                        "once installed.",
+                )
+                return@launch
+            }
             if (!builder.isPlatformInstalled()) {
                 offerPlatformInstall()
                 return@launch
@@ -720,17 +744,40 @@ class WorkspaceViewModel(
     }
 
     /** Shows what has to be downloaded before this device can build anything. */
-    fun offerPlatformInstall() {
+    fun offerPlatformInstall() = offerComponentInstall(
+        component = ToolchainComponent.ANDROID_PLATFORM,
+        rationale = "Building needs android.jar, which cannot be shipped inside " +
+            "AIDE-OS. It is downloaded once, from Google.",
+    )
+
+    /**
+     * Shows the download prompt for any component.
+     *
+     * Generalised from the platform-only version when M7 arrived. A build that
+     * refuses for a missing toolchain and offers no way to get it is not a
+     * feature the user can reach -- and the C/C++ toolchain is the first
+     * component that is *not* Google's, so the licence half has to be optional
+     * rather than assumed. Asking someone to accept Google's terms in order to
+     * compile Apache-licensed LLVM would be wrong on its own.
+     */
+    fun offerComponentInstall(component: ToolchainComponent, rationale: String) {
         if (_state.value.platform != null) return
         viewModelScope.launch {
-            val component = ToolchainComponent.ANDROID_PLATFORM
-            val text = withContext(dispatchers.io) { toolchain.licenseText() }
+            val text = if (component.requiresSdkLicense) {
+                withContext(dispatchers.io) { toolchain.licenseText() }
+            } else {
+                ""
+            }
             _state.update {
                 it.copy(
                     platform = PlatformUiState(
                         component = component,
                         licenseText = text,
-                        licenseAccepted = toolchain.license.isAccepted(),
+                        // Nothing to accept means nothing to gate on: the
+                        // button says "Download" and no acceptance is recorded.
+                        licenseAccepted = !component.requiresSdkLicense ||
+                            toolchain.license.isAccepted(),
+                        rationale = rationale,
                         progress = platformProgress,
                     ),
                 )

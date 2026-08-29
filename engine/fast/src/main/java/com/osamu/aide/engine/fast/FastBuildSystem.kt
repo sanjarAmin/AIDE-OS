@@ -10,6 +10,7 @@ import com.osamu.aide.engine.api.BuildResult
 import com.osamu.aide.engine.api.BuildStage
 import com.osamu.aide.engine.api.BuildSystem
 import com.osamu.aide.engine.api.Diagnostic
+import com.osamu.aide.toolchain.nativetools.ClangToolchain
 import com.osamu.aide.toolchain.nativetools.NativeToolRunner
 import java.io.File
 import kotlinx.coroutines.async
@@ -41,12 +42,21 @@ class FastBuildSystem(
      * middle of a build.
      */
     private val kotlin: KotlinCompiler? = null,
+    /**
+     * The C/C++ toolchain, when the device has one.
+     *
+     * Null the same way [kotlin] is, and more often: clang is a 152 MiB
+     * download unpacking to 551 MB, and most projects have no native code at
+     * all. A project with C sources on a device without it is refused by name.
+     */
+    private val clang: ClangToolchain? = null,
 ) : BuildSystem {
 
     private val resources = ResourceStage(runner)
     private val javac = JavaCompileStage(dispatchers)
     private val kotlinc = kotlin?.let { KotlinCompileStage(it, dispatchers) }
     private val dexer = DexStage(dispatchers)
+    private val nativec = clang?.let { NativeCompileStage(it) }
     private val packager = PackageStage(dispatchers)
     private val signer = SigningStage(dispatchers)
 
@@ -164,8 +174,34 @@ class FastBuildSystem(
                 )
             }
 
+            // After the JVM half rather than before it: the two are
+            // independent, and running native code last means a project whose
+            // Java does not compile does not first spend a minute on clang.
+            //
+            // Guarded exactly the way the Kotlin stage is, and for the same
+            // reason: an unguarded stage still emits StageStarted, so every
+            // Java project would report "Compiling C/C++" and complete it
+            // having done nothing. The stage tolerates an empty source list
+            // anyway; what this decides is whether the user is told about it.
+            val native = if (nativec != null && layout.nativeSources().isNotEmpty()) {
+                reportingStage(BuildStage.COMPILE_NATIVE, diagnostics) { onDiagnostic ->
+                    nativec.build(
+                        layout = layout,
+                        workspace = workspace,
+                        libraryName = nativeLibraryName(request.project),
+                        onDiagnostic = onDiagnostic,
+                    )
+                }
+            } else {
+                null
+            }
+
             stage(BuildStage.PACKAGE, diagnostics) {
-                packager.pack(workspace, dexFiles.orEmpty())
+                packager.pack(
+                    workspace = workspace,
+                    dexFiles = dexFiles.orEmpty(),
+                    nativeLibraries = native?.all.orEmpty(),
+                )
             }
 
             stage(BuildStage.SIGN, diagnostics) {
@@ -220,11 +256,36 @@ class FastBuildSystem(
                 layout.kotlinSources().isNotEmpty()) ->
             "This project has Kotlin sources; the Kotlin compiler is not installed."
 
+        // Same reasoning as Kotlin's, and the failure it prevents is worse:
+        // without the toolchain the build would produce an APK that installs
+        // and then dies at System.loadLibrary, on the user's device, with
+        // nothing pointing back at a missing download.
+        nativec == null && layout.nativeSources().isNotEmpty() ->
+            "This project has C/C++ sources; the C/C++ toolchain is not installed."
+
         layout.javaSources().isEmpty() && layout.kotlinSources().isEmpty() ->
             "This project has no sources."
 
         else -> platform.validate()
     }
+
+    /**
+     * What the built library is called, and therefore what
+     * `System.loadLibrary` has to be given.
+     *
+     * Derived from the project name rather than configured. There is no
+     * `CMakeLists.txt` in this model to declare a target in, and inventing a
+     * descriptor field for one string would be a worse trade than a convention
+     * the user can predict: lower-cased, everything that is not a letter, digit
+     * or underscore replaced. A name with nothing usable left falls back to
+     * `native`, so the rule always yields something loadable.
+     */
+    private fun nativeLibraryName(project: com.osamu.aide.core.fs.Project): String =
+        project.name.lowercase()
+            .map { if (it.isLetterOrDigit() || it == '_') it else '_' }
+            .joinToString("")
+            .trim('_')
+            .ifBlank { "native" }
 
     /**
      * Runs one stage, reporting it, and aborts the build if it fails.

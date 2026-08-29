@@ -36,10 +36,13 @@ emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu host
 :editor              sora-editor + tree-sitter, wrapped for Compose. FINDINGS.
 :engine:api          The BuildSystem contract; knows nothing of any toolchain
 :engine:deps         Maven resolution and AAR extraction, on ART. FINDINGS.
-:engine:fast         The bundled pipeline: aapt2 -> ECJ -> D8 -> apksig. FINDINGS.
+:engine:fast         The bundled pipeline: aapt2 -> ECJ -> D8 -> apksig, plus
+                     clang for src/main/cpp. FINDINGS.
 :lsp:java            nb-javac kept warm: completion, diagnostics, definitions
-:toolchain:native    aapt2 in jniLibs, and the harness that execs it
-:toolchain:manager   Downloads android.jar & co: pin, verify, install. FINDINGS.
+:toolchain:native    aapt2 in jniLibs, and the harness that execs it -- plus the
+                     linker64 route for toolchains it did not bundle
+:toolchain:manager   Downloads android.jar, kotlinc, clang: pin, verify, install.
+                     FINDINGS.
 :terminal            forkpty, plus Termux's emulator vendored verbatim. FINDINGS.
 :vcs:git             JGit, plus the identity and token stores a device needs. FINDINGS.
 tools/               Scripts that produce the toolchains, and their FINDINGS.
@@ -74,6 +77,14 @@ failed to load still produces a clean compile.
 - **API 30 is the toolchain floor.** aapt2's libbase needs it, and the compiler
   dex archive is built for it. `minSdk` stays 26 — the editor works below 30 —
   so build features must gate at runtime, not fail at exec time.
+- **A real device dozes, and instrumented tests stall when it does.** With the
+  screen off the phone reaches `mWakefulness=Dozing` and suspends the test
+  process mid-run: a suite that takes one second runs for ten minutes and then
+  reports `Process crashed`, which looks like a test defect and is not one.
+  `adb shell svc power stayon usb` before a device run, and
+  `adb shell dumpsys power | grep mWakefulness` to confirm. The emulator never
+  does this, so it only bites on hardware.
+
 - **`adb shell run-as` is not the app.** It runs in `runas_app`, which *may*
   `execve` out of app-private storage — so a hand probe through it will
   cheerfully do things the app is forbidden to do, and appear to disprove a

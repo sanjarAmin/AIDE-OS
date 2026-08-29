@@ -17,6 +17,9 @@ class BuildWorkspace(val root: File) {
     val classes: File get() = File(root, "classes")
     val dex: File get() = File(root, "dex")
 
+    /** Object files and the shared library built from the project's C/C++. */
+    val nativeDir: File get() = File(root, "native")
+
     /** The project's own resources, compiled to aapt2's binary format. */
     val compiledProjectResources: File get() = File(compiledResources, "resources.zip")
 

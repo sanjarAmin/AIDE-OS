@@ -21,6 +21,8 @@ internal class PackageStage(private val dispatchers: DispatcherProvider) {
     suspend fun pack(
         workspace: BuildWorkspace,
         dexFiles: List<File>,
+        nativeLibraries: List<File> = emptyList(),
+        abi: String = android.os.Build.SUPPORTED_ABIS.first(),
     ): StageResult<File> = withContext(dispatchers.io) {
         if (!workspace.linkedApk.isFile) {
             return@withContext StageResult.failed("There is nothing to package.")
@@ -38,6 +40,19 @@ internal class PackageStage(private val dispatchers: DispatcherProvider) {
                     for (dex in dexFiles) {
                         out.putNextEntry(entryFor(dex.name, ZipEntry.DEFLATED))
                         dex.inputStream().use { it.copyTo(out) }
+                        out.closeEntry()
+                    }
+                    for (library in nativeLibraries) {
+                        // **Deflated, so the platform extracts at install.**
+                        // The alternative is storing them uncompressed and
+                        // loading them in place, which is what modern AGP does
+                        // -- but that requires page-aligning every entry, and
+                        // apksig aligns to 4 bytes, not to a page. A library
+                        // stored and misaligned installs and then fails to load
+                        // on devices with larger pages. Compressed costs
+                        // install-time disk and nothing else.
+                        out.putNextEntry(entryFor("lib/$abi/${library.name}", ZipEntry.DEFLATED))
+                        library.inputStream().use { it.copyTo(out) }
                         out.closeEntry()
                     }
                 }

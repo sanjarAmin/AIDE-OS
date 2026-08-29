@@ -19,13 +19,14 @@
 | ✅ | Spike R9 — executing a downloaded binary | Resolved. Via `/system/bin/linker64`, from **internal** storage only. `tools/nativeexec/FINDINGS.md` |
 | ✅ | Spike R10 — clang on the device | Resolved, on **API 34 x86_64 and Android 16 arm64**. Termux clang 21.1.8 builds C and C++ into a `.so` that loads and runs. **One job per invocation, and the driver can never run the linker** — plan with `-###`, execute it ourselves. `tools/clang/FINDINGS.md` |
 | ✅ | License | GPLv3 |
-| 🟡 | **M0** Skeleton | Built: `:app`, `:core:{common,fs,ui}`, `:editor`, `:toolchain:{native,manager}`, `:engine:{api,fast}`. 9 of 22 planned modules. |
+| 🟢 | **M0** Skeleton | `:app`, `:core:{common,fs,ui}`, `:editor`, `:engine:{api,fast,deps}`, `:toolchain:{native,manager}`, `:lsp:java`, `:ai:{core,ui}`, `:terminal`, `:vcs:git` — 15 of 22 planned modules, plus six spikes. The remaining seven arrive with the milestones that need them. |
 | 🟢 | **M1** Editor | Highlighting, tabs, symbol row, find/replace, diagnostics gutter, and SAF import. `editor/FINDINGS.md`, `core/fs/FINDINGS.md` |
 | 🟢 | **M2** First APK ⭐ | **The thesis holds, and it is reachable.** A person can create a project, edit it, tap Build, and end up with the app installed — all on the device. |
 | 🟢 | **M3** Intelligence | Completion, diagnostics-as-you-type, go-to-definition, signature hints. **76 ms** warm completion on an AndroidX type against the 200 ms budget. |
 | 🟢 | **M4** Deps + Kotlin | A Kotlin project using `androidx.appcompat` builds on device: 41 artifacts resolved, kotlinc ahead of ECJ. Resolution reads Gradle Module Metadata, so AndroidX aligns the way Gradle aligns it. `engine/deps/FINDINGS.md` |
 | 🟡 | **M5** AI ⭐ | Feature-complete; three assertions parked until a live API key exists. Everything testable without one is tested. `ai/core/FINDINGS.md` |
 | 🟢 | **M6** Compose | A Compose app builds, installs, launches and **draws**, on device, with its libraries' manifests merged. Six fixes, none visible to a build-only test. `engine/deps/FINDINGS.md` |
+| 🟢 | **M7** C/C++ | A JNI project builds on device: clang compiles `src/main/cpp`, the library is packaged into the APK, and it loads and runs — verified on API 34 x86_64 and Android 16 arm64. The toolchain is a 152 MiB download installed by `:toolchain:manager`. `clangd` is not done. `tools/clang/FINDINGS.md` |
 | 🟢 | **M8** Git + Terminal | Clone, edit, stage, commit, push and diff, with identity and tokens in the Keystore. A real terminal: Termux's emulator vendored unmodified, characters sent as typed. `vcs/git/FINDINGS.md`, `terminal/FINDINGS.md` |
 
 **M2 in detail.** All six stages exist in `:engine:fast` and run on a device:
@@ -266,7 +267,7 @@ Bring-your-own-key, no backend infrastructure, no per-user liability for you.
 | **M4** Deps + Kotlin | maven-resolver, AAR extraction, kotlinc integration | Project with `androidx.appcompat` + Kotlin sources builds |
 | **M5** AI ⭐ | `:ai:core` + `:ai:ui`, chat, inline completion, fix-my-error | BYO key → chat with project context, one-tap error fix works |
 | ✅ **M6** Compose | Compose compiler plugin hosted in on-device kotlinc | A Compose hello-world builds and runs |
-| **M7** C/C++ | clang/lld toolchain download, NDK sysroot, clangd | JNI project with a native `.so` builds |
+| **M7** C/C++ | Termux clang/lld toolchain download, NDK sysroot, clangd | JNI project with a native `.so` builds — **met**, `clangd` outstanding |
 | **M8** Git + Terminal | JGit, PTY terminal | Clone from GitHub, edit, commit, push |
 | **M9** Gradle path | Rootfs bootstrap, Tooling API bridge | An unmodified Android Studio project builds |
 | **M10** JS / C# | QuickJS + Node; .NET SDK (experimental) | Node project runs; C# console app compiles |
@@ -504,6 +505,44 @@ does not provide. That was a hand-written shim until `:lsp:java` arrived with
 nb-javac's real one and the two collided in a single APK; the shim is gone and
 the real class serves both. `engine/fast/FINDINGS.md` section 10 — it is the
 sharpest example so far of a bug no module's own test suite can see.
+
+11. **M7 C/C++ — the acceptance test is met.** A JNI project builds on device:
+    clang compiles `src/main/cpp` one job at a time, we plan the link with
+    `-###` and run `ld.lld` ourselves, and the library is packaged into the APK
+    at `lib/<abi>/`. The test extracts that library from the built APK, loads it
+    into the test process and asserts the marker its `JNI_OnLoad` wrote — an
+    entry in a zip proves nothing about a `.so` that might be corrupt, built for
+    the wrong architecture, or linked against something absent. Green on API 34
+    x86_64 and on Android 16 / API 36 arm64.
+
+    Two spikes stand behind it. R9 established that a downloaded binary runs
+    only from internal storage and only through `/system/bin/linker64`; R10 put
+    a real toolchain on that route and found the two rules the engine had to be
+    built around — one compiler job per invocation, and the driver can never
+    execute the linker. Both are consequences of app storage being
+    non-executable, not defects, and both are pinned by tests that assert
+    *failure* so the workarounds cannot quietly become unnecessary without
+    anyone noticing.
+
+    | Module | What it does now |
+    |---|---|
+    | `:toolchain:manager` | Downloads a 152 MiB gzipped tar per ABI from this repo's releases and unpacks it **in-process**, symlinks and permission bits preserved |
+    | `:toolchain:native` | `LinkerLaunch` starts a binary it did not bundle; `ClangToolchain` supplies the five flags the launch stops clang deriving, and plans-then-executes links |
+    | `:engine:fast` | `NativeCompileStage`, `ClangDiagnostics`, and `lib/<abi>/` in the APK — with `libc++_shared.so` beside anything C++ |
+    | `:app` | Offers the download when a native project is built without it |
+
+    **What is not done is `clangd`.** M7's deliverable named it alongside the
+    toolchain, and nothing here provides completion or diagnostics for C or C++
+    beyond what the compiler prints after a build. The binary is in the
+    toolchain already; wiring it to `:lsp:java`'s shape is a separate piece of
+    work and should not be counted as done because the build half is.
+
+    Two other limits, both deliberate. The APK is built for the device's own ABI
+    and no other, because each additional one is another 551 MB toolchain to
+    produce libraries this device cannot run. And 551 MB is a great deal to ask:
+    roughly 115 MB of it is LLVM tools a compile never touches, and trimming is
+    a real opportunity that is deliberately not taken blind, since `llvm-ar` and
+    `llvm-strip` are wanted the moment static libraries are.
 
 
 ---

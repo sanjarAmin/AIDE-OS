@@ -116,6 +116,16 @@ class ClangToolchain(
     }
 
     /**
+     * The C++ runtime the toolchain links against, if it is there.
+     *
+     * Part of the toolchain, not of Android: the driver plans `-lc++_shared`
+     * into every C++ link and nothing on the device resolves it. Whoever
+     * packages the built library has to carry this beside it, which is what the
+     * NDK's own Gradle plugin does.
+     */
+    fun cxxRuntime(): File? = File(libraries, "libc++_shared.so").takeIf { it.isFile }
+
+    /**
      * Compiles one source to one object. **One job, deliberately.**
      *
      * Producing anything but an object here would give the driver a second job

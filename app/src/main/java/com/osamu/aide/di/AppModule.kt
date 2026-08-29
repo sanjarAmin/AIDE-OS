@@ -15,6 +15,7 @@ import com.osamu.aide.engine.fast.AndroidPlatformProvider
 import com.osamu.aide.engine.deps.DependencyResolver
 import com.osamu.aide.engine.fast.ApkInstaller
 import com.osamu.aide.engine.fast.KotlinToolchainProvider
+import com.osamu.aide.engine.fast.NativeToolchainProvider
 import com.osamu.aide.toolchain.manager.ToolchainManager
 import com.osamu.aide.toolchain.nativetools.NativeToolRunner
 import com.osamu.aide.toolchain.nativetools.NativeToolchain
@@ -94,6 +95,11 @@ val appModule = module {
     single { KotlinToolchainProvider(get()) }
     single { KotlinCompilerSource(get(), File(get<Context>().cacheDir, "kotlin-host")) }
 
+    // The C/C++ toolchain is absent even more often than the Kotlin compiler,
+    // and for the same reason cannot be a nullable singleton. The provider is
+    // registered; what it finds is asked for per build.
+    single { NativeToolchainProvider(get(), get()) }
+
     single {
         ProjectBuilder(
             toolchain = get(),
@@ -101,6 +107,7 @@ val appModule = module {
             runner = get(),
             dependencies = get(),
             kotlin = get(),
+            native = get(),
             dispatchers = get(),
             outputRoot = get(named(BUILD_OUTPUT_ROOT)),
         )

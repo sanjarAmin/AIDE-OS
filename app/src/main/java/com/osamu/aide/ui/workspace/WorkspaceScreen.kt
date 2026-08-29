@@ -809,9 +809,11 @@ private fun PlatformInstallDialog(
         text = {
             Column {
                 Text(
-                    "Building needs android.jar, which cannot be shipped inside " +
-                        "AIDE-OS. It is downloaded once, from Google, and is about " +
-                        "$megabytes MB.",
+                    if (state.component.requiresSdkLicense) {
+                        "${state.rationale} It is about $megabytes MB."
+                    } else {
+                        state.rationale
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                 )
 

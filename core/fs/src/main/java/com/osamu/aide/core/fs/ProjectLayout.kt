@@ -19,6 +19,12 @@ class ProjectLayout(val root: File) {
     val resourceDir: File get() = File(mainDir, "res")
     val assetsDir: File get() = File(mainDir, "assets")
 
+    /**
+     * C and C++ sources. `src/main/cpp`, which is where the NDK's own Gradle
+     * plugin puts them, so an imported project needs nothing moved.
+     */
+    val nativeDir: File get() = File(mainDir, "cpp")
+
     /** Every `.java` under [javaDir], in a stable order so builds are repeatable. */
     fun javaSources(): List<File> = javaDir
         .walkTopDown()
@@ -32,10 +38,25 @@ class ProjectLayout(val root: File) {
         .sortedBy { it.invariantSeparatorsPath }
         .toList()
 
+    /**
+     * Every C and C++ source under [nativeDir], in a stable order.
+     *
+     * Headers are excluded: they are compiled through the sources that include
+     * them, and a header compiled on its own is either an error or a wasted
+     * object file.
+     */
+    fun nativeSources(): List<File> = nativeDir
+        .walkTopDown()
+        .filter { it.isFile && it.extension.lowercase() in NATIVE_EXTENSIONS }
+        .sortedBy { it.invariantSeparatorsPath }
+        .toList()
+
     /** True when there is enough here to attempt a build. */
     fun isBuildable(): Boolean = manifestFile.isFile
 
     companion object {
+        private val NATIVE_EXTENSIONS = setOf("c", "cc", "cpp", "cxx")
+
         fun of(project: Project) = ProjectLayout(project.rootDir)
     }
 }

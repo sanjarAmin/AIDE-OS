@@ -13,6 +13,7 @@ enum class BuildStage(val displayName: String) {
     LINK_RESOURCES("Linking resources"),
     COMPILE_JAVA("Compiling Java"),
     COMPILE_KOTLIN("Compiling Kotlin"),
+    COMPILE_NATIVE("Compiling C/C++"),
     DEX("Converting to Dalvik bytecode"),
     PACKAGE("Packaging"),
     SIGN("Signing"),

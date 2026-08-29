@@ -6,7 +6,10 @@ import com.osamu.aide.engine.api.BuildEvent
 import com.osamu.aide.engine.api.BuildRequest
 import com.osamu.aide.engine.api.BuildResult
 import com.osamu.aide.engine.fast.AndroidPlatformProvider
+import android.os.Build
+import com.osamu.aide.core.fs.ProjectLayout
 import com.osamu.aide.engine.fast.FastBuildSystem
+import com.osamu.aide.engine.fast.NativeToolchainProvider
 import com.osamu.aide.engine.fast.KotlinCompiler
 import com.osamu.aide.toolchain.manager.ToolchainComponent
 import com.osamu.aide.toolchain.manager.ToolchainManager
@@ -38,6 +41,13 @@ class ProjectBuilder(
      * [KotlinCompilerSource] for why this is not a nullable Koin singleton.
      */
     private val kotlin: KotlinCompilerSource,
+    /**
+     * Asked per build, for the same reason [kotlin] is, and with the same
+     * consequence for dependency injection: it resolves to null on any device
+     * that has not downloaded 551 MB of clang, and Koin cannot hold null in a
+     * singleton. The provider is the singleton; the toolchain is not.
+     */
+    private val native: NativeToolchainProvider,
     private val dispatchers: DispatcherProvider,
     /**
      * Cache, not the project directory. Intermediates are large, regenerable,
@@ -49,6 +59,21 @@ class ProjectBuilder(
 
     /** False means the platform has to be downloaded before anything can build. */
     fun isPlatformInstalled(): Boolean = toolchain.canBuild()
+
+    /**
+     * The C/C++ toolchain this project needs and does not have, or null.
+     *
+     * Null covers both ordinary cases -- the project has no native code, or the
+     * toolchain is already installed -- and the one that is out of scope, a
+     * device whose ABI has no toolchain built for it. Only a component that can
+     * actually be downloaded is returned, so the caller never offers a download
+     * that cannot happen.
+     */
+    fun missingNativeToolchain(project: Project): ToolchainComponent? {
+        if (ProjectLayout.of(project).nativeSources().isEmpty()) return null
+        if (native.toolchain() != null) return null
+        return ToolchainComponent.nativeToolchain(Build.SUPPORTED_ABIS.first())
+    }
 
     fun build(project: Project): Flow<BuildEvent> = flow {
         val androidJar = toolchain.androidJar()
@@ -82,6 +107,7 @@ class ProjectBuilder(
             platforms.platformFor(androidJar),
             dispatchers,
             kotlin.compiler(),
+            native.toolchain(),
         )
         emitAll(
             engine.build(

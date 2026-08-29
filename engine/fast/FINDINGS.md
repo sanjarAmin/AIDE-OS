@@ -423,3 +423,64 @@ The rule this leaves behind: **when a stage gains an input, the test that proves
 the stage is not enough.** Something has to assert that the caller supplies it,
 and the caller is usually in another module.
 
+
+## 15. The native stage, and the two shapes it cannot take
+
+M7 added C and C++ to the pipeline. The compiler mechanics are in
+`tools/clang/FINDINGS.md`; what belongs here is what the *engine* had to do
+differently because of them.
+
+**One clang invocation per source, then a separate link.** Not a batching
+choice that could be revisited for speed. Two jobs in one invocation make the
+driver spawn `cc1` through `/proc/self/exe`, which under the linker launch is
+the linker, and it dies on `expected absolute path: "-cc1"`. The link is worse:
+the driver always `execve`s `ld.lld`, out of app storage, which nothing may
+execute — so `ClangToolchain` asks it to *plan* the link with `-###` and runs
+the linker itself. The stage's job is only to hand it one job at a time.
+
+**A C++ project must be linked by the C++ driver**, even though its objects are
+already compiled. `clang` and `clang++` are the same binary and the name decides
+what gets linked in; linking C++ objects with the C driver omits libc++ and
+fails on every symbol the standard library owns.
+
+**`libc++_shared.so` goes into the APK.** It is part of the toolchain, not part
+of Android, and the driver plans `-lc++_shared` into every C++ link. Nothing on
+the device resolves it, so an APK without it installs cleanly and dies at
+`System.loadLibrary` — which is the NDK Gradle plugin's reason for doing the
+same copy.
+
+### Native libraries are packaged compressed
+
+`lib/<abi>/*.so` entries are `DEFLATED`, so the platform extracts them at
+install. The alternative — storing them uncompressed and mapping them in place,
+which is what modern AGP does — requires every such entry to be page-aligned,
+and `apksig` aligns uncompressed entries to 4 bytes, not to a page. A library
+stored and misaligned produces an APK that installs and then fails to load, and
+only on devices whose page size is larger than the alignment it got. Compressed
+costs install-time disk and nothing else.
+
+### One ABI: the device's own
+
+Built for `Build.SUPPORTED_ABIS.first()` and no other. An on-device IDE's output
+is nearly always installed on the device that built it, and each additional ABI
+means another 551 MB toolchain to hold a compiler that produces libraries this
+device cannot run. Worth revisiting only when this engine is asked to produce an
+APK for somewhere else.
+
+### The refusal has to come first
+
+A project with `src/main/cpp` on a device with no toolchain is refused before
+any stage starts, naming the toolchain. Letting it build would produce an APK
+with no library in it — no error anywhere in the build — that installs and dies
+at `System.loadLibrary` on the user's device, with nothing pointing back at a
+missing download. This is section 14's lesson again: the failure that costs is
+the one that produces a plausible artefact.
+
+### clang's diagnostics are not aapt2's
+
+Close enough to look reusable and not reusable. clang prefixes its own failures
+with the driver's name, so `clang-21: error: unable to execute command` parses
+under aapt2's rules as a file named `clang-21` — putting a tappable link to a
+nonexistent file in front of the user, for the one error class they can do
+nothing about. `ClangDiagnostics` checks for a tool prefix first, and keeps
+`note:` lines, which for a template error are usually the useful half.

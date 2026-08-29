@@ -275,6 +275,47 @@ and `ar` plus `xz` handling on the device. Rejected for the download shape.
 `fetch-toolchain.sh` still produces the archives, so the provenance is a script
 away rather than lost.
 
+## 9. clangd runs, and does not need the thing it cannot have
+
+The remaining half of M7's deliverable, and it was not obviously possible.
+Everything the compiler needed a workaround for applies again — started through
+the linker, misled by `/proc/self/exe`, forbidden from executing any program —
+and clangd makes it worse in two ways. It is a long-lived server rather than a
+one-shot process, and **its usual way of discovering system headers is to run
+the compiler and ask it** (`--query-driver`), which is exactly what this
+platform refuses.
+
+It works anyway, because `--query-driver` is off unless asked for. The paths go
+in a `compile_flags.txt` beside the sources instead:
+
+```
+-xc++
+-resource-dir=<toolchain>/lib/clang/21
+--sysroot=<toolchain>
+-I<toolchain>/include/<triple>
+-isystem<toolchain>/include/c++/v1
+```
+
+The resource directory is the one that decides whether this works at all.
+Without it clangd looks under `/apex/com.android.runtime/lib/clang/21`, finds
+no `stddef.h`, and reports errors inside every system header — which reads as a
+broken sysroot rather than a broken launch, the same misdirection §1 describes.
+
+`compile_flags.txt` rather than `compile_commands.json`: every file in a project
+is compiled with the same flags here, and clangd finds the simpler format by
+walking up from the file itself.
+
+**Measured:** `initialize` answered and a real diagnostic published in **0.47 s**
+on an x86_64 emulator and **0.52 s** on Android 16 arm64 — `Expected ';' at end of declaration (fix available)`.
+That the diagnostic exists at all is the proof: answering `initialize` needs no
+headers, so a server that got that far and no further would look healthy and be
+useless. 18.6 MB, already inside the toolchain, so it costs no extra download.
+
+**One convention to inherit.** clangd reports a missing semicolon at the token
+that *revealed* it, not at the line missing it — the fault on line 2 is reported
+at line 3. Whatever draws squiggles has to follow clangd's ranges rather than
+correct them, or it will disagree by one line on the commonest mistake in C++.
+
 ## What this means for M7
 
 | Module | What it has to do |
@@ -282,6 +323,7 @@ away rather than lost.
 | `:toolchain:manager` | Download the closure, verify, unpack **in-process** |
 | `:toolchain:native` | Add the linker64 launch and the relocation flags centrally |
 | `:engine:fast` | One job per invocation; plan-then-execute for the link; copy `libc++_shared.so` into the APK |
+| `:lsp:*` | clangd over stdio, fed a `compile_flags.txt`; never `--query-driver` |
 
 ## Open
 

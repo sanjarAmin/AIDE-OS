@@ -13,6 +13,7 @@ import com.osamu.aide.engine.deps.DependencyResolver
 import com.osamu.aide.editor.EditorLanguages
 import com.osamu.aide.engine.fast.AndroidPlatformProvider
 import com.osamu.aide.engine.fast.KotlinToolchainProvider
+import com.osamu.aide.engine.fast.NativeToolchainProvider
 import com.osamu.aide.engine.fast.ApkInstaller
 import com.osamu.aide.toolchain.manager.ToolchainManager
 import com.osamu.aide.toolchain.nativetools.NativeToolRunner
@@ -92,6 +93,10 @@ class WorkspaceViewModelTest {
                     KotlinToolchainProvider(context),
                     File(context.cacheDir, "kotlin-host-test"),
                 ),
+                // Likewise resolves to null: this context's files directory
+                // holds no 551 MB clang, which is what almost every device
+                // looks like.
+                native = NativeToolchainProvider(context, dispatchers),
                 dispatchers = dispatchers,
                 outputRoot = File(context.cacheDir, "builds-test"),
             ),
@@ -360,6 +365,37 @@ class WorkspaceViewModelTest {
         awaitState("the background tab to be written") {
             mainActivitySource.readText() == edited
         }
+    }
+
+    /**
+     * The same courtesy for C and C++, and the reason it is asserted here
+     * rather than in the engine: `:engine:fast` refuses a native project by
+     * name whether or not anything offers the download, and a refusal naming a
+     * component the user has no way to get is a dead end. The engine's test
+     * would pass with this screen doing nothing at all.
+     */
+    @Test
+    fun building_a_native_project_without_the_toolchain_offers_to_download_it() {
+        // src/main/cpp is the whole trigger; the file need not be valid, since
+        // nothing will compile it.
+        File(project.rootDir, "src/main/cpp").mkdirs()
+        File(project.rootDir, "src/main/cpp/hello.c").writeText("int main(void) { return 0; }\n")
+
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.build() }
+
+        awaitState("the toolchain prompt") { it.platform != null }
+        val prompt = viewModel.state.value.platform!!
+        assertTrue(
+            "the prompt is for something else: ${prompt.component.id}",
+            prompt.component.id.startsWith("clang-"),
+        )
+        // LLVM is Apache-2.0. Asking for Google's terms here would be asking
+        // the user to agree to something with no bearing on what they get.
+        assertFalse("clang should need no SDK licence", prompt.component.requiresSdkLicense)
+        assertTrue("the prompt should be ready to download", prompt.licenseAccepted)
+        assertTrue("the prompt does not say why", prompt.rationale.contains("C or C++"))
+        assertFalse("a build started anyway", viewModel.state.value.build.isRunning)
     }
 
     @Test
