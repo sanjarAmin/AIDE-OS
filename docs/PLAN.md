@@ -26,7 +26,7 @@
 | 🟢 | **M4** Deps + Kotlin | A Kotlin project using `androidx.appcompat` builds on device: 41 artifacts resolved, kotlinc ahead of ECJ. Resolution reads Gradle Module Metadata, so AndroidX aligns the way Gradle aligns it. `engine/deps/FINDINGS.md` |
 | 🟡 | **M5** AI ⭐ | Feature-complete; three assertions parked until a live API key exists. Everything testable without one is tested. `ai/core/FINDINGS.md` |
 | 🟢 | **M6** Compose | A Compose app builds, installs, launches and **draws**, on device, with its libraries' manifests merged. Six fixes, none visible to a build-only test. `engine/deps/FINDINGS.md` |
-| 🟢 | **M7** C/C++ | A JNI project builds on device: clang compiles `src/main/cpp`, the library is packaged into the APK, and it loads and runs — verified on API 34 x86_64 and Android 16 arm64. The toolchain is a 152 MiB download installed by `:toolchain:manager`. `clangd` is not done. `tools/clang/FINDINGS.md` |
+| 🟢 | **M7** C/C++ | A JNI project builds on device: clang compiles `src/main/cpp`, the library is packaged into the APK, and it loads and runs. **clangd answers too** — diagnostics, completion, go-to-definition and hover for C and C++, through the same interface the Java service implements. Verified on API 34 x86_64 and Android 16 arm64. `tools/clang/FINDINGS.md` |
 | 🟢 | **M8** Git + Terminal | Clone, edit, stage, commit, push and diff, with identity and tokens in the Keystore. A real terminal: Termux's emulator vendored unmodified, characters sent as typed. `vcs/git/FINDINGS.md`, `terminal/FINDINGS.md` |
 
 **M2 in detail.** All six stages exist in `:engine:fast` and run on a device:
@@ -267,7 +267,7 @@ Bring-your-own-key, no backend infrastructure, no per-user liability for you.
 | **M4** Deps + Kotlin | maven-resolver, AAR extraction, kotlinc integration | Project with `androidx.appcompat` + Kotlin sources builds |
 | **M5** AI ⭐ | `:ai:core` + `:ai:ui`, chat, inline completion, fix-my-error | BYO key → chat with project context, one-tap error fix works |
 | ✅ **M6** Compose | Compose compiler plugin hosted in on-device kotlinc | A Compose hello-world builds and runs |
-| **M7** C/C++ | Termux clang/lld toolchain download, NDK sysroot, clangd | JNI project with a native `.so` builds — **met**, `clangd` outstanding |
+| **M7** C/C++ | Termux clang/lld toolchain download, NDK sysroot, clangd | JNI project with a native `.so` builds — **met**, clangd included |
 | **M8** Git + Terminal | JGit, PTY terminal | Clone from GitHub, edit, commit, push |
 | **M9** Gradle path | Rootfs bootstrap, Tooling API bridge | An unmodified Android Studio project builds |
 | **M10** JS / C# | QuickJS + Node; .NET SDK (experimental) | Node project runs; C# console app compiles |
@@ -531,11 +531,14 @@ sharpest example so far of a bug no module's own test suite can see.
     | `:engine:fast` | `NativeCompileStage`, `ClangDiagnostics`, and `lib/<abi>/` in the APK — with `libc++_shared.so` beside anything C++ |
     | `:app` | Offers the download when a native project is built without it |
 
-    **What is not done is `clangd`.** M7's deliverable named it alongside the
-    toolchain, and nothing here provides completion or diagnostics for C or C++
-    beyond what the compiler prints after a build. The binary is in the
-    toolchain already; wiring it to `:lsp:java`'s shape is a separate piece of
-    work and should not be counted as done because the build half is.
+    **clangd is done too.** `:lsp:native` drives it over stdio and implements
+    the same `LanguageService` the Java side does, so the editor cannot tell
+    which answered; `:lsp:api` holds that contract. It was not obviously
+    possible — clangd's usual way of finding system headers is to execute the
+    compiler and ask it, which this platform forbids — and the way through is a
+    `compile_flags.txt` and never `--query-driver`. Two ways it answers
+    *wrongly* rather than not at all are recorded in `tools/clang/FINDINGS.md`
+    §9; both were found by building the client and neither reports an error.
 
     Two other limits, both deliberate. The APK is built for the device's own ABI
     and no other, because each additional one is another 551 MB toolchain to

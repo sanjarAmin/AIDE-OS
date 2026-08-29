@@ -138,6 +138,10 @@ class ClangdServiceTest {
             broken.lineSequence().indexOfFirst { it.contains("missing_name") } + 1,
             error.line,
         )
+        // Without a file the gutter treats a diagnostic as having no location
+        // and draws nothing, so a broken file would render as clean.
+        assertEquals("main.cpp", error.file?.path)
+        assertTrue("the diagnostic has no location", error.hasLocation)
     }
 
     /** Clean code produces no errors -- the other half of the same claim. */

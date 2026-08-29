@@ -103,7 +103,7 @@ class ClangdService(
         link.on("textDocument/publishDiagnostics") { message ->
             val params = message.optJSONObject("params") ?: return@on
             val uri = params.optString("uri")
-            val list = diagnosticsOf(params.optJSONArray("diagnostics"))
+            val list = diagnosticsOf(params.optJSONArray("diagnostics"), uri)
             synchronized(published) {
                 published[uri] = list
                 waiting.remove(uri)?.complete(list)
@@ -416,8 +416,16 @@ class ClangdService(
         return if (path.startsWith(prefix)) File(path.removePrefix(prefix)) else file
     }
 
-    private fun diagnosticsOf(array: JSONArray?): List<Diagnostic> {
+    /**
+     * [uri] names the file the diagnostics are about, and it has to reach the
+     * [Diagnostic]s: `hasLocation` is false without a file, so the gutter
+     * ignores them and a C++ file with errors renders as clean. LSP publishes
+     * per-file, so the uri on the notification is the answer -- there is
+     * nothing to infer.
+     */
+    private fun diagnosticsOf(array: JSONArray?, uri: String): List<Diagnostic> {
         if (array == null) return emptyList()
+        val file = relativise(File(uri.removePrefix("file://")))
         return (0 until array.length()).mapNotNull { index ->
             val item = array.optJSONObject(index) ?: return@mapNotNull null
             val range = item.optJSONObject("range") ?: return@mapNotNull null
@@ -425,7 +433,7 @@ class ClangdService(
             Diagnostic(
                 severity = severityOf(item.optInt("severity", 1)),
                 message = item.optString("message"),
-                file = null,
+                file = file,
                 line = start.optInt("line") + 1,
                 column = start.optInt("character") + 1,
             )

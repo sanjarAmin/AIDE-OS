@@ -85,6 +85,7 @@ dependencies {
     implementation(project(":engine:deps"))
     implementation(project(":engine:fast"))
     implementation(project(":lsp:java"))
+    implementation(project(":lsp:native"))
     implementation(project(":toolchain:native"))
     implementation(project(":terminal"))
     implementation(project(":toolchain:manager"))

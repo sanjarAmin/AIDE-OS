@@ -38,7 +38,9 @@ emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu host
 :engine:deps         Maven resolution and AAR extraction, on ART. FINDINGS.
 :engine:fast         The bundled pipeline: aapt2 -> ECJ -> D8 -> apksig, plus
                      clang for src/main/cpp. FINDINGS.
+:lsp:api             The LanguageService contract; both services implement it
 :lsp:java            nb-javac kept warm: completion, diagnostics, definitions
+:lsp:native          clangd over stdio, for C and C++
 :toolchain:native    aapt2 in jniLibs, and the harness that execs it -- plus the
                      linker64 route for toolchains it did not bundle
 :toolchain:manager   Downloads android.jar, kotlinc, clang: pin, verify, install.
@@ -48,7 +50,7 @@ emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu host
 tools/               Scripts that produce the toolchains, and their FINDINGS.
 ```
 
-`docs/PLAN.md` lists 22 modules. Fifteen exist, plus six spikes. Do not
+`docs/PLAN.md` lists 22 modules. Seventeen exist, plus six spikes. Do not
 create the rest speculatively — each arrives with the milestone that needs it.
 
 ## Conventions

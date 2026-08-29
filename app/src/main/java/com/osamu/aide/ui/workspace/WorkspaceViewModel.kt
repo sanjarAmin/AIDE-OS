@@ -263,8 +263,9 @@ class WorkspaceViewModel(
         // Without a classpath first, so the editor has intelligence for
         // platform types immediately. A cold dependency resolve is a minute of
         // network, and completion on android.* should not wait for it.
-        languages.completionSource = languageServices.forProject(projectDir)
-            ?.let(::JavaCompletionSource)
+        languages.completionSource = ServiceCompletionSource { file ->
+            languageServices.serviceFor(file, projectDir)
+        }
 
         // Then again with it, once the descriptor and the resolve are done. The
         // second service replaces the first: a warm compiler's symbol table
@@ -277,8 +278,9 @@ class WorkspaceViewModel(
             val classpath = runCatching { dependencies.classpathFor(resolved) }.getOrNull()
             if (classpath.isNullOrEmpty() || _state.value.projectRoot != projectDir) return@launch
 
-            languages.completionSource = languageServices.forProject(projectDir, classpath)
-                ?.let(::JavaCompletionSource)
+            languages.completionSource = ServiceCompletionSource { file ->
+                languageServices.serviceFor(file, projectDir, classpath)
+            }
             Log.i(TAG, "language service rebuilt with ${classpath.size} dependency jars")
 
             // Anything already on screen was analysed against the narrower
@@ -408,8 +410,10 @@ class WorkspaceViewModel(
      */
     private fun analyse(file: File, text: String) {
         val root = _state.value.projectRoot ?: return
-        val service = languageServices.forProject(root) ?: return
-        if (file.extension != "java") return
+        // Whichever service claims the file -- javac for Java, clangd for C
+        // and C++. Nothing here decides; a service that does not claim a file
+        // is simply not the one asked.
+        val service = languageServices.serviceFor(file, root) ?: return
 
         analysisJob?.cancel()
         analysisJob = viewModelScope.launch {
@@ -461,8 +465,7 @@ class WorkspaceViewModel(
     fun onCursorMoved(offset: Int) {
         val active = _state.value.active ?: return
         val root = _state.value.projectRoot ?: return
-        if (active.file.extension != "java") return
-        val service = languageServices.forProject(root) ?: return
+        val service = languageServices.serviceFor(active.file, root) ?: return
 
         signatureJob?.cancel()
         signatureJob = viewModelScope.launch {
@@ -491,7 +494,7 @@ class WorkspaceViewModel(
     fun goToDefinition(offset: Int) {
         val active = _state.value.active ?: return
         val root = _state.value.projectRoot ?: return
-        val service = languageServices.forProject(root) ?: return
+        val service = languageServices.serviceFor(active.file, root) ?: return
 
         viewModelScope.launch {
             val text = pendingText[active.file] ?: active.document.text

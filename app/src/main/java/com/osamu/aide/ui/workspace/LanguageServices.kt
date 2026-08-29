@@ -4,7 +4,10 @@ import com.osamu.aide.core.common.DispatcherProvider
 import com.osamu.aide.editor.CompletionSource
 import com.osamu.aide.editor.EditorCompletion
 import com.osamu.aide.editor.EditorCompletionKind
+import com.osamu.aide.engine.fast.NativeToolchainProvider
 import com.osamu.aide.lsp.api.CompletionKind
+import com.osamu.aide.lsp.api.LanguageService
+import com.osamu.aide.lsp.nativelsp.ClangdService
 import com.osamu.aide.lsp.java.JavaLanguageService
 import kotlinx.coroutines.runBlocking
 import java.io.File
@@ -23,6 +26,7 @@ import java.io.File
  * may not have happened yet.
  */
 class LanguageServices(
+    private val native: NativeToolchainProvider,
     private val toolchain: com.osamu.aide.toolchain.manager.ToolchainManager,
     private val dispatchers: DispatcherProvider,
     /**
@@ -33,6 +37,9 @@ class LanguageServices(
 ) {
 
     private var current: Pair<File, JavaLanguageService>? = null
+
+
+    private var nativeCurrent: Pair<File, ClangdService>? = null
 
     /**
      * Null when there is nothing to analyse with.
@@ -83,11 +90,55 @@ class LanguageServices(
         return service
     }
 
-    /** Drops the warm compiler and everything it has entered. */
+    /**
+     * The service that handles [file], or null if nothing here does.
+     *
+     * The editor asks this rather than choosing, so adding a language is a
+     * matter of adding a service that claims its files. Java's needs a
+     * classpath and rebuilds when it changes; clangd's needs neither, because
+     * it reads `compile_flags.txt` from the project and re-reads it itself.
+     */
+    @Synchronized
+    fun serviceFor(
+        file: File,
+        projectRoot: File,
+        classpath: List<File> = emptyList(),
+    ): LanguageService? {
+        val java = forProject(projectRoot, classpath)
+        if (java != null && java.handles(file)) return java
+
+        val clangd = nativeFor(projectRoot)
+        if (clangd != null && clangd.handles(file)) return clangd
+        return null
+    }
+
+    /**
+     * The clangd service for [projectRoot], started at most once.
+     *
+     * Null when no C/C++ toolchain is installed, which is the usual state: it
+     * is a 152 MiB download and most projects have no native code. The service
+     * itself starts clangd lazily, so holding one costs nothing until a C file
+     * is opened.
+     */
+    private fun nativeFor(projectRoot: File): ClangdService? {
+        nativeCurrent?.let { (root, service) ->
+            if (root == projectRoot) return service
+            service.close()
+            nativeCurrent = null
+        }
+        val toolchain = native.toolchain() ?: return null
+        val service = ClangdService(toolchain, projectRoot, dispatchers)
+        nativeCurrent = projectRoot to service
+        return service
+    }
+
+    /** Drops the warm compiler and stops the language server. */
     @Synchronized
     fun release() {
         current?.second?.close()
         current = null
+        nativeCurrent?.second?.close()
+        nativeCurrent = null
     }
 }
 
@@ -105,10 +156,18 @@ class LanguageServices(
  * out of here on purpose; [com.osamu.aide.editor.CompletionSource] documents it,
  * and the editor turns it into a cancellation rather than a failure.
  */
-class JavaCompletionSource(private val service: JavaLanguageService) : CompletionSource {
+class ServiceCompletionSource(
+    /**
+     * Resolved per call rather than captured, because which service owns a
+     * file is a property of the file. One editor may hold a `.java` and a
+     * `.cpp` tab at once, and a source that had captured a single service
+     * would answer for both with whichever it happened to be given.
+     */
+    private val serviceFor: (File) -> LanguageService?,
+) : CompletionSource {
 
     override fun completionsAt(file: File, text: String, offset: Int): List<EditorCompletion> =
-        runBlocking { service.complete(file, text, offset) }
+        runBlocking { serviceFor(file)?.complete(file, text, offset).orEmpty() }
             .map { proposal ->
                 EditorCompletion(
                     label = proposal.label,

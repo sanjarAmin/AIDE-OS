@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.osamu.aide.core.common.DefaultDispatcherProvider
+import com.osamu.aide.engine.fast.NativeToolchainProvider
 import com.osamu.aide.core.fs.BuildEngine
 import com.osamu.aide.core.fs.Project
 import com.osamu.aide.core.fs.SourceLanguage
@@ -58,6 +59,7 @@ class AndroidXCompletionTest {
             File(this, "src/main/java/com/example").mkdirs()
         }
         services = LanguageServices(
+            native = NativeToolchainProvider(context, DefaultDispatcherProvider()),
             toolchain = ToolchainManager(context, dispatchers),
             dispatchers = dispatchers,
             buildOutputRoot = File(context.cacheDir, "builds-test"),

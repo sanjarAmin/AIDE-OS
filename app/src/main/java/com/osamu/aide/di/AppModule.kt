@@ -117,6 +117,7 @@ val appModule = module {
     // rotations. Rebuilding it per screen would undo the whole point.
     single {
         LanguageServices(
+            native = get(),
             toolchain = get(),
             dispatchers = get(),
             buildOutputRoot = get(named(BUILD_OUTPUT_ROOT)),

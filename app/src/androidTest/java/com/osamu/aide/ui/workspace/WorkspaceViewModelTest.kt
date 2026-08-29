@@ -103,6 +103,7 @@ class WorkspaceViewModelTest {
             toolchain = toolchain,
             installer = ApkInstaller(context, dispatchers),
             languageServices = LanguageServices(
+                native = NativeToolchainProvider(context, dispatchers),
                 toolchain = toolchain,
                 dispatchers = dispatchers,
                 buildOutputRoot = File(context.cacheDir, "builds-test"),

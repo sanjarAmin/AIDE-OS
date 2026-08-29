@@ -3,6 +3,7 @@ package com.osamu.aide.ui.workspace
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.osamu.aide.core.common.DefaultDispatcherProvider
+import com.osamu.aide.engine.fast.NativeToolchainProvider
 import com.osamu.aide.editor.EditorCompletionKind
 import com.osamu.aide.toolchain.manager.ToolchainManager
 import org.junit.Assert.assertEquals
@@ -50,6 +51,7 @@ class JavaCompletionSourceTest {
             mkdirs()
         }
         services = LanguageServices(
+            native = NativeToolchainProvider(context, DefaultDispatcherProvider()),
             toolchain = ToolchainManager(context, DefaultDispatcherProvider()),
             dispatchers = DefaultDispatcherProvider(),
             buildOutputRoot = File(context.cacheDir, "builds-test"),
@@ -62,10 +64,10 @@ class JavaCompletionSourceTest {
 
     @Test
     fun the_editor_gets_real_proposals_from_the_real_service() {
-        val service = requireNotNull(services.forProject(projectRoot)) {
-            "no language service; the platform is installed, so this is a wiring failure"
-        }
-        val source = JavaCompletionSource(service)
+        // Through the routing source the app actually installs, not a service
+        // handed to it directly: which service owns a file is the thing worth
+        // exercising now that there is more than one.
+        val source = ServiceCompletionSource { file -> services.serviceFor(file, projectRoot) }
 
         val text = ACTIVITY.replace(CURSOR, "")
         val proposals = source.completionsAt(sourceFile(), text, ACTIVITY.indexOf(CURSOR))
