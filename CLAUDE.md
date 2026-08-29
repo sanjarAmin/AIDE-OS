@@ -79,13 +79,25 @@ failed to load still produces a clean compile.
 - **API 30 is the toolchain floor.** aapt2's libbase needs it, and the compiler
   dex archive is built for it. `minSdk` stays 26 — the editor works below 30 —
   so build features must gate at runtime, not fail at exec time.
-- **A real device dozes, and instrumented tests stall when it does.** With the
-  screen off the phone reaches `mWakefulness=Dozing` and suspends the test
-  process mid-run: a suite that takes one second runs for ten minutes and then
-  reports `Process crashed`, which looks like a test defect and is not one.
-  `adb shell svc power stayon usb` before a device run, and
-  `adb shell dumpsys power | grep mWakefulness` to confirm. The emulator never
-  does this, so it only bites on hardware.
+- **A real device dozes, and keeping it awake breaks the Compose tests.** Two
+  failures that look unrelated and pull in opposite directions, both only on
+  hardware.
+
+  With the screen off the phone reaches `mWakefulness=Dozing` and suspends a
+  test process mid-run: a suite that takes one second runs for ten minutes and
+  then reports `Process crashed`. That is not a test defect. `adb shell svc
+  power stayon usb` fixes it — and then every Compose UI test fails with
+  `No compose hierarchies found in the app`, because the screen being on means
+  the **lock screen** is in front of the activity. `wm dismiss-keyguard` does
+  not help on a device with a secure lock.
+
+  **A locked phone cannot finish a full sweep either way.** Run
+  `connectedDebugAndroidTest` against the emulator, which neither dozes nor
+  locks, and use the phone for targeted runs: `stayon usb` first, the suites
+  you care about via `am instrument`, then `svc power stayon false` after. A
+  device left plugged in unattended will be dozing when you come back to it, so
+  check before believing a stall. `adb shell dumpsys power | grep mWakefulness`
+  and `adb shell dumpsys window | grep isKeyguardShowing`.
 
 - **`adb shell run-as` is not the app.** It runs in `runas_app`, which *may*
   `execve` out of app-private storage — so a hand probe through it will

@@ -25,6 +25,16 @@ class NativeToolchainProvider(
     private val context: Context,
     private val dispatchers: DispatcherProvider,
     private val abi: String = Build.SUPPORTED_ABIS.first(),
+    /**
+     * Where components are installed. The app's own directory by default.
+     *
+     * Overridable so a test can install a real toolchain without writing into
+     * the storage the app under test reads. Sharing it makes two tests
+     * contradict each other through the device: one installs 600 MB to prove
+     * C++ routing works, and a sibling asserting the *absence* of a toolchain
+     * then fails -- for a reason that is nowhere in either test.
+     */
+    private val installRoot: File = File(context.filesDir, "toolchains"),
 ) {
 
     /** Null when no toolchain is installed for this ABI. */
@@ -45,8 +55,7 @@ class NativeToolchainProvider(
      * the engine compiles with what it is given and does not know how components
      * arrive. A test asserts this id against the manager's.
      */
-    fun installDirectory(): File =
-        File(context.filesDir, "toolchains/${componentId()}")
+    fun installDirectory(): File = File(installRoot, componentId())
 
     fun componentId(): String = "$COMPONENT_PREFIX-$abi"
 

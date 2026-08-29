@@ -123,16 +123,31 @@ class LanguageServiceRoutingTest {
         val component = ToolchainComponent.nativeToolchain(Build.SUPPORTED_ABIS.first())
         assumeNotNull("no C/C++ toolchain for this ABI", component)
 
+        // **Its own root, not the app's.** Installing into the directory the
+        // app really reads would leave 600 MB behind and make every sibling
+        // test that asserts "no toolchain installed" fail, for a reason
+        // written down in neither of them.
+        val isolated = File(context.cacheDir, "routing-toolchains")
         val installed = runBlocking {
             ComponentInstaller(
-                ToolchainStorage(File(context.filesDir, "toolchains")),
-                SdkLicense(context.filesDir),
+                ToolchainStorage(isolated),
+                SdkLicense(context.cacheDir),
                 dispatchers,
             ).install(component!!).toList().last()
         }
         assumeTrue("the toolchain could not be installed: $installed", installed is InstallProgress.Installed)
 
-        val service = services.serviceFor(File(project, "src/main/cpp/hello.cpp"), project)
+        val isolatedServices = LanguageServices(
+            native = NativeToolchainProvider(context, dispatchers, installRoot = isolated),
+            toolchain = ToolchainManager(context, dispatchers),
+            dispatchers = dispatchers,
+            buildOutputRoot = File(context.cacheDir, "builds-routing-test"),
+        )
+        val service = try {
+            isolatedServices.serviceFor(File(project, "src/main/cpp/hello.cpp"), project)
+        } finally {
+            isolatedServices.release()
+        }
 
         assertTrue("C++ was not routed to clangd after installing it: $service", service is ClangdService)
     }
