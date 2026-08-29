@@ -149,7 +149,11 @@ class AgpBuildTest {
         return link
     }
 
-    private fun writeProject(withAndroidX: Boolean = false, withKotlin: Boolean = false) {
+    private fun writeProject(
+        withAndroidX: Boolean = false,
+        withKotlin: Boolean = false,
+        withCompose: Boolean = false,
+    ) {
         File(project, "src/main/java/demo/app").mkdirs()
         File(project, "settings.gradle.kts").writeText(
             """
@@ -162,6 +166,12 @@ class AgpBuildTest {
             buildString {
                 appendLine("plugins {")
                 appendLine("""    id("com.android.application") version "9.3.2"""")
+                if (withCompose) {
+                    // Kotlin 2.0 moved the Compose compiler out of the Kotlin
+                    // plugin into its own; AGP says so plainly if it is absent.
+                    // This one does not collide with AGP's kotlin extension.
+                    appendLine("""    id("org.jetbrains.kotlin.plugin.compose") version "2.2.10"""")
+                }
                 // No Kotlin plugin: AGP 9 registers a `kotlin` extension of
                 // its own, and applying org.jetbrains.kotlin.android on top
                 // fails with "Cannot add extension with name 'kotlin'".
@@ -170,17 +180,28 @@ class AgpBuildTest {
                 appendLine("android {")
                 appendLine("""    namespace = "demo.app"""")
                 appendLine("    compileSdk { version = release(36) }")
+                if (withCompose) {
+                    appendLine("    buildFeatures { compose = true }")
+                }
                 appendLine("    defaultConfig {")
                 appendLine("""        applicationId = "demo.app"""")
                 appendLine("        minSdk = 26")
                 appendLine("        versionCode = 1")
                 appendLine("    }")
                 appendLine("}")
-                if (withAndroidX) {
-                    // A real dependency, resolved from Google's Maven: an AAR
-                    // with its own resources and manifest, which is what makes
-                    // resource merging and manifest merging actually happen.
-                    appendLine("""dependencies { implementation("androidx.appcompat:appcompat:1.7.0") }""")
+                if (withAndroidX || withCompose) {
+                    appendLine("dependencies {")
+                    if (withAndroidX) {
+                        // A real dependency, resolved from Google's Maven: an
+                        // AAR with its own resources and manifest, which is
+                        // what makes resource and manifest merging happen.
+                        appendLine("""    implementation("androidx.appcompat:appcompat:1.7.0")""")
+                    }
+                    if (withCompose) {
+                        appendLine("""    implementation(platform("androidx.compose:compose-bom:2024.09.00"))""")
+                        appendLine("""    implementation("androidx.compose.runtime:runtime")""")
+                    }
+                    appendLine("}")
                 }
             },
         )
@@ -207,6 +228,25 @@ class AgpBuildTest {
         File(project, "src/main/java/demo/app/Hello.java").writeText(
             "package demo.app;\npublic class Hello { public static String greet() { return \"$MARKER\"; } }\n",
         )
+        if (withCompose) {
+            File(project, "src/main/java/demo/app/Composables.kt").writeText(
+                """
+                package demo.app
+
+                import androidx.compose.runtime.Composable
+                import androidx.compose.runtime.remember
+
+                @Composable
+                fun Counter(): Int {
+                    // `remember` only compiles to something meaningful if the
+                    // Compose compiler plugin ran: it is rewritten to use the
+                    // composer the plugin threads through every @Composable.
+                    val value = remember { 41 }
+                    return value + 1
+                }
+                """.trimIndent(),
+            )
+        }
         if (withKotlin) {
             File(project, "src/main/java/demo/app/Greeting.kt").writeText(
                 """
@@ -435,6 +475,55 @@ class AgpBuildTest {
             entries.any { it.startsWith("kotlin/") },
         )
         Log.i(TAG, "APK is ${apk.length()} bytes, ${entries.size} entries")
+    }
+
+    /**
+     * **Compose, which is a compiler plugin rather than a library.**
+     *
+     * `buildFeatures { compose = true }` makes AGP apply the Compose compiler
+     * plugin to the Kotlin compilation. That is a different mechanism from
+     * everything above: not a process to spawn or a binary to exec, but a
+     * plugin loaded *into* the compiler, and this project already knows
+     * (`tools/kotlinc/FINDINGS.md`) how quietly that can fail — a plugin that
+     * does not load still produces a clean compile, just without the
+     * transformation.
+     *
+     * So the assertion is not that the build succeeded. `remember` is rewritten
+     * by the plugin to use the composer it threads through every `@Composable`,
+     * and `androidx.compose.runtime` in the APK is what shows the dependency
+     * was resolved and kept.
+     */
+    @Test
+    fun agp_builds_a_compose_project() {
+        writeProject(withKotlin = true, withCompose = true)
+
+        val run = gradle("assembleDebug")
+
+        Log.i(TAG, "compose build in ${run.millis} ms: exit=${run.exit}")
+        run.output.takeLast(1800).chunked(900).forEach { Log.i(TAG, it) }
+        assertTrue("the build failed:\n${run.output.takeLast(1500)}", run.exit == 0)
+
+        val apk = File(project, "build/outputs/apk/debug/agpdemo-debug.apk")
+        assertTrue("no APK was produced", apk.isFile)
+        val entries = ZipFile(apk).use { zip -> zip.entries().toList().map { it.name } }
+        assertTrue("no dex: ${entries.take(10)}", entries.any { it.endsWith(".dex") })
+
+        // **The plugin ran, not merely the compiler.** A Compose plugin that
+        // failed to load produces a clean compile of untransformed code -- the
+        // failure `tools/kotlinc/FINDINGS.md` was written about. The plugin
+        // rewrites every @Composable to open a restart group on the composer it
+        // threads through, so `startRestartGroup` appears in the dex string
+        // table if and only if the transformation happened.
+        val dex = ZipFile(apk).use { zip ->
+            val entry = zip.entries().toList().first { it.name.endsWith(".dex") }
+            zip.getInputStream(entry).readBytes()
+        }
+        assertTrue(
+            "the dex does not reference the composer, so @Composable was " +
+                "compiled without the Compose plugin transforming it",
+            String(dex, Charsets.ISO_8859_1).contains("startRestartGroup"),
+        )
+        Log.i(TAG, "compose APK is ${apk.length()} bytes, ${entries.size} entries")
     }
 
     private companion object {

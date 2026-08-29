@@ -281,6 +281,19 @@ the Gradle daemon — a third level of process spawning, where each earlier leve
 had needed something fixed. Fixing `jspawnhelper` covered this one too, which is
 the point of fixing it rather than passing a flag.
 
+**Compose builds as well**, at 2.3 MB in 37 seconds. It needs
+`org.jetbrains.kotlin.plugin.compose` — Kotlin 2.0 moved the Compose compiler
+out of the Kotlin plugin into its own, and AGP says so plainly if it is missing.
+That plugin does *not* collide with AGP's `kotlin` extension the way
+`kotlin.android` does.
+
+The assertion is not that the build succeeded. A compiler plugin that fails to
+load still produces a clean compile of untransformed code — the failure
+`tools/kotlinc/FINDINGS.md` was written about. The Compose plugin rewrites every
+`@Composable` to open a restart group on the composer it threads through, so the
+test looks for `startRestartGroup` in the dex string table: present if and only
+if the transformation actually happened.
+
 The launcher grew two things along the way. It **runs JDK tools by name**,
 dispatching through `java.util.spi.ToolProvider` — the supported route, and the
 only one available, since `jdk.tools.jlink.internal.Main` is not exported to the
@@ -309,8 +322,9 @@ remaining work is Gradle on top of it.
 - **Whether Gradle can be made not to fork at all** is unresolved; matching the
   JVM settings did not do it. It no longer blocks anything, but a build that
   did not fork would be faster.
-- **Compose is untried.** Kotlin works; Compose adds a compiler plugin, which is
-  a different thing again.
+- **Nothing has been *run*.** Every APK here was built and inspected, never
+  installed and launched. `:engine:fast`'s own tests do that, and this spike
+  should before M9 claims the milestone.
 - **`-jar` is not supported** by the launcher, and something will eventually
   want it.
 - **Everything in §6 and §7 was measured on x86_64.** The launcher and
