@@ -322,9 +322,10 @@ remaining work is Gradle on top of it.
 - **Whether Gradle can be made not to fork at all** is unresolved; matching the
   JVM settings did not do it. It no longer blocks anything, but a build that
   did not fork would be faster.
-- **Nothing has been *run*.** Every APK here was built and inspected, never
-  installed and launched. `:engine:fast`'s own tests do that, and this spike
-  should before M9 claims the milestone.
+- **Nothing has been *launched*.** Every APK is handed to the platform's own
+  package parser -- the one `PackageInstaller` uses -- so it is a package
+  Android would accept, not merely a zip with the right entries. Installing and
+  running one is what `:engine:fast`'s tests do and this spike does not.
 - **`-jar` is not supported** by the launcher, and something will eventually
   want it.
 - **Everything in §6 and §7 was measured on x86_64.** The launcher and

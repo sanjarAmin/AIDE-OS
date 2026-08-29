@@ -1,10 +1,12 @@
 package com.osamu.aide.spike.rootfs
 
 import android.content.Context
+import android.content.pm.PackageManager
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -297,6 +299,28 @@ class AgpBuildTest {
         )
     }
 
+    /**
+     * Hands the APK to the platform's own package parser.
+     *
+     * The same parser `PackageInstaller` uses, so this is the difference
+     * between "a zip with the right entries" and "a package Android would
+     * accept". Every assertion above inspects what the build produced; this one
+     * asks the device whether it is an APK at all.
+     */
+    private fun assertThePlatformAcceptsIt(apk: File, expectedPackage: String) {
+        val info = context.packageManager
+            .getPackageArchiveInfo(apk.absolutePath, PackageManager.GET_ACTIVITIES)
+        assertTrue(
+            "the platform's package parser rejected the APK",
+            info != null,
+        )
+        assertEquals(
+            "the APK declares the wrong package",
+            expectedPackage,
+            info!!.packageName,
+        )
+    }
+
     private data class Run(val exit: Int, val output: String, val millis: Long)
 
     private fun gradle(vararg arguments: String, timeoutSeconds: Long = 1800): Run {
@@ -385,6 +409,7 @@ class AgpBuildTest {
             "no dex, so D8 did not run: ${entries.take(20)}",
             entries.any { it.startsWith("classes") && it.endsWith(".dex") },
         )
+        assertThePlatformAcceptsIt(apk, "demo.app")
         Log.i(TAG, "APK is ${apk.length()} bytes, ${entries.size} entries")
     }
 
@@ -437,6 +462,7 @@ class AgpBuildTest {
                 "linked: ${entries.filter { it.startsWith("res/") }.take(10)}",
             entries.any { it.startsWith("res/") },
         )
+        assertThePlatformAcceptsIt(apk, "demo.app")
         Log.i(TAG, "APK is ${apk.length()} bytes, ${entries.size} entries")
     }
 
@@ -523,6 +549,7 @@ class AgpBuildTest {
                 "compiled without the Compose plugin transforming it",
             String(dex, Charsets.ISO_8859_1).contains("startRestartGroup"),
         )
+        assertThePlatformAcceptsIt(apk, "demo.app")
         Log.i(TAG, "compose APK is ${apk.length()} bytes, ${entries.size} entries")
     }
 
