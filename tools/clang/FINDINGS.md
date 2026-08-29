@@ -311,6 +311,26 @@ That the diagnostic exists at all is the proof: answering `initialize` needs no
 headers, so a server that got that far and no further would look healthy and be
 useless. 18.6 MB, already inside the toolchain, so it costs no extra download.
 
+### Two ways clangd answers wrongly rather than not at all
+
+Both were found by building the client, and neither reports an error.
+
+**An empty `capabilities` object is not a neutral default.** A server tailors
+its replies to what the client says it understands, so announcing nothing gets
+clangd's most conservative output: completion labels with no signature, **no
+`kind` on any item** — so every proposal draws the same icon — and hover as
+legacy `MarkedString` instead of `MarkupContent`, which a client expecting the
+latter reads as empty. It all looks like the server working badly rather than
+the client having asked for less.
+
+**A question asked before the parse finishes gets a confident wrong answer.**
+With no AST yet, clangd answers completion from an identifier index: every item
+comes back as `kind: 1` (Text) with a leading space in the label, so a method is
+offered as a word that happens to appear in the file — listed beside `return`,
+which is not a member of anything. The fix is to treat the first
+`publishDiagnostics` after a change as the signal that an AST exists and wait
+for it; an unchanged buffer needs neither the notification nor the wait.
+
 **One convention to inherit.** clangd reports a missing semicolon at the token
 that *revealed* it, not at the line missing it — the fault on line 2 is reported
 at line 3. Whatever draws squiggles has to follow clangd's ranges rather than

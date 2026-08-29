@@ -71,6 +71,10 @@ include(":lsp:api")
 
 include(":lsp:java")
 
+// C and C++ intelligence, which is clangd over stdio rather than a compiler in
+// this process. It arrives with M7, which is the milestone that needs it.
+include(":lsp:native")
+
 // Spike R3 -- a Java language-intelligence core on ART. Not part of the app.
 include(":spike:javals")
 

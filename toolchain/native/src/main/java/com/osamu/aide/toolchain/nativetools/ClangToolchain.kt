@@ -126,6 +126,18 @@ class ClangToolchain(
     fun cxxRuntime(): File? = File(libraries, "libc++_shared.so").takeIf { it.isFile }
 
     /**
+     * The language server, if this toolchain carries one.
+     *
+     * Exposed as a file rather than as [root] plus a convention, so that the
+     * layout stays knowledge of this class. `:lsp:native` starts it and speaks
+     * LSP to it; where it lives is not its business.
+     */
+    fun languageServer(): File? = File(binaries, "clangd").takeIf { it.canRead() }
+
+    /** What `LD_LIBRARY_PATH` must contain to start anything from this tree. */
+    fun libraryPath(): List<File> = listOf(libraries)
+
+    /**
      * Compiles one source to one object. **One job, deliberately.**
      *
      * Producing anything but an object here would give the driver a second job
