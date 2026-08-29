@@ -78,7 +78,7 @@ class JvmLauncherTest {
      * libraries and `libz.so.1` from the Termux packages beside them, and
      * `dlopen` searches it just as `execve` would have.
      */
-    private fun launch(vararg arguments: String, options: String? = null, timeoutSeconds: Long = 300): Run {
+    private fun launch(vararg arguments: String, timeoutSeconds: Long = 300): Run {
         val started = System.currentTimeMillis()
         val builder = ProcessBuilder(listOf(launcher.absolutePath) + arguments)
             .redirectErrorStream(true)
@@ -92,9 +92,11 @@ class JvmLauncherTest {
                     File(context.filesDir, "jvm/lib"),
                 ).joinToString(":") { it.absolutePath },
             )
+            // The launcher takes java's own arguments now, so java.home comes
+            // from here rather than from a positional argument.
+            put("JAVA_HOME", javaHome.absolutePath)
             put("HOME", work.absolutePath)
             put("TMPDIR", context.cacheDir.absolutePath)
-            options?.let { put("JVM_OPTIONS", it) }
         }
         val process = builder.start()
         val text = process.inputStream.bufferedReader().readText().trim()
@@ -115,11 +117,20 @@ class JvmLauncherTest {
      * anything on the classpath.
      */
     private fun compile(source: File): Run = launch(
-        javaHome.absolutePath,
         "com.sun.tools.javac.Main",
         source.absolutePath,
         "-d", work.absolutePath,
     )
+
+    /** `java -version`, answered by the launcher rather than by `bin/java`. */
+    @Test
+    fun it_answers_dash_version_like_java_does() {
+        val run = launch("-version")
+
+        Log.i(TAG, "-version: ${run.output.take(200)}")
+        assertTrue("-version failed: ${run.output}", run.exit == 0)
+        assertTrue("no version banner: ${run.output}", "openjdk version" in run.output.lowercase())
+    }
 
     @Test
     fun the_launcher_ships_where_it_can_be_executed() {
@@ -159,11 +170,7 @@ class JvmLauncherTest {
         assertTrue("javac failed: ${compiled.output}", compiled.exit == 0)
         assertTrue("no class file was produced", File(work, "Hello.class").isFile)
 
-        val ran = launch(
-            javaHome.absolutePath,
-            "Hello",
-            options = "-Djava.class.path=${work.absolutePath}",
-        )
+        val ran = launch("-cp", work.absolutePath, "Hello")
         Log.i(TAG, "Hello in ${ran.millis} ms: exit=${ran.exit} ${ran.output.take(200)}")
         assertTrue("running the class failed: ${ran.output}", ran.exit == 0)
         assertTrue("unexpected output: ${ran.output}", ran.output.startsWith(MARKER))
@@ -216,9 +223,8 @@ class JvmLauncherTest {
             )
         }
         assertTrue("javac failed", compile(source).exit == 0)
-        val classpath = "-Djava.class.path=${work.absolutePath}"
 
-        val byDefault = launch(javaHome.absolutePath, "Fork", options = classpath)
+        val byDefault = launch("-cp", work.absolutePath, "Fork")
         Log.i(TAG, "default mechanism: ${byDefault.output.take(200)}")
         assertTrue(
             "the default mechanism worked, so jspawnhelper is now executable " +
@@ -231,9 +237,9 @@ class JvmLauncherTest {
         )
 
         val withVfork = launch(
-            javaHome.absolutePath,
+            "-Djdk.lang.Process.launchMechanism=vfork",
+            "-cp", work.absolutePath,
             "Fork",
-            options = "$classpath -Djdk.lang.Process.launchMechanism=vfork",
         )
         Log.i(TAG, "vfork: ${withVfork.output.take(200)}")
         assertTrue("vfork could not spawn either: ${withVfork.output}", "FORK-OK" in withVfork.output)

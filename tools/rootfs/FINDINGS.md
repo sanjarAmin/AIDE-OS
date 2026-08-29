@@ -1,9 +1,9 @@
 # Spike R11: the Gradle path's foundation — result
 
 **Outcome: the planned route is closed, and a better one works.** A real JVM
-runs on the device with no Linux userland at all — it compiles a class with
-`javac` and runs it — reached by replacing OpenJDK's launcher rather than
-arguing with it. M9 assumed a Linux rootfs entered with PRoot, because Gradle needs a
+runs on the device with no Linux userland at all, and **Gradle builds a project
+with it** — reached by replacing OpenJDK's launcher rather than arguing with
+it. M9 assumed a Linux rootfs entered with PRoot, because Gradle needs a
 JVM and ART is not one. That does not work — but the premise was wrong anyway,
 and the thing the rootfs existed to provide can be had directly.
 
@@ -155,21 +155,17 @@ daemon, being another `java`, still cannot be spawned the way Gradle spawns it.
 It would have to be started through this launcher, or Gradle run with
 `--no-daemon`.
 
-## 6. Gradle runs; a build still needs a daemon it cannot fork
+## 6. Gradle builds, once the launcher can stand in for `java`
 
 Gradle 9.7.1 starts on the launcher and reports itself:
 
 ```
 Gradle 9.7.1
 Launcher JVM:  21.0.12 (Termux 21.0.12)
-OS:            Linux ... amd64
 ```
 
-**Under `run-as` it builds.** A `java-library` project compiles and
-`demo.jar` appears with `demo/Greeter.class` in it, in about ten seconds.
-
-**In the app's own process it does not**, and the reason is the one this whole
-spike keeps meeting:
+**A build needed one more thing.** Gradle starts its daemon by exec'ing
+`$java.home/bin/java`, which is in app-private storage and may not be executed:
 
 ```
 To honour the JVM settings for this build a single-use Daemon process
@@ -177,19 +173,33 @@ will be forked.
 A problem occurred starting process 'Gradle build daemon'
 ```
 
-The daemon is another `java`, in app-private storage, which may not be
-executed. `run-as` may — the third time in this spike that domain has answered
-a question more favourably than the app can, and the reason the `run-as` result
-above is reported but not relied on.
+`--no-daemon` does not prevent it — Gradle forks a *single-use* daemon whenever
+it decides the client JVM does not match what the build wants, and passing the
+matching `-Xmx` and `-XX:MaxMetaspaceSize` did not change that. (Gradle also
+reports `There is no native integration with this operating environment`; the
+two are plausibly connected and that is **not established**.)
 
-`--no-daemon` does not prevent it. Gradle still forks a *single-use* daemon
-whenever it decides the client JVM does not match what the build wants, and
-passing matching `-Xmx` and `-XX:MaxMetaspaceSize` did not change that. Gradle
-also reports `There is no native integration with this operating environment` —
-its native-platform library has no Android support. The two are plausibly
-connected and that is **not established**.
+**The fix is a symlink, and it needs no new permission.** `<jdk>/bin/java`
+becomes a link to the launcher in `nativeLibraryDir`. The kernel checks the
+*resolved* file against the no-execute rule, and that directory is executable —
+so the exec Gradle always performs simply succeeds, and what runs is a launcher
+that does not re-exec.
 
-Two smaller things a build needs, both found the hard way:
+For that to work the launcher takes **`java`'s own arguments**: `-cp`, `-D…`,
+`-X…`, `@argfile`, a main class, program arguments, and `-version`. `java.home`
+comes from `JAVA_HOME` or, failing that, is derived from `argv[0]` exactly as
+the real launcher does — which is what makes the symlink self-configuring,
+since `argv[0]` is then the path inside the JDK rather than the launcher's own.
+`-jar` is refused rather than half-implemented: running a jar means reading
+`Main-Class` from its manifest, and silently running the wrong thing would be
+worse than saying no.
+
+**Measured in the app's own process**, API 34 x86_64: a `java-library` project
+compiles and `demo.jar` contains `demo/Greeter.class`, in about ten seconds.
+The test asserts the jar rather than the exit code, because a build that skipped
+every task also exits zero.
+
+Two smaller requirements, both found by hitting them:
 
 - **`android.permission.INTERNET`.** Gradle's `FileLockContentionHandler` binds
   a socket for inter-process lock coordination, and an Android app cannot make
@@ -200,17 +210,10 @@ Two smaller things a build needs, both found the hard way:
   *"java.io.tmpdir is set to a directory that doesn't exist:
   /data/data/com.termux/files/usr/tmp"*.
 
-### The route out, not yet tried
-
-Gradle spawns the daemon by exec'ing `$java.home/bin/java`. **A symlink at that
-path pointing into `nativeLibraryDir` would be exec'd legally** — the kernel
-checks the resolved file, and that directory is executable. What it would reach
-is our launcher, which does not take `java`'s arguments.
-
-So the step after this is to make the launcher argument-compatible with `java`:
-parse `-cp`, `-D`, `-X`, then a main class. That is worth doing beyond Gradle —
-anything that shells out to `java` starts working — and it is a contained piece
-of C.
+**A test that redirects `bin/java` has to put it back.** The first version left
+the symlink in place, and a sibling test asserting that the *stock* launcher
+re-execs then failed — it was looking at ours. Shared device state edited by one
+test surfaces as a failure in another that never mentions it.
 
 ## What this means for M9
 
@@ -222,15 +225,18 @@ remaining work is Gradle on top of it.
 |---|---|
 | `:toolchain:manager` | Install the JDK — the gzipped-tar path already exists |
 | `:toolchain:native` | Ship the launcher in `jniLibs`, beside aapt2 |
-| A Gradle bridge | Drive Gradle through the launcher. The daemon is the open problem: see §6 |
+| A Gradle bridge | Drive Gradle through the launcher, with `<jdk>/bin/java` symlinked to it so the daemon fork works |
 
 ## Open
 
-- **Gradle builds under `run-as` and not in the app.** §6. The next step is a
-  `java`-compatible launcher plus a symlink, which would let Gradle fork its
-  daemon through a path it is allowed to execute.
 - **Whether Gradle can be made not to fork at all** is unresolved; matching the
-  JVM settings did not do it.
+  JVM settings did not do it. It no longer blocks anything, but a build that
+  did not fork would be faster.
+- **Only a `java-library` project has been built.** An Android project means
+  AGP, which means resolving dependencies over the network and running aapt2 and
+  D8 — none of it exercised. That is M9 proper, not its foundation.
+- **`-jar` is not supported** by the launcher, and something will eventually
+  want it.
 - **Why the stock launcher decides differently under `run-as`** is still not
   established. It no longer blocks anything, but it is unexplained.
 - **The launcher was measured on x86_64.** It builds for both ABIs and the

@@ -4,12 +4,14 @@ import android.content.Context
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import org.junit.After
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.nio.file.Files
 import java.util.concurrent.TimeUnit
 
 /**
@@ -72,6 +74,25 @@ class GradleOnDeviceTest {
         )
     }
 
+    /**
+     * Puts `bin/java` back.
+     *
+     * [redirectJavaToLauncher] edits the staged JDK, which every test in this
+     * module shares. Leaving the symlink behind made `JvmOnDeviceTest`'s
+     * assertion that the *stock* launcher re-execs fail -- it was looking at
+     * ours. A test that changes shared device state has to undo it, or the
+     * failure surfaces somewhere that never mentions this file.
+     */
+    @After
+    fun restoreJava() {
+        val real = File(javaHome, "bin/java")
+        val kept = File(javaHome, "bin/java.real")
+        if (kept.exists()) {
+            real.delete()
+            kept.renameTo(real)
+        }
+    }
+
     private data class Run(val exit: Int, val output: String, val millis: Long)
 
     private fun gradle(vararg arguments: String, timeoutSeconds: Long = 900): Run {
@@ -80,21 +101,19 @@ class GradleOnDeviceTest {
             ?.firstOrNull { it.name.startsWith("gradle-launcher-") }
             ?: error("no gradle-launcher jar in ${File(gradleHome, "lib")}")
 
-        val options = listOf(
-            "-Djava.class.path=${launcherJar.absolutePath}",
-            // Without this the VM cannot spawn at all: the default mechanism
-            // runs jspawnhelper out of app storage. See JvmLauncherTest.
-            "-Djdk.lang.Process.launchMechanism=vfork",
-            "-Duser.home=${work.absolutePath}",
-            // The Termux JDK bakes in Termux's own prefix as java.io.tmpdir,
-            // and that directory does not exist here. Gradle fails deep inside
-            // service construction if it is left alone.
-            "-Djava.io.tmpdir=${File(work, "tmp").absolutePath}",
-        ).joinToString(" ")
-
         val builder = ProcessBuilder(
-            listOf(launcher.absolutePath, javaHome.absolutePath, "org.gradle.launcher.GradleMain") +
-                arguments + listOf("--no-daemon", "-g", File(work, "guh").absolutePath, "--offline"),
+            listOf(
+                launcher.absolutePath,
+                "-cp", launcherJar.absolutePath,
+                // Without this the VM cannot spawn at all: the default
+                // mechanism runs jspawnhelper out of app storage.
+                "-Djdk.lang.Process.launchMechanism=vfork",
+                "-Duser.home=${work.absolutePath}",
+                // The Termux JDK bakes in Termux's own prefix as
+                // java.io.tmpdir, and that directory does not exist here.
+                "-Djava.io.tmpdir=${File(work, "tmp").absolutePath}",
+                "org.gradle.launcher.GradleMain",
+            ) + arguments + listOf("--no-daemon", "-g", File(work, "guh").absolutePath, "--offline"),
         ).redirectErrorStream(true)
         builder.directory(File(work, "proj"))
         builder.environment().apply {
@@ -106,7 +125,7 @@ class GradleOnDeviceTest {
                     File(context.filesDir, "jvm/lib"),
                 ).joinToString(":") { it.absolutePath },
             )
-            put("JVM_OPTIONS", options)
+            put("JAVA_HOME", javaHome.absolutePath)
             put("HOME", work.absolutePath)
             put("TMPDIR", File(work, "tmp").absolutePath)
         }
@@ -120,6 +139,29 @@ class GradleOnDeviceTest {
         return Run(process.exitValue(), text, System.currentTimeMillis() - started)
     }
 
+    /**
+     * Puts the launcher where Gradle will look for `java`.
+     *
+     * Gradle starts its daemon by exec'ing `$java.home/bin/java`, which is in
+     * app-private storage and cannot be executed. Replacing it with a symlink
+     * to the launcher makes that exec legal, because **the kernel checks the
+     * resolved file** and the launcher is in `nativeLibraryDir`. The launcher
+     * takes `java`'s arguments, and derives `java.home` from `argv[0]` — which
+     * under this symlink is the JDK path Gradle passed, not the launcher's own.
+     *
+     * The real launcher is kept beside it as `java.real`, so the substitution
+     * is visible to anyone looking and reversible.
+     */
+    private fun redirectJavaToLauncher() {
+        val real = File(javaHome, "bin/java")
+        val kept = File(javaHome, "bin/java.real")
+        if (!kept.exists() && real.exists() && !Files.isSymbolicLink(real.toPath())) {
+            real.renameTo(kept)
+        }
+        real.delete()
+        Files.createSymbolicLink(real.toPath(), launcher.toPath())
+    }
+
     @Test
     fun gradle_reports_its_version() {
         val run = gradle("--version")
@@ -131,55 +173,35 @@ class GradleOnDeviceTest {
     }
 
     /**
-     * **Gradle runs, and cannot yet build, in the app's own process.**
+     * **The acceptance question for M9's foundation: Gradle builds.**
      *
-     * Under `adb shell run-as` this same command succeeds: 9.7.1 compiles the
-     * `java-library` project and writes `demo.jar` in about ten seconds. Here
-     * it fails:
+     * Gradle starts its daemon by exec'ing `$java.home/bin/java`, which is in
+     * app-private storage and may not be executed — so a build failed here
+     * while succeeding under `run-as`, which is allowed to do exactly that.
      *
-     * ```
-     * To honour the JVM settings for this build a single-use Daemon process
-     * will be forked.
-     * A problem occurred starting process 'Gradle build daemon'
-     * ```
+     * [redirectJavaToLauncher] closes the gap without asking for any new
+     * permission: the kernel checks the *resolved* file of a symlink, and the
+     * launcher lives in `nativeLibraryDir`, which is executable. Gradle execs
+     * the path it always would; what runs is a launcher that does not re-exec.
      *
-     * The daemon is another `java`, in app-private storage, and that is what
-     * may not be executed — `run-as` may, which is the whole difference and the
-     * third time in this spike that domain has flattered the result.
-     *
-     * `--no-daemon` does not prevent it: Gradle still forks a *single-use*
-     * daemon whenever it decides the client JVM does not match the settings the
-     * build wants. Passing matching `-Xmx`/`-XX:MaxMetaspaceSize` does not stop
-     * it either, and Gradle reports `There is no native integration with this
-     * operating environment` — its native-platform library has no Android
-     * support, so it cannot inspect the client to conclude a fork is
-     * unnecessary. That the two are connected is plausible and **not
-     * established here**.
-     *
-     * Asserted as a failure so that it is noticed the day it stops being one.
+     * The jar is asserted rather than the exit code, because a build that
+     * skipped every task also exits zero.
      */
     @Test
-    fun a_build_still_needs_a_daemon_it_cannot_fork() {
+    fun it_builds_a_java_project_into_a_jar() {
+        redirectJavaToLauncher()
+
         val run = gradle("build")
 
         Log.i(TAG, "gradle build in ${run.millis} ms: exit=${run.exit}")
-        Log.i(TAG, run.output.takeLast(500))
-        assertTrue(
-            "Gradle built without forking a daemon. The route below is no " +
-                "longer needed and this test should become the positive one: " +
-                run.output.takeLast(400),
-            run.exit != 0,
-        )
-        assertTrue(
-            "it failed for some reason other than the daemon: ${run.output.takeLast(500)}",
-            "daemon" in run.output.lowercase(),
-        )
-        // The jar is the thing M9 actually wants, and it is not there.
-        assertTrue(
-            "a jar appeared despite the failure, so the daemon is not the " +
-                "blocker after all",
-            !File(work, "proj/build/libs/demo.jar").isFile,
-        )
+        Log.i(TAG, run.output.takeLast(600))
+        assertTrue("the build failed: ${run.output.takeLast(900)}", run.exit == 0)
+
+        val jar = File(work, "proj/build/libs/demo.jar")
+        assertTrue("no jar was produced: ${run.output.takeLast(400)}", jar.isFile)
+
+        val entries = java.util.zip.ZipFile(jar).use { zip -> zip.entries().toList().map { it.name } }
+        assertTrue("the jar has no compiled class: $entries", "demo/Greeter.class" in entries)
     }
 
     private companion object {
