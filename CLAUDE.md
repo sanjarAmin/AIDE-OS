@@ -51,7 +51,7 @@ emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu host
 tools/               Scripts that produce the toolchains, and their FINDINGS.
 ```
 
-`docs/PLAN.md` lists 22 modules. Seventeen exist, plus six spikes. Do not
+`docs/PLAN.md` lists 22 modules. Seventeen exist, plus seven spikes. Do not
 create the rest speculatively — each arrives with the milestone that needs it.
 
 ## Conventions
