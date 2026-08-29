@@ -40,6 +40,10 @@ include(":editor")
 include(":engine:api")
 include(":engine:fast")
 
+// The other engine: Gradle, driven on the device's own JVM. Spike R11 removed
+// the rootfs this was planned to bridge into -- there is no guest, only a JDK.
+include(":engine:gradle")
+
 // Maven resolution and AAR extraction. Spike R4 (tools/deps/FINDINGS.md) is
 // the design input; the resolver needs four workarounds to run on ART.
 include(":engine:deps")

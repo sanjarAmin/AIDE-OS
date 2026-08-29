@@ -38,6 +38,7 @@ emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu host
 :engine:deps         Maven resolution and AAR extraction, on ART. FINDINGS.
 :engine:fast         The bundled pipeline: aapt2 -> ECJ -> D8 -> apksig, plus
                      clang for src/main/cpp. FINDINGS.
+:engine:gradle       The other engine: the project's own Gradle, on a real JVM
 :lsp:api             The LanguageService contract; both services implement it
 :lsp:java            nb-javac kept warm: completion, diagnostics, definitions
 :lsp:native          clangd over stdio, for C and C++
@@ -51,7 +52,7 @@ emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu host
 tools/               Scripts that produce the toolchains, and their FINDINGS.
 ```
 
-`docs/PLAN.md` lists 22 modules. Seventeen exist, plus seven spikes. Do not
+`docs/PLAN.md` lists 22 modules. Eighteen exist, plus seven spikes. Do not
 create the rest speculatively — each arrives with the milestone that needs it.
 
 ## Conventions

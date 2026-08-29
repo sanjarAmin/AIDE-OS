@@ -1,0 +1,228 @@
+package com.osamu.aide.engine.gradle
+
+import android.content.Context
+import android.content.pm.PackageManager
+import android.util.Log
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import com.osamu.aide.core.common.AppResult
+import com.osamu.aide.core.common.DefaultDispatcherProvider
+import com.osamu.aide.core.fs.BuildEngine
+import com.osamu.aide.core.fs.Project
+import com.osamu.aide.core.fs.SourceLanguage
+import com.osamu.aide.engine.api.BuildEvent
+import com.osamu.aide.engine.api.BuildRequest
+import com.osamu.aide.engine.api.BuildResult
+import com.osamu.aide.engine.api.BuildStage
+import com.osamu.aide.engine.api.awaitResult
+import com.osamu.aide.toolchain.nativetools.JvmToolchain
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import java.io.File
+import java.util.concurrent.TimeUnit
+
+/**
+ * `:engine:gradle` building a real Android project, on the device.
+ *
+ * The acceptance test for M9's engine half. Spike R11 proved the mechanism by
+ * driving Gradle directly; this drives it through [com.osamu.aide.engine.api.BuildSystem],
+ * which is what the app holds — so a break in the engine's own plumbing shows
+ * up here rather than in a spike that bypasses it.
+ *
+ * The JDK, Gradle and an Android SDK are staged out of band; every one is a
+ * large download and none of them belongs in git. See `tools/rootfs/`.
+ */
+@RunWith(AndroidJUnit4::class)
+class GradleBuildSystemTest {
+
+    private lateinit var context: Context
+    private lateinit var engine: GradleBuildSystem
+    private lateinit var project: Project
+    private lateinit var support: File
+
+    @Before
+    fun setUp() {
+        context = InstrumentationRegistry.getInstrumentation().targetContext
+        val dispatchers = DefaultDispatcherProvider()
+
+        unpack("jvm.tar", File(context.filesDir, "jvm"), "lib/jvm/java-21-openjdk/lib/server/libjvm.so")
+        unpack("gradle.tar", File(context.filesDir, "gradle"), null)
+        unpack("sdk36.tar", File(context.filesDir, "sdk"), null)
+        // build-tools and an accepted licence, which AGP refuses to build
+        // without. Unpacked into the SDK rather than beside it.
+        unpack("sdk-extra.tar", File(context.filesDir, "sdk/sdk36"), "licenses")
+
+        val javaHome = File(context.filesDir, "jvm/lib/jvm/java-21-openjdk")
+        val gradleHome = File(context.filesDir, "gradle").listFiles()
+            ?.firstOrNull { it.isDirectory && it.name.startsWith("gradle-") }
+        val sdk = File(context.filesDir, "sdk/sdk36")
+
+        assumeTrue("no JDK staged", File(javaHome, "lib/server/libjvm.so").isFile)
+        assumeTrue("no Gradle staged", gradleHome != null)
+        assumeTrue("no Android SDK staged", File(sdk, "platforms/android-36/android.jar").isFile)
+
+        val jvm = JvmToolchain.from(context, javaHome, dispatchers)
+        assertTrue("preparing the JDK failed", jvm.prepare() is AppResult.Success)
+
+        support = File(context.filesDir, "gradle-home").apply { mkdirs() }
+        engine = GradleBuildSystem(jvm, gradleHome!!, dispatchers, support)
+        assertTrue("the engine reports itself uninstalled", engine.isInstalled)
+
+        project = writeProject(sdk)
+    }
+
+    /** Unpacked by this process; see `tools/clang/FINDINGS.md` §4. */
+    private fun unpack(name: String, into: File, marker: String?) {
+        if (marker != null && File(into, marker).exists()) return
+        if (marker == null && into.isDirectory && into.list()?.isNotEmpty() == true) return
+        val archive = File(context.getExternalFilesDir(null), name)
+        if (!archive.isFile) return
+        into.mkdirs()
+        ProcessBuilder("/system/bin/tar", "-xf", archive.absolutePath, "-C", into.absolutePath)
+            .redirectErrorStream(true)
+            .start()
+            .apply { inputStream.readBytes(); waitFor(10, TimeUnit.MINUTES) }
+    }
+
+    private fun writeProject(sdk: File): Project {
+        val root = File(context.filesDir, "gradle-project").apply { deleteRecursively(); mkdirs() }
+        File(root, "src/main/java/demo/app").mkdirs()
+        File(root, "settings.gradle.kts").writeText(
+            """
+            pluginManagement { repositories { google(); mavenCentral() } }
+            dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+            rootProject.name = "gradledemo"
+            """.trimIndent(),
+        )
+        File(root, "build.gradle.kts").writeText(
+            """
+            plugins { id("com.android.application") version "9.3.2" }
+            android {
+                namespace = "demo.app"
+                compileSdk { version = release(36) }
+                defaultConfig { applicationId = "demo.app"; minSdk = 26; versionCode = 1 }
+            }
+            """.trimIndent(),
+        )
+        File(root, "src/main/AndroidManifest.xml").writeText(
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+                <application android:label="gradledemo" />
+            </manifest>
+            """.trimIndent(),
+        )
+        File(root, "src/main/java/demo/app/Hello.java").writeText(
+            "package demo.app;\npublic class Hello { public static String greet() { return \"gradle\"; } }\n",
+        )
+        File(root, "local.properties").writeText("sdk.dir=${sdk.absolutePath}\n")
+        // aapt2 from this APK: AGP's own is a Linux x86_64 binary. The name
+        // must be `aapt2`, hence the link rather than the .so directly.
+        val bin = File(support, "bin").apply { mkdirs() }
+        val aapt2 = File(bin, "aapt2")
+        aapt2.delete()
+        java.nio.file.Files.createSymbolicLink(
+            aapt2.toPath(),
+            File(context.applicationInfo.nativeLibraryDir, "libaapt2.so").toPath(),
+        )
+        File(root, "gradle.properties").writeText(
+            "android.aapt2FromMavenOverride=${aapt2.absolutePath}\norg.gradle.jvmargs=-Xmx1g\n",
+        )
+
+        return Project(
+            name = "gradledemo",
+            rootDir = root,
+            applicationId = "demo.app",
+            language = SourceLanguage.JAVA,
+            engine = BuildEngine.GRADLE,
+            lastOpenedAt = 0L,
+        )
+    }
+
+    /**
+     * **The acceptance question.** An Android project, built by the project's
+     * own Gradle, through the interface the app holds.
+     *
+     * The APK is handed to the platform's package parser rather than merely
+     * checked for entries: that is the difference between a zip and something
+     * Android would install.
+     */
+    @Test
+    fun it_builds_an_android_project() {
+        val events = runBlocking {
+            engine.build(BuildRequest(project = project, outputDir = File(support, "out"))).toList()
+        }
+
+        val result = events.filterIsInstance<BuildEvent.Finished>().single().result
+        Log.i(TAG, "result=$result")
+        assertTrue("the build failed: $result", result is BuildResult.Success)
+
+        val apk = (result as BuildResult.Success).apk
+        assertTrue("the APK does not exist", apk.isFile)
+        val info = context.packageManager
+            .getPackageArchiveInfo(apk.absolutePath, PackageManager.GET_ACTIVITIES)
+        assertTrue("the platform's package parser rejected it", info != null)
+        assertEquals("demo.app", info!!.packageName)
+        Log.i(TAG, "APK is ${apk.length()} bytes in ${result.durationMillis} ms")
+    }
+
+    /**
+     * Progress reaches the caller as it happens.
+     *
+     * A build that reported nothing until it finished would read as a hang, and
+     * on a phone this takes a minute. The stages come from Gradle's task lines;
+     * the mapping is [GradleOutput]'s.
+     */
+    @Test
+    fun it_reports_stages_while_it_runs() {
+        val events = runBlocking {
+            engine.build(BuildRequest(project = project, outputDir = File(support, "out"))).toList()
+        }
+
+        val started = events.filterIsInstance<BuildEvent.StageStarted>().map { it.stage }
+        Log.i(TAG, "stages: $started")
+        assertTrue("no stages were reported at all", started.isNotEmpty())
+        // A stage reported twice is a progress bar going backwards. Several
+        // Gradle tasks map onto each kind of work, so this is the assertion
+        // that keeps the mapping honest.
+        assertEquals("a stage was reported more than once: $started", started.distinct(), started)
+        assertTrue("resources were never linked: $started", BuildStage.LINK_RESOURCES in started)
+        assertTrue("nothing was dexed: $started", BuildStage.DEX in started)
+        // Every stage that opened has to close, or a progress bar never empties.
+        assertEquals(
+            "a stage started and never completed",
+            started,
+            events.filterIsInstance<BuildEvent.StageCompleted>().map { it.stage },
+        )
+        assertTrue("Finished was not last", events.last() is BuildEvent.Finished)
+    }
+
+    /**
+     * A project Gradle cannot build is refused before anything starts, with a
+     * sentence rather than an exit code.
+     */
+    @Test
+    fun a_project_without_settings_is_refused_by_name() {
+        File(project.rootDir, "settings.gradle.kts").delete()
+
+        val result = runBlocking {
+            engine.build(BuildRequest(project = project, outputDir = File(support, "out"))).awaitResult()
+        }
+
+        assertTrue(result is BuildResult.Failure)
+        assertTrue(
+            "the message does not say what is missing: $result",
+            (result as BuildResult.Failure).message.contains("settings.gradle"),
+        )
+    }
+
+    private companion object {
+        const val TAG = "GradleEngine"
+    }
+}
