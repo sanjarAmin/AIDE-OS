@@ -222,7 +222,8 @@ test surfaces as a failure in another that never mentions it.
 The whole pipeline, not just Gradle. AGP 9.3.2 resolves from Google's Maven,
 applies, and runs 33 tasks — `processDebugResources` through aapt2,
 `dexBuilderDebug` through D8, `packageDebug` — producing an **871 KB APK with a
-binary `AndroidManifest.xml` and dex inside, in 13 seconds**.
+binary `AndroidManifest.xml` and dex inside, in 13 seconds** — and, with an
+AndroidX dependency and resources, a 3.2 MB one in 55.
 
 Four substitutions, three of them the same idea: **a symlink from where a tool
 is expected to a copy the app may execute**, because the kernel checks the
@@ -250,6 +251,23 @@ symlinking the JDK's copy at it fixes every JVM at once, including ones nobody
 here launches** — a smaller change than the workaround it replaces, and one that
 cannot drift. `spike/rootfs/src/main/prebuilt/README.md` records where the
 binary came from.
+
+### A realistic project, not just a toolchain check
+
+The project above has no dependencies, no resources and no library manifests —
+enough to prove the toolchain runs, not enough to prove AGP works. A second
+project adds `androidx.appcompat`, an activity extending `AppCompatActivity`,
+and a string resource, so the build must resolve a transitive graph from
+Google's Maven, unpack the AARs, merge their manifests, link their resources
+together with the project's, and compile against classes that exist only in
+those AARs.
+
+**It builds: a 3.2 MB APK, 423 entries, 55 seconds.** `resources.arsc` is the
+assertion that matters — it is aapt2's output and cannot appear unless linking
+really happened; `R.string.app_name` resolving at compile time is the other
+half, since the generated `R` had to reach the compile classpath.
+
+`android.useAndroidX=true` is required, and AGP refuses the build without it.
 
 The launcher grew two things along the way. It **runs JDK tools by name**,
 dispatching through `java.util.spi.ToolProvider` — the supported route, and the
@@ -279,9 +297,9 @@ remaining work is Gradle on top of it.
 - **Whether Gradle can be made not to fork at all** is unresolved; matching the
   JVM settings did not do it. It no longer blocks anything, but a build that
   did not fork would be faster.
-- **The project built is a trivial one.** No dependencies beyond AGP itself, no
-  resources, no Kotlin. A real app resolves AndroidX, runs the Compose compiler
-  and merges manifests, none of it exercised here.
+- **Kotlin and Compose are untried.** The AndroidX project is Java. Kotlin means
+  the Kotlin Gradle plugin and its own daemon, which forks another JVM — likely
+  fine now that `jspawnhelper` is fixed, and unverified.
 - **`-jar` is not supported** by the launcher, and something will eventually
   want it.
 - **Everything in §6 and §7 was measured on x86_64.** The launcher and

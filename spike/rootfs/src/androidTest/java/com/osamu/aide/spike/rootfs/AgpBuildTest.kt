@@ -67,7 +67,6 @@ class AgpBuildTest {
         support = File(context.filesDir, "agp-support").apply { mkdirs() }
         File(support, "tmp").mkdirs()
         project = File(context.filesDir, "agp-project").apply { deleteRecursively(); mkdirs() }
-        writeProject()
         redirectJavaToLauncher()
         redirectSpawnHelper()
     }
@@ -150,7 +149,7 @@ class AgpBuildTest {
         return link
     }
 
-    private fun writeProject() {
+    private fun writeProject(withAndroidX: Boolean = false) {
         File(project, "src/main/java/demo/app").mkdirs()
         File(project, "settings.gradle.kts").writeText(
             """
@@ -160,43 +159,82 @@ class AgpBuildTest {
             """.trimIndent(),
         )
         File(project, "build.gradle.kts").writeText(
-            """
-            plugins { id("com.android.application") version "9.3.2" }
-            android {
-                namespace = "demo.app"
-                compileSdk { version = release(36) }
-                defaultConfig {
-                    applicationId = "demo.app"
-                    minSdk = 26
-                    versionCode = 1
+            buildString {
+                appendLine("""plugins { id("com.android.application") version "9.3.2" }""")
+                appendLine("android {")
+                appendLine("""    namespace = "demo.app"""")
+                appendLine("    compileSdk { version = release(36) }")
+                appendLine("    defaultConfig {")
+                appendLine("""        applicationId = "demo.app"""")
+                appendLine("        minSdk = 26")
+                appendLine("        versionCode = 1")
+                appendLine("    }")
+                appendLine("}")
+                if (withAndroidX) {
+                    // A real dependency, resolved from Google's Maven: an AAR
+                    // with its own resources and manifest, which is what makes
+                    // resource merging and manifest merging actually happen.
+                    appendLine("""dependencies { implementation("androidx.appcompat:appcompat:1.7.0") }""")
                 }
-            }
-            """.trimIndent(),
+            },
         )
         File(project, "src/main/AndroidManifest.xml").writeText(
-            """
-            <?xml version="1.0" encoding="utf-8"?>
-            <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-                <application android:label="agpdemo" />
-            </manifest>
-            """.trimIndent(),
+            if (withAndroidX) {
+                """
+                <?xml version="1.0" encoding="utf-8"?>
+                <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+                    <application android:label="@string/app_name"
+                                 android:theme="@style/Theme.AppCompat.Light">
+                        <activity android:name=".MainActivity" android:exported="true" />
+                    </application>
+                </manifest>
+                """.trimIndent()
+            } else {
+                """
+                <?xml version="1.0" encoding="utf-8"?>
+                <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+                    <application android:label="agpdemo" />
+                </manifest>
+                """.trimIndent()
+            },
         )
         File(project, "src/main/java/demo/app/Hello.java").writeText(
             "package demo.app;\npublic class Hello { public static String greet() { return \"$MARKER\"; } }\n",
         )
+        if (withAndroidX) {
+            File(project, "src/main/res/values").mkdirs()
+            File(project, "src/main/res/values/strings.xml").writeText(
+                """
+                <?xml version="1.0" encoding="utf-8"?>
+                <resources>
+                    <string name="app_name">AGP on device</string>
+                </resources>
+                """.trimIndent(),
+            )
+            // Extends a class from the AAR, so the compile classpath has to
+            // include what was resolved -- not just the platform.
+            File(project, "src/main/java/demo/app/MainActivity.java").writeText(
+                """
+                package demo.app;
+
+                import android.os.Bundle;
+                import androidx.appcompat.app.AppCompatActivity;
+
+                public class MainActivity extends AppCompatActivity {
+                    @Override protected void onCreate(Bundle state) {
+                        super.onCreate(state);
+                        setTitle(getString(R.string.app_name) + " " + Hello.greet());
+                    }
+                }
+                """.trimIndent(),
+            )
+        }
         File(project, "local.properties").writeText("sdk.dir=${sdk.absolutePath}\n")
         File(project, "gradle.properties").writeText(
-            // **The daemon needs the vfork mechanism too**, not only the
-            // client. AGP execs jlink from inside the daemon, and the
-            // default POSIX_SPAWN runs jspawnhelper out of app storage,
-            // which cannot be executed. org.gradle.jvmargs is what reaches
-            // the daemon; -D on the client does not.
             "android.aapt2FromMavenOverride=${aapt2().absolutePath}\n" +
-                "org.gradle.jvmargs=-Xmx1g -Djdk.lang.Process.launchMechanism=vfork\n" +
-                // Gradle drops a bare -D from org.gradle.jvmargs when it builds
-                // the daemon's command line; `systemProp.` is the channel that
-                // reaches it.
-                "systemProp.jdk.lang.Process.launchMechanism=vfork\n",
+                "org.gradle.jvmargs=-Xmx1g\n" +
+                // AndroidX requires this, and AGP refuses the build without it.
+                "android.useAndroidX=true\n",
         )
     }
 
@@ -269,6 +307,7 @@ class AgpBuildTest {
      */
     @Test
     fun agp_builds_an_android_apk() {
+        writeProject()
         val run = gradle("assembleDebug")
 
         Log.i(TAG, "assembleDebug in ${run.millis} ms: exit=${run.exit}")
@@ -286,6 +325,58 @@ class AgpBuildTest {
         assertTrue(
             "no dex, so D8 did not run: ${entries.take(20)}",
             entries.any { it.startsWith("classes") && it.endsWith(".dex") },
+        )
+        Log.i(TAG, "APK is ${apk.length()} bytes, ${entries.size} entries")
+    }
+
+    /**
+     * **A project that looks like a real one.**
+     *
+     * The test above builds something with no dependencies, no resources and
+     * no library manifests — which exercises the toolchain but not the parts of
+     * AGP that most builds spend their time in. This one adds an AndroidX
+     * dependency, so the build has to:
+     *
+     *  - resolve `androidx.appcompat` and its transitive graph from Google's
+     *    Maven and unpack the AARs,
+     *  - merge those libraries' manifests into the application's,
+     *  - link their resources together with the project's own, which is aapt2
+     *    doing the work it exists for rather than compiling one file,
+     *  - and compile against the AAR classes, since `MainActivity` extends a
+     *    class that only exists there.
+     *
+     * `resources.arsc` is the assertion that matters: it is aapt2's output and
+     * cannot appear unless linking really happened. `R.string.app_name`
+     * resolving at compile time is the other half — the generated `R` class had
+     * to be produced and put on the compile classpath.
+     */
+    @Test
+    fun agp_builds_a_project_with_androidx_and_resources() {
+        writeProject(withAndroidX = true)
+
+        val run = gradle("assembleDebug")
+
+        Log.i(TAG, "androidx build in ${run.millis} ms: exit=${run.exit}")
+        run.output.takeLast(1800).chunked(900).forEach { Log.i(TAG, it) }
+        assertTrue("the build failed:\n${run.output.takeLast(1500)}", run.exit == 0)
+
+        val apk = File(project, "build/outputs/apk/debug/agpdemo-debug.apk")
+        assertTrue("no APK was produced", apk.isFile)
+
+        val entries = ZipFile(apk).use { zip -> zip.entries().toList().map { it.name } }
+        assertTrue(
+            "no resources.arsc, so aapt2 linked nothing: ${entries.take(20)}",
+            "resources.arsc" in entries,
+        )
+        assertTrue(
+            "no dex: ${entries.take(20)}",
+            entries.any { it.startsWith("classes") && it.endsWith(".dex") },
+        )
+        // AppCompat ships its own resources; if merging worked they are here.
+        assertTrue(
+            "no library resources were merged, so only the project's own were " +
+                "linked: ${entries.filter { it.startsWith("res/") }.take(10)}",
+            entries.any { it.startsWith("res/") },
         )
         Log.i(TAG, "APK is ${apk.length()} bytes, ${entries.size} entries")
     }
