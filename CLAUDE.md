@@ -41,8 +41,9 @@ emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu host
 :lsp:api             The LanguageService contract; both services implement it
 :lsp:java            nb-javac kept warm: completion, diagnostics, definitions
 :lsp:native          clangd over stdio, for C and C++
-:toolchain:native    aapt2 in jniLibs, and the harness that execs it -- plus the
-                     linker64 route for toolchains it did not bundle
+:toolchain:native    aapt2, a JVM launcher and jspawnhelper in jniLibs, and the
+                     harnesses that drive them -- plus the linker64 route for
+                     toolchains it did not bundle
 :toolchain:manager   Downloads android.jar, kotlinc, clang: pin, verify, install.
                      FINDINGS.
 :terminal            forkpty, plus Termux's emulator vendored verbatim. FINDINGS.
