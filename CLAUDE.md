@@ -111,10 +111,12 @@ failed to load still produces a clean compile.
   storage. One job per invocation, and links are planned with `-###` and
   executed by us. `tools/clang/FINDINGS.md`.
 
-- **The kotlinc dex archive's inputs are not in git.** ~100 MB of third-party
-  jars, consumed by `tools/kotlinc/build-shim.sh` and `build-kotlinc-dex.py`.
-  Nothing in the repo assembles that jar set; the gap is real and known, and
-  M4 (kotlinc in the engine) inherits it.
+- **The kotlinc dex archive's inputs are not in git, but they are pinned.**
+  ~100 MB of third-party jars, consumed by `tools/kotlinc/build-shim.sh` and
+  `build-kotlinc-dex.py`. `tools/kotlinc/fetch-jars.sh` rebuilds all nine from
+  `jars.lock` and verifies each against a recorded sha256, so the set is
+  reproducible from a clean machine — it was not, for a long time, and the
+  warning that it isn't outlived the fix.
 - **`grep` here is a shell function that skips binary files.** Use
   `/usr/bin/grep -a` when searching class files, jars, or dex.
 

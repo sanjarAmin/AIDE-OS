@@ -13,7 +13,13 @@ set -euo pipefail
 
 LOCK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/jars.lock"
 TARGET="${1:-$HOME/aide-os-spikes/kotlinc/jars}"
-CENTRAL="https://repo1.maven.org/maven2"
+
+# Two repositories, tried in order. androidx artifacts are published only by
+# Google, and the Compose runtime is one of them.
+REPOS=(
+  "https://repo1.maven.org/maven2"
+  "https://dl.google.com/dl/android/maven2"
+)
 
 mkdir -p "$TARGET"
 fetched=0 verified=0 unpinned=()
@@ -32,12 +38,35 @@ while read -r sha size name coord; do
     continue
   fi
 
-  group="${coord%%:*}"; rest="${coord#*:}"
+  # `@aar` means the artifact is an Android library and the jar this row names
+  # is the classes.jar inside it. Nothing else about the row changes: the
+  # checksum is still of the file that ends up on disk.
+  packaging="jar"
+  bare="$coord"
+  case "$coord" in *@aar) packaging="aar"; bare="${coord%@aar}" ;; esac
+
+  group="${bare%%:*}"; rest="${bare#*:}"
   artifact="${rest%%:*}"; version="${rest##*:}"
-  url="$CENTRAL/${group//.//}/$artifact/$version/$artifact-$version.jar"
+  path="${group//.//}/$artifact/$version/$artifact-$version.$packaging"
 
   echo "fetching $name  <-  $coord"
-  curl -fL --retry 3 --progress-bar -o "$dest.part" "$url"
+  ok=0
+  for repo in "${REPOS[@]}"; do
+    if curl -fL --retry 3 --progress-bar -o "$dest.download" "$repo/$path"; then ok=1; break; fi
+  done
+  if [ "$ok" != "1" ]; then
+    echo "could not fetch $name from any repository ($path)" >&2
+    exit 1
+  fi
+
+  if [ "$packaging" = "aar" ]; then
+    # Extracted rather than repackaged: rebuilding the zip would change the
+    # bytes and the checksum with them.
+    unzip -p "$dest.download" classes.jar > "$dest.part"
+    rm -f "$dest.download"
+  else
+    mv "$dest.download" "$dest.part"
+  fi
 
   got="$(sha256sum "$dest.part" | cut -d' ' -f1)"
   if [ "$got" != "$sha" ]; then
@@ -60,10 +89,8 @@ if [ ${#unpinned[@]} -gt 0 ]; then
 Still not reproducible (${#unpinned[@]}):
 $(printf '  %s\n' "${unpinned[@]}")
 
-These are repackaged rather than published as-is -- compose-runtime.jar is an
-AAR's classes.jar, and the coroutines jar matches no released artifact byte for
-byte. jars.lock carries their checksums, so a copy can be *verified*; it cannot
-yet be rebuilt. Copy them from a machine that has them, then re-run to confirm.
+jars.lock carries their checksums, so a copy can be *verified*; it cannot yet
+be rebuilt. Copy them from a machine that has them, then re-run to confirm.
 EOF
   exit 2
 fi
