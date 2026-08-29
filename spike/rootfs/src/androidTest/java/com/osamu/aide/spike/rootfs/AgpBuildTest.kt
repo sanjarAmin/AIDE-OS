@@ -69,6 +69,7 @@ class AgpBuildTest {
         project = File(context.filesDir, "agp-project").apply { deleteRecursively(); mkdirs() }
         writeProject()
         redirectJavaToLauncher()
+        redirectSpawnHelper()
     }
 
     /** Leaves the JDK as it was found; see [GradleOnDeviceTest.restoreJava]. */
@@ -82,6 +83,38 @@ class AgpBuildTest {
                 kept.renameTo(real)
             }
         }
+        val helper = File(javaHome, "lib/jspawnhelper")
+        val keptHelper = File(javaHome, "lib/jspawnhelper.real")
+        if (keptHelper.exists()) {
+            helper.delete()
+            keptHelper.renameTo(helper)
+        }
+    }
+
+    /**
+     * Points the JDK's `jspawnhelper` at the copy this APK ships.
+     *
+     * The JVM's default `POSIX_SPAWN` runs this helper and has *it* exec the
+     * target, and the JDK's own copy is in app-private storage — so every
+     * `ProcessBuilder` inside a build fails with `Failed to exec spawn helper`.
+     * Ours is in `nativeLibraryDir`, which is executable, and the kernel checks
+     * the resolved file.
+     *
+     * This is better than passing `-Djdk.lang.Process.launchMechanism=vfork`:
+     * that option has to reach every JVM a build starts, and Gradle gives no
+     * reliable way to put it on the daemon's command line. Fixing the helper
+     * fixes them all at once, including JVMs nobody here launches.
+     */
+    private fun redirectSpawnHelper() {
+        val shipped = File(context.applicationInfo.nativeLibraryDir, "libjspawnhelper.so")
+        if (!shipped.canExecute()) return
+        val real = File(javaHome, "lib/jspawnhelper")
+        val kept = File(javaHome, "lib/jspawnhelper.real")
+        if (!kept.exists() && real.exists() && !Files.isSymbolicLink(real.toPath())) {
+            real.renameTo(kept)
+        }
+        real.delete()
+        Files.createSymbolicLink(real.toPath(), shipped.toPath())
     }
 
     private fun redirectJavaToLauncher() {
@@ -211,63 +244,50 @@ class AgpBuildTest {
     }
 
     /**
-     * **AGP runs, and stops in one place.**
+     * **M9's acceptance question: an Android project builds, on the device.**
      *
-     * Under `adb shell run-as` this build succeeds: 33 tasks, aapt2 through
-     * `processDebugResources`, D8 through `dexBuilderDebug`, and an 871 KB APK
-     * with a binary manifest and dex in it.
+     * AGP 9.3.2 resolves from Google's Maven, applies, and runs the whole
+     * pipeline — aapt2 through `processDebugResources`, D8 through
+     * `dexBuilderDebug`, `packageDebug` — in this app's own process.
      *
-     * In the app's own process it gets thirteen tasks in and fails at AGP's
-     * `JdkImageTransform`, which execs `jlink` to build a system-modules image
-     * from `core-for-system-modules.jar`:
+     * Four substitutions make it possible, and three are the same idea: a
+     * symlink from where a tool is expected to a copy somewhere the app may
+     * execute, since the kernel checks the *resolved* file.
      *
-     * ```
-     * Cannot run program ".../bin/jlink": Failed to exec spawn helper
-     * ```
+     *  - `bin/java` and the other JDK tools point at our launcher, so Gradle's
+     *    daemon fork and AGP's `jlink` call start something legal.
+     *  - `lib/jspawnhelper` points at the copy this APK ships. The JVM's
+     *    default `POSIX_SPAWN` runs that helper and has *it* exec the target;
+     *    the JDK's own copy is in app storage, so every `ProcessBuilder` in a
+     *    build failed with `Failed to exec spawn helper`.
+     *  - `aapt2` points at our `libaapt2.so`, because the aapt2 AGP fetches
+     *    from Maven is a Linux x86_64 binary that cannot run here at all.
+     *  - The SDK is staged in app storage and named in `local.properties`.
      *
-     * **The symlink is not the problem** — `bin/jlink` is a link to the
-     * launcher here, and running it by hand works. The problem is `jspawnhelper`
-     * again: the exec happens *inside the Gradle daemon*, whose JVM does not
-     * have `-Djdk.lang.Process.launchMechanism=vfork`. Passing it through
-     * `org.gradle.jvmargs` does not reach the daemon's command line, and
-     * `systemProp.` arrives too late to matter — `java.lang.ProcessImpl` reads
-     * that property when it initialises.
-     *
-     * So the remaining work is to get the daemon started with that option, or
-     * to make `jspawnhelper` executable by shipping it in `jniLibs` and
-     * symlinking the JDK's copy at it — the same trick as `java` and `aapt2`,
-     * applied once more.
-     *
-     * Asserted as a failure, and asserted *specifically*, so that a different
-     * failure is not mistaken for this one.
+     * The APK's contents are asserted rather than the exit code: a build that
+     * skipped every task also exits zero.
      */
     @Test
-    fun agp_runs_and_stops_at_the_jdk_image_transform() {
-        val run = gradle("assembleDebug", "--stacktrace")
+    fun agp_builds_an_android_apk() {
+        val run = gradle("assembleDebug")
 
         Log.i(TAG, "assembleDebug in ${run.millis} ms: exit=${run.exit}")
-        run.output.takeLast(2600).chunked(900).forEach { Log.i(TAG, it) }
+        run.output.takeLast(1800).chunked(900).forEach { Log.i(TAG, it) }
+        assertTrue("the build failed:\n${run.output.takeLast(1500)}", run.exit == 0)
+
+        val apk = File(project, "build/outputs/apk/debug/agpdemo-debug.apk")
+        assertTrue("no APK was produced", apk.isFile)
+
+        val entries = ZipFile(apk).use { zip -> zip.entries().toList().map { it.name } }
         assertTrue(
-            "AGP built an APK in this process. The daemon can now exec what it " +
-                "needs and this test should become the positive one.",
-            run.exit != 0,
+            "no binary manifest, so aapt2 did not run: ${entries.take(20)}",
+            "AndroidManifest.xml" in entries,
         )
         assertTrue(
-            "AGP failed somewhere other than the JDK image transform, which is " +
-                "worth reading rather than assuming: ${run.output.takeLast(900)}",
-            "JdkImageTransform" in run.output,
+            "no dex, so D8 did not run: ${entries.take(20)}",
+            entries.any { it.startsWith("classes") && it.endsWith(".dex") },
         )
-        assertTrue(
-            "the transform failed for a reason other than the spawn helper: " +
-                run.output.takeLast(900),
-            "spawn helper" in run.output,
-        )
-        // How far it does get: AGP resolved from Google's Maven, applied, and
-        // ran a dozen tasks. That is the part worth not losing.
-        assertTrue(
-            "AGP did not even configure: ${run.output.takeLast(600)}",
-            "actionable tasks" in run.output,
-        )
+        Log.i(TAG, "APK is ${apk.length()} bytes, ${entries.size} entries")
     }
 
     private companion object {

@@ -72,9 +72,23 @@ val buildLauncher by tasks.registering {
     )
 
     inputs.file(source)
+    inputs.dir(file("src/main/prebuilt"))
     outputs.dir(outputDir)
 
+    val prebuilt = file("src/main/prebuilt")
+
     doLast {
+        // The JDK's own jspawnhelper, copied in beside the launcher. See
+        // src/main/prebuilt/README.md for what it is and why it cannot stay
+        // where the JDK puts it.
+        targets.keys.forEach { abi ->
+            val source = File(prebuilt, "$abi/libjspawnhelper.so")
+            if (source.isFile) {
+                val out = File(outputDir, abi).apply { mkdirs() }
+                source.copyTo(File(out, "libjspawnhelper.so"), overwrite = true)
+            }
+        }
+
         targets.forEach { (abi, triple) ->
             val out = File(outputDir, abi).apply { mkdirs() }
             val command = listOf(

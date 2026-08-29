@@ -17,7 +17,7 @@
 | ✅ | Spike R6 — JGit on ART | Resolved, and **unmodified** — the first "pure JVM" claim here that held. `tools/git/FINDINGS.md` |
 | ✅ | Spike R7 — PTY + shell on a device | Resolved, and retired into `:terminal`. `forkpty` works from an untrusted app, **job control included**. `tools/pty/FINDINGS.md` |
 | ✅ | Spike R9 — executing a downloaded binary | Resolved. Via `/system/bin/linker64`, from **internal** storage only. `tools/nativeexec/FINDINGS.md` |
-| ✅ | Spike R11 — the Gradle path's foundation | The rootfs route is **closed** and **unnecessary**. Termux's OpenJDK 21 is a Bionic binary; a launcher of ours calling `JNI_CreateJavaVM` runs it **in the app's own process**, and with `<jdk>/bin/java` symlinked to that launcher **Gradle 9.7.1 builds a project into a jar**. `tools/rootfs/FINDINGS.md` |
+| ✅ | Spike R11 — the Gradle path | The rootfs route is **closed** and **unnecessary**. Termux's OpenJDK 21 is a Bionic binary; a launcher of ours calling `JNI_CreateJavaVM` runs it in the app's own process, and with the few binaries a build execs symlinked to copies in `nativeLibraryDir`, **AGP 9.3.2 builds an Android APK on the device** — aapt2 and D8 included, 13 s. `tools/rootfs/FINDINGS.md` |
 | ✅ | Spike R10 — clang on the device | Resolved, on **API 34 x86_64 and Android 16 arm64**. Termux clang 21.1.8 builds C and C++ into a `.so` that loads and runs. **One job per invocation, and the driver can never run the linker** — plan with `-###`, execute it ourselves. `tools/clang/FINDINGS.md` |
 | ✅ | License | GPLv3 |
 | 🟢 | **M0** Skeleton | `:app`, `:core:{common,fs,ui}`, `:editor`, `:engine:{api,fast,deps}`, `:toolchain:{native,manager}`, `:lsp:java`, `:ai:{core,ui}`, `:terminal`, `:vcs:git` — 15 of 22 planned modules, plus six spikes. The remaining seven arrive with the milestones that need them. |
@@ -270,7 +270,7 @@ Bring-your-own-key, no backend infrastructure, no per-user liability for you.
 | ✅ **M6** Compose | Compose compiler plugin hosted in on-device kotlinc | A Compose hello-world builds and runs |
 | **M7** C/C++ | Termux clang/lld toolchain download, NDK sysroot, clangd | JNI project with a native `.so` builds — **met**, clangd included |
 | **M8** Git + Terminal | JGit, PTY terminal | Clone from GitHub, edit, commit, push |
-| **M9** Gradle path | ~~Rootfs bootstrap~~ → Termux's **Bionic-built OpenJDK 21** plus a launcher of our own, then the Tooling API bridge | An unmodified Android Studio project builds |
+| **M9** Gradle path | ~~Rootfs bootstrap~~ → Termux's **Bionic-built OpenJDK 21**, a launcher of our own, and symlinks for the binaries a build execs | An unmodified Android Studio project builds — **the mechanism is proven** (spike R11); what remains is installing the pieces and a real project |
 | **M10** JS / C# | QuickJS + Node; .NET SDK (experimental) | Node project runs; C# console app compiles |
 
 M0–M5 is the real v1.0. Everything from M6 on is expansion.
