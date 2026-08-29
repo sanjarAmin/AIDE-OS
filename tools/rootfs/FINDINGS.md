@@ -155,6 +155,63 @@ daemon, being another `java`, still cannot be spawned the way Gradle spawns it.
 It would have to be started through this launcher, or Gradle run with
 `--no-daemon`.
 
+## 6. Gradle runs; a build still needs a daemon it cannot fork
+
+Gradle 9.7.1 starts on the launcher and reports itself:
+
+```
+Gradle 9.7.1
+Launcher JVM:  21.0.12 (Termux 21.0.12)
+OS:            Linux ... amd64
+```
+
+**Under `run-as` it builds.** A `java-library` project compiles and
+`demo.jar` appears with `demo/Greeter.class` in it, in about ten seconds.
+
+**In the app's own process it does not**, and the reason is the one this whole
+spike keeps meeting:
+
+```
+To honour the JVM settings for this build a single-use Daemon process
+will be forked.
+A problem occurred starting process 'Gradle build daemon'
+```
+
+The daemon is another `java`, in app-private storage, which may not be
+executed. `run-as` may — the third time in this spike that domain has answered
+a question more favourably than the app can, and the reason the `run-as` result
+above is reported but not relied on.
+
+`--no-daemon` does not prevent it. Gradle still forks a *single-use* daemon
+whenever it decides the client JVM does not match what the build wants, and
+passing matching `-Xmx` and `-XX:MaxMetaspaceSize` did not change that. Gradle
+also reports `There is no native integration with this operating environment` —
+its native-platform library has no Android support. The two are plausibly
+connected and that is **not established**.
+
+Two smaller things a build needs, both found the hard way:
+
+- **`android.permission.INTERNET`.** Gradle's `FileLockContentionHandler` binds
+  a socket for inter-process lock coordination, and an Android app cannot make
+  a socket without that permission. The failure names neither: *"Could not
+  determine a usable wildcard IP for this machine."*
+- **`-Djava.io.tmpdir`.** The Termux JDK bakes in Termux's own prefix, which
+  does not exist here, and Gradle dies deep inside service construction:
+  *"java.io.tmpdir is set to a directory that doesn't exist:
+  /data/data/com.termux/files/usr/tmp"*.
+
+### The route out, not yet tried
+
+Gradle spawns the daemon by exec'ing `$java.home/bin/java`. **A symlink at that
+path pointing into `nativeLibraryDir` would be exec'd legally** — the kernel
+checks the resolved file, and that directory is executable. What it would reach
+is our launcher, which does not take `java`'s arguments.
+
+So the step after this is to make the launcher argument-compatible with `java`:
+parse `-cp`, `-D`, `-X`, then a main class. That is worth doing beyond Gradle —
+anything that shells out to `java` starts working — and it is a contained piece
+of C.
+
 ## What this means for M9
 
 No rootfs, no PRoot, no second libc. A JDK installed the way the C/C++
@@ -165,13 +222,15 @@ remaining work is Gradle on top of it.
 |---|---|
 | `:toolchain:manager` | Install the JDK — the gzipped-tar path already exists |
 | `:toolchain:native` | Ship the launcher in `jniLibs`, beside aapt2 |
-| A Gradle bridge | Drive Gradle through the launcher, `--no-daemon` or a daemon started the same way |
+| A Gradle bridge | Drive Gradle through the launcher. The daemon is the open problem: see §6 |
 
 ## Open
 
-- **Gradle itself is entirely unexercised.** 164 MB installed, and it is the
-  whole point. Whether it runs, and how it behaves without a daemon, is the
-  next question.
+- **Gradle builds under `run-as` and not in the app.** §6. The next step is a
+  `java`-compatible launcher plus a symlink, which would let Gradle fork its
+  daemon through a path it is allowed to execute.
+- **Whether Gradle can be made not to fork at all** is unresolved; matching the
+  JVM settings did not do it.
 - **Why the stock launcher decides differently under `run-as`** is still not
   established. It no longer blocks anything, but it is unexplained.
 - **The launcher was measured on x86_64.** It builds for both ABIs and the
