@@ -36,7 +36,7 @@ dependencies {
     // severity, a message, and a project-relative place to jump to. A second
     // near-identical type would buy nothing and would have to be converted at
     // every boundary.
-    api(project(":engine:api"))
+    api(project(":lsp:api"))
 
     // NetBeans' error-tolerant javac. Spike R3 measured it on ART; see
     // tools/javals/FINDINGS.md, including the note that this artifact is the

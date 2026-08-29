@@ -2,6 +2,9 @@ package com.osamu.aide.lsp.java
 
 import com.osamu.aide.core.common.DispatcherProvider
 import com.osamu.aide.engine.api.Diagnostic
+import com.osamu.aide.lsp.api.CompletionItem
+import com.osamu.aide.lsp.api.LanguageService
+import com.osamu.aide.lsp.api.SourceLocation
 import com.sun.source.util.TreePath
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -31,12 +34,28 @@ class JavaLanguageService(
      */
     val classpath: List<File> = emptyList(),
     sourcePath: List<File> = listOf(File(projectRoot, "src/main/java")),
-) {
+) : LanguageService {
 
     private val compiler = ResidentCompiler(platform, classpath, sourcePath)
 
+    /**
+     * Java and nothing else. The editor asks whichever service claims a file,
+     * so a service that answered for `.cpp` would silently give it javac's
+     * opinion -- which is not an error, just wrong.
+     */
+    override fun handles(file: File): Boolean = file.extension == "java"
+
+    /**
+     * Drops the warm compiler.
+     *
+     * It holds a symbol table for the whole classpath, which is the point of it
+     * and also hundreds of megabytes; the service is expected to live as long
+     * as the project is open and to be closed when it is not.
+     */
+    override fun close() = compiler.close()
+
     /** What javac says about [text], as the gutter renders it. */
-    suspend fun diagnostics(file: File, text: String): List<Diagnostic> =
+    override suspend fun diagnostics(file: File, text: String): List<Diagnostic> =
         withContext(dispatchers.compiler) {
             compiler.withCompilation(file, text) { compilation ->
                 JavacDiagnostics.of(compilation.diagnostics.diagnostics, projectRoot)
@@ -52,7 +71,7 @@ class JavaLanguageService(
      * does not compile -- so "no answer" is an ordinary outcome and not a
      * failure worth surfacing.
      */
-    suspend fun complete(file: File, text: String, offset: Int): List<CompletionItem> =
+    override suspend fun complete(file: File, text: String, offset: Int): List<CompletionItem> =
         withContext(dispatchers.compiler) {
             val prefix = prefixAt(text, offset)
             val source = withCursorAnchored(text, offset, prefix)
@@ -75,7 +94,7 @@ class JavaLanguageService(
      * nothing in particular, or it is on something declared in `android.jar`,
      * which has symbols but no source to open.
      */
-    suspend fun definition(file: File, text: String, offset: Int): SourceLocation? =
+    override suspend fun definition(file: File, text: String, offset: Int): SourceLocation? =
         withContext(dispatchers.compiler) {
             compiler.withCompilation(file, text) { compilation ->
                 val path = FindCursor(compilation.task).scan(compilation.unit, offset.toLong())
@@ -92,7 +111,7 @@ class JavaLanguageService(
      * it is the same parse and attribute, so callers should debounce it exactly
      * as they debounce diagnostics.
      */
-    suspend fun signatureAt(file: File, text: String, offset: Int): String? =
+    override suspend fun signatureAt(file: File, text: String, offset: Int): String? =
         withContext(dispatchers.compiler) {
             compiler.withCompilation(file, text) { compilation ->
                 runCatching { JavaSignatures.at(compilation, offset) }.getOrNull()

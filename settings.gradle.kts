@@ -63,6 +63,12 @@ include(":ai:ui")
 // Kotlin servers will need. Spike R3 in tools/javals/FINDINGS.md is the design
 // input; the short version is that a compiler has to stay warm between
 // keystrokes or nothing here meets its latency budget.
+// The contract the editor talks to, and the models both language services
+// return. Separate from either implementation for the reason :engine:api is
+// separate from :engine:fast: the editor must not know whether an answer came
+// from a compiler in this process or a clangd subprocess.
+include(":lsp:api")
+
 include(":lsp:java")
 
 // Spike R3 -- a Java language-intelligence core on ART. Not part of the app.

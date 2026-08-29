@@ -1,5 +1,6 @@
 package com.osamu.aide.lsp.java
 
+import com.osamu.aide.lsp.api.CompletionKind
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry

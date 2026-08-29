@@ -1,4 +1,4 @@
-package com.osamu.aide.lsp.java
+package com.osamu.aide.lsp.api
 
 import java.io.File
 

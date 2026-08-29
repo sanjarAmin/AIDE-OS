@@ -1,4 +1,4 @@
-package com.osamu.aide.lsp.java
+package com.osamu.aide.lsp.api
 
 /** What kind of thing a proposal is, for the icon beside it. */
 enum class CompletionKind { METHOD, FIELD, VARIABLE, CLASS, PACKAGE, KEYWORD }

@@ -62,7 +62,27 @@ internal class ResidentCompiler(
     private val pool = JavacTaskPool(1)
     private val lock = Mutex()
 
-    private val fileManager: StandardJavaFileManager by lazy {
+    /**
+     * Closes the file manager, if one was ever built.
+     *
+     * Not bookkeeping: a `StandardJavaFileManager` holds open zip handles for
+     * `android.jar` and every AAR on the classpath, and until this existed
+     * nothing ever released them. A service is created per project and per
+     * classpath change, so opening a few projects in a session leaked a file
+     * manager each time -- invisible until a device runs out of descriptors,
+     * which it does long after the code that caused it.
+     *
+     * Guarded on the lazy having been initialised, so closing a service that
+     * was never asked anything does not build a file manager in order to shut
+     * it down.
+     */
+    fun close() {
+        if (lazyFileManager.isInitialized()) {
+            runCatching { lazyFileManager.value.close() }
+        }
+    }
+
+    private val lazyFileManager: Lazy<StandardJavaFileManager> = lazy {
         JavacTool.create().getStandardFileManager(null, null, StandardCharsets.UTF_8).apply {
             // android.jar is the platform, not a library on the classpath. Put
             // it anywhere else and javac looks for a JDK that is not there.
@@ -82,6 +102,8 @@ internal class ResidentCompiler(
             setLocation(StandardLocation.SOURCE_PATH, sourcePath)
         }
     }
+
+    private val fileManager: StandardJavaFileManager get() = lazyFileManager.value
 
     /**
      * Compiles [text] as [file] and hands the result to [block].

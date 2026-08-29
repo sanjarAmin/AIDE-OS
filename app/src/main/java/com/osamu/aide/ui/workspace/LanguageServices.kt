@@ -4,7 +4,7 @@ import com.osamu.aide.core.common.DispatcherProvider
 import com.osamu.aide.editor.CompletionSource
 import com.osamu.aide.editor.EditorCompletion
 import com.osamu.aide.editor.EditorCompletionKind
-import com.osamu.aide.lsp.java.CompletionKind
+import com.osamu.aide.lsp.api.CompletionKind
 import com.osamu.aide.lsp.java.JavaLanguageService
 import kotlinx.coroutines.runBlocking
 import java.io.File
@@ -46,6 +46,11 @@ class LanguageServices(
     fun forProject(projectRoot: File, classpath: List<File> = emptyList()): JavaLanguageService? {
         current?.let { (root, service) ->
             if (root == projectRoot && service.classpath == classpath) return service
+            // Replaced, so the old one has to go. It holds a file manager with
+            // open handles on android.jar and every AAR; dropping the reference
+            // alone leaked them, and opening a few projects in a session is
+            // enough to notice on a device.
+            service.close()
         }
 
         val androidJar = toolchain.androidJar() ?: return null
@@ -81,6 +86,7 @@ class LanguageServices(
     /** Drops the warm compiler and everything it has entered. */
     @Synchronized
     fun release() {
+        current?.second?.close()
         current = null
     }
 }

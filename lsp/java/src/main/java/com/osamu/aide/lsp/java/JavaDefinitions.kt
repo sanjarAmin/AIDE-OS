@@ -1,5 +1,6 @@
 package com.osamu.aide.lsp.java
 
+import com.osamu.aide.lsp.api.SourceLocation
 import com.sun.source.tree.CompilationUnitTree
 import com.sun.source.util.TreePath
 import java.io.File

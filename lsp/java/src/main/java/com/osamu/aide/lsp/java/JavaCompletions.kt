@@ -1,5 +1,7 @@
 package com.osamu.aide.lsp.java
 
+import com.osamu.aide.lsp.api.CompletionItem
+import com.osamu.aide.lsp.api.CompletionKind
 import com.sun.source.tree.MemberSelectTree
 import com.sun.source.util.TreePath
 import javax.lang.model.element.Element
