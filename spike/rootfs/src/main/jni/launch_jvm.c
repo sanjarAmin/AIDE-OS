@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <sys/stat.h>
 
 /*
@@ -191,6 +192,101 @@ static void print_version(JNIEnv *env) {
     fprintf(stderr, "%s (build %s, mixed mode)\n", values[1], values[2]);
 }
 
+/*
+ * Runs a JDK tool -- `jlink`, `javac`, `jar` -- through
+ * java.util.spi.ToolProvider.
+ *
+ * AGP execs `jlink` directly (its JdkImageTransform builds a system-modules
+ * image), and every JDK tool is a copy of the same launcher stub that cannot
+ * run here. Symlinking each one to this file solves the exec problem; this
+ * solves what to do once we are running, and does it the supported way rather
+ * than by guessing at internal main classes -- `jdk.tools.jlink.internal.Main`
+ * is not exported to the unnamed module, so FindClass could not reach it
+ * anyway.
+ */
+static int run_tool(JNIEnv *env, const char *tool, char **args, int arg_count) {
+    jclass provider_class = (*env)->FindClass(env, "java/util/spi/ToolProvider");
+    jmethodID find = (*env)->GetStaticMethodID(
+        env, provider_class, "findFirst", "(Ljava/lang/String;)Ljava/util/Optional;");
+    jobject optional = (*env)->CallStaticObjectMethod(
+        env, provider_class, find, (*env)->NewStringUTF(env, tool));
+
+    jclass optional_class = (*env)->FindClass(env, "java/util/Optional");
+    jmethodID is_present = (*env)->GetMethodID(env, optional_class, "isPresent", "()Z");
+    if (!(*env)->CallBooleanMethod(env, optional, is_present)) {
+        fprintf(stderr, "no JDK tool named %s\n", tool);
+        return 3;
+    }
+    jmethodID get = (*env)->GetMethodID(env, optional_class, "get", "()Ljava/lang/Object;");
+    jobject instance = (*env)->CallObjectMethod(env, optional, get);
+
+    jclass string_class = (*env)->FindClass(env, "java/lang/String");
+    jobjectArray tool_args = (*env)->NewObjectArray(env, arg_count, string_class, NULL);
+    for (int i = 0; i < arg_count; i++) {
+        (*env)->SetObjectArrayElement(env, tool_args, i, (*env)->NewStringUTF(env, args[i]));
+    }
+
+    jclass system = (*env)->FindClass(env, "java/lang/System");
+    jfieldID out_field = (*env)->GetStaticFieldID(env, system, "out", "Ljava/io/PrintStream;");
+    jfieldID err_field = (*env)->GetStaticFieldID(env, system, "err", "Ljava/io/PrintStream;");
+    jobject out = (*env)->GetStaticObjectField(env, system, out_field);
+    jobject err = (*env)->GetStaticObjectField(env, system, err_field);
+
+    jmethodID run = (*env)->GetMethodID(
+        env, (*env)->GetObjectClass(env, instance), "run",
+        "(Ljava/io/PrintStream;Ljava/io/PrintStream;[Ljava/lang/String;)I");
+    jint result = (*env)->CallIntMethod(env, instance, run, out, err, tool_args);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionDescribe(env);
+        return 1;
+    }
+    return (int) result;
+}
+
+/* The name this was invoked under, which decides whether it is `java`. */
+static const char *invoked_as(const char *argv0) {
+    const char *slash = strrchr(argv0, '/');
+    return slash ? slash + 1 : argv0;
+}
+
+/*
+ * Sets LD_LIBRARY_PATH for the JDK and restarts this process once.
+ *
+ * libjvm.so is linked against Termux's own libraries -- libandroid-shmem.so
+ * above all, which supplies the System V shared memory Bionic lacks -- and the
+ * loader finds them only if LD_LIBRARY_PATH says so. **A launcher cannot rely
+ * on the environment it is handed**: AGP execs `jlink` with its own, and
+ * Gradle starts its daemon rather than us. Preloading each library by absolute
+ * path was tried first and does not work; the loader resolves a NEEDED entry
+ * against the search path, not against whatever happens to be open.
+ *
+ * So it does what OpenJDK's own launcher does -- and here that is *safe*.
+ * `/proc/self/exe` is the stock launcher's undoing because it is started
+ * through the dynamic linker, so its own exe is the linker; this file is
+ * exec'd directly from nativeLibraryDir, which is executable, so re-exec'ing
+ * it is an ordinary thing to do.
+ *
+ * AIDE_JVM_LAUNCHER_REEXEC stops it happening twice, so a genuinely missing
+ * library is reported rather than looping.
+ */
+static void set_library_path_and_restart(const char *java_home, char **argv) {
+    if (getenv("AIDE_JVM_LAUNCHER_REEXEC") != NULL) return;
+
+    char usr_lib[4096];
+    snprintf(usr_lib, sizeof(usr_lib), "%s/../..", java_home);
+
+    char value[1 << 14];
+    const char *existing = getenv("LD_LIBRARY_PATH");
+    snprintf(value, sizeof(value), "%s/lib/server:%s/lib:%s%s%s",
+             java_home, java_home, usr_lib,
+             existing && *existing ? ":" : "", existing ? existing : "");
+
+    setenv("LD_LIBRARY_PATH", value, 1);
+    setenv("AIDE_JVM_LAUNCHER_REEXEC", "1", 1);
+    execv("/proc/self/exe", argv);
+    /* Only reached if execv failed; the caller reports the original error. */
+}
+
 int main(int argc, char **argv) {
     struct parsed parsed;
     memset(&parsed, 0, sizeof(parsed));
@@ -203,10 +299,20 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    if (parse(argc, argv, &parsed) != 0) return 2;
-    if (parsed.main_class == NULL && !parsed.print_version) {
-        fprintf(stderr, "usage: java [options] <main-class> [args...]\n");
-        return 2;
+    /*
+     * Invoked as anything but `java` (or this file's own name), every argument
+     * belongs to the tool rather than to the VM. `jlink -h` is jlink's `-h`,
+     * not a VM option.
+     */
+    const char *name = invoked_as(argv[0]);
+    int as_tool = strcmp(name, "java") != 0 && strncmp(name, "libjvmlauncher", 14) != 0;
+
+    if (!as_tool) {
+        if (parse(argc, argv, &parsed) != 0) return 2;
+        if (parsed.main_class == NULL && !parsed.print_version) {
+            fprintf(stderr, "usage: java [options] <main-class> [args...]\n");
+            return 2;
+        }
     }
 
     char libjvm[4096];
@@ -218,6 +324,10 @@ int main(int argc, char **argv) {
      * measured and what makes this whole approach possible.
      */
     void *handle = dlopen(libjvm, RTLD_NOW);
+    if (handle == NULL) {
+        set_library_path_and_restart(java_home, argv);
+        handle = dlopen(libjvm, RTLD_NOW);
+    }
     if (handle == NULL) {
         fprintf(stderr, "cannot load %s: %s\n", libjvm, dlerror());
         return 3;
@@ -260,6 +370,12 @@ int main(int argc, char **argv) {
     if (create(&vm, (void **) &env, &args) != JNI_OK) {
         fprintf(stderr, "JNI_CreateJavaVM failed\n");
         return 5;
+    }
+
+    if (as_tool) {
+        int result = run_tool(env, name, argv + 1, argc - 1);
+        (*vm)->DestroyJavaVM(vm);
+        return result;
     }
 
     if (parsed.print_version && parsed.main_class == NULL) {

@@ -97,6 +97,11 @@ tasks.matching { it.name.startsWith("merge") && it.name.contains("JniLibFolders"
     .configureEach { dependsOn(buildLauncher) }
 
 dependencies {
+    // Brings libaapt2.so into this APK's jniLibs. AGP has to exec aapt2, and
+    // nativeLibraryDir is the only place an app may exec from -- the aapt2 AGP
+    // fetches from Maven is a Linux x86_64 binary and cannot run here at all.
+    implementation(project(":toolchain:native"))
+
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.test.runner)
 }

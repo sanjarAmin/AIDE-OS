@@ -1,9 +1,10 @@
 # Spike R11: the Gradle path's foundation — result
 
 **Outcome: the planned route is closed, and a better one works.** A real JVM
-runs on the device with no Linux userland at all, and **Gradle builds a project
-with it** — reached by replacing OpenJDK's launcher rather than arguing with
-it. M9 assumed a Linux rootfs entered with PRoot, because Gradle needs a
+runs on the device with no Linux userland at all; **Gradle builds a Java project
+with it**, and **AGP builds an Android APK** — the latter proven under `run-as`
+and stopped in the app by one identified thing (§7). All of it reached by
+replacing OpenJDK's launcher rather than arguing with it. M9 assumed a Linux rootfs entered with PRoot, because Gradle needs a
 JVM and ART is not one. That does not work — but the premise was wrong anyway,
 and the thing the rootfs existed to provide can be had directly.
 
@@ -215,6 +216,58 @@ the symlink in place, and a sibling test asserting that the *stock* launcher
 re-execs then failed — it was looking at ours. Shared device state edited by one
 test surfaces as a failure in another that never mentions it.
 
+## 7. AGP runs, and stops in one place
+
+The whole Android pipeline was tried, not just Gradle. **Under `run-as` it
+builds an APK**: AGP 9.3.2 resolves from Google's Maven, applies, and runs 33
+tasks — `processDebugResources` through aapt2, `dexBuilderDebug` through D8,
+`packageDebug` — producing 871 KB with a binary `AndroidManifest.xml` and dex
+inside.
+
+Three substitutions get it that far, and two are the same trick as §6:
+
+| | |
+|---|---|
+| `<jdk>/bin/java`, `jlink`, `javac`… | symlinked to the launcher, so every JDK tool a build execs resolves somewhere executable |
+| `aapt2` | symlinked to the `libaapt2.so` we ship — **the aapt2 AGP fetches from Maven is a Linux x86_64 binary** and cannot run on Android at all. `android.aapt2FromMavenOverride` takes the path, and insists it be named `aapt2` |
+| SDK | `platforms/android-36`, `build-tools/36.0.0` and an accepted licence, staged in app storage |
+
+The launcher grew two things for this. It **runs JDK tools by name**: invoked as
+anything but `java`, it dispatches through `java.util.spi.ToolProvider`, which
+is the supported route and avoids guessing at internal main classes —
+`jdk.tools.jlink.internal.Main` is not exported to the unnamed module, so
+`FindClass` could not reach it. And it **fixes its own `LD_LIBRARY_PATH` and
+restarts once**, because a launcher cannot rely on the environment it is handed:
+AGP execs `jlink` with its own, and Gradle starts the daemon rather than us.
+Re-exec is safe *here* for the reason it is fatal for the stock launcher —
+`/proc/self/exe` is this file, in `nativeLibraryDir`, not the dynamic linker.
+
+**In the app's own process it gets thirteen tasks in and stops at
+`JdkImageTransform`**, which execs `jlink` to build a system-modules image:
+
+```
+Cannot run program ".../bin/jlink": Failed to exec spawn helper
+```
+
+The symlink is not the problem — `bin/jlink` is a link to the launcher and
+running it by hand works. It is `jspawnhelper` again (§5), and this time inside
+the **Gradle daemon**, whose JVM does not carry
+`-Djdk.lang.Process.launchMechanism=vfork`. Two ways of passing it were tried
+and neither reaches the daemon: `org.gradle.jvmargs` does not put a bare `-D`
+on the daemon's command line, and `systemProp.` arrives too late, since
+`java.lang.ProcessImpl` reads that property when it initialises.
+
+### What is left
+
+One of two, both small:
+
+- **Get the daemon started with the option.** Gradle's daemon JVM arguments are
+  the lever; which knob actually reaches them is not yet established.
+- **Ship `jspawnhelper` in `jniLibs`** as `libjspawnhelper.so` and symlink the
+  JDK's copy at it. The same trick as `java` and `aapt2`, applied once more, and
+  it removes the launch-mechanism question entirely rather than working around
+  it.
+
 ## What this means for M9
 
 No rootfs, no PRoot, no second libc. A JDK installed the way the C/C++
@@ -226,6 +279,7 @@ remaining work is Gradle on top of it.
 | `:toolchain:manager` | Install the JDK — the gzipped-tar path already exists |
 | `:toolchain:native` | Ship the launcher in `jniLibs`, beside aapt2 |
 | A Gradle bridge | Drive Gradle through the launcher, with `<jdk>/bin/java` symlinked to it so the daemon fork works |
+| An SDK | `platforms/`, `build-tools/`, a licence, and `aapt2` overridden to ours — AGP's own is a Linux binary |
 
 ## Open
 
