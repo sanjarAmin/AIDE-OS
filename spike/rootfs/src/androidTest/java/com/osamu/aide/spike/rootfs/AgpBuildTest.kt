@@ -149,7 +149,7 @@ class AgpBuildTest {
         return link
     }
 
-    private fun writeProject(withAndroidX: Boolean = false) {
+    private fun writeProject(withAndroidX: Boolean = false, withKotlin: Boolean = false) {
         File(project, "src/main/java/demo/app").mkdirs()
         File(project, "settings.gradle.kts").writeText(
             """
@@ -160,7 +160,13 @@ class AgpBuildTest {
         )
         File(project, "build.gradle.kts").writeText(
             buildString {
-                appendLine("""plugins { id("com.android.application") version "9.3.2" }""")
+                appendLine("plugins {")
+                appendLine("""    id("com.android.application") version "9.3.2"""")
+                // No Kotlin plugin: AGP 9 registers a `kotlin` extension of
+                // its own, and applying org.jetbrains.kotlin.android on top
+                // fails with "Cannot add extension with name 'kotlin'".
+                // Kotlin support is built in, so a .kt source is enough.
+                appendLine("}")
                 appendLine("android {")
                 appendLine("""    namespace = "demo.app"""")
                 appendLine("    compileSdk { version = release(36) }")
@@ -201,6 +207,19 @@ class AgpBuildTest {
         File(project, "src/main/java/demo/app/Hello.java").writeText(
             "package demo.app;\npublic class Hello { public static String greet() { return \"$MARKER\"; } }\n",
         )
+        if (withKotlin) {
+            File(project, "src/main/java/demo/app/Greeting.kt").writeText(
+                """
+                package demo.app
+
+                object Greeting {
+                    // Calls into the Java half, so the two compilers have to see
+                    // each other's output rather than merely coexist.
+                    fun text(): String = "kotlin says " + Hello.greet()
+                }
+                """.trimIndent(),
+            )
+        }
         if (withAndroidX) {
             File(project, "src/main/res/values").mkdirs()
             File(project, "src/main/res/values/strings.xml").writeText(
@@ -377,6 +396,43 @@ class AgpBuildTest {
             "no library resources were merged, so only the project's own were " +
                 "linked: ${entries.filter { it.startsWith("res/") }.take(10)}",
             entries.any { it.startsWith("res/") },
+        )
+        Log.i(TAG, "APK is ${apk.length()} bytes, ${entries.size} entries")
+    }
+
+    /**
+     * **Kotlin, which most Android projects are written in.**
+     *
+     * The Kotlin Gradle plugin is not just another compiler: by default it runs
+     * the compiler in a **daemon of its own**, a second JVM forked from inside
+     * the Gradle daemon. That is a third level of process spawning, and every
+     * earlier level needed something fixed before it worked — so whether this
+     * one does is a real question rather than a formality.
+     *
+     * The Kotlin source calls into the Java class deliberately: it forces the
+     * two compilers to see each other's output rather than merely run in the
+     * same build.
+     */
+    @Test
+    fun agp_builds_a_kotlin_project() {
+        writeProject(withAndroidX = true, withKotlin = true)
+
+        val run = gradle("assembleDebug")
+
+        Log.i(TAG, "kotlin build in ${run.millis} ms: exit=${run.exit}")
+        run.output.takeLast(1800).chunked(900).forEach { Log.i(TAG, it) }
+        assertTrue("the build failed:\n${run.output.takeLast(1500)}", run.exit == 0)
+
+        val apk = File(project, "build/outputs/apk/debug/agpdemo-debug.apk")
+        assertTrue("no APK was produced", apk.isFile)
+        val entries = ZipFile(apk).use { zip -> zip.entries().toList().map { it.name } }
+        assertTrue("no dex: ${entries.take(10)}", entries.any { it.endsWith(".dex") })
+        // The Kotlin runtime is pulled in by the plugin; its absence would mean
+        // the Kotlin half contributed nothing.
+        assertTrue(
+            "no Kotlin runtime in the APK, so nothing Kotlin was compiled: " +
+                entries.filter { it.startsWith("kotlin") }.take(5),
+            entries.any { it.startsWith("kotlin/") },
         )
         Log.i(TAG, "APK is ${apk.length()} bytes, ${entries.size} entries")
     }

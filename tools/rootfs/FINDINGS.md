@@ -269,6 +269,18 @@ half, since the generated `R` had to reach the compile classpath.
 
 `android.useAndroidX=true` is required, and AGP refuses the build without it.
 
+**Kotlin builds too**, at 3.2 MB and 53 seconds, with a `.kt` file that calls
+into the Java half so the two compilers must see each other's output. It needs
+**no Kotlin plugin**: AGP 9 has built-in Kotlin support and registers a `kotlin`
+extension of its own, so applying `org.jetbrains.kotlin.android` on top fails
+with *"Cannot add extension with name 'kotlin'"*. A `.kt` source is enough.
+
+That also answers the question that made Kotlin worth trying: the Kotlin
+compiler normally runs in a daemon of its own, a second JVM forked from inside
+the Gradle daemon — a third level of process spawning, where each earlier level
+had needed something fixed. Fixing `jspawnhelper` covered this one too, which is
+the point of fixing it rather than passing a flag.
+
 The launcher grew two things along the way. It **runs JDK tools by name**,
 dispatching through `java.util.spi.ToolProvider` — the supported route, and the
 only one available, since `jdk.tools.jlink.internal.Main` is not exported to the
@@ -297,9 +309,8 @@ remaining work is Gradle on top of it.
 - **Whether Gradle can be made not to fork at all** is unresolved; matching the
   JVM settings did not do it. It no longer blocks anything, but a build that
   did not fork would be faster.
-- **Kotlin and Compose are untried.** The AndroidX project is Java. Kotlin means
-  the Kotlin Gradle plugin and its own daemon, which forks another JVM — likely
-  fine now that `jspawnhelper` is fixed, and unverified.
+- **Compose is untried.** Kotlin works; Compose adds a compiler plugin, which is
+  a different thing again.
 - **`-jar` is not supported** by the launcher, and something will eventually
   want it.
 - **Everything in §6 and §7 was measured on x86_64.** The launcher and
