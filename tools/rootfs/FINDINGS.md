@@ -1,7 +1,9 @@
 # Spike R11: the Gradle path's foundation — result
 
-**Outcome: the planned route is closed, and a better one is open but not yet
-proven.** M9 assumed a Linux rootfs entered with PRoot, because Gradle needs a
+**Outcome: the planned route is closed, and a better one works.** A real JVM
+runs on the device with no Linux userland at all — it compiles a class with
+`javac` and runs it — reached by replacing OpenJDK's launcher rather than
+arguing with it. M9 assumed a Linux rootfs entered with PRoot, because Gradle needs a
 JVM and ART is not one. That does not work — but the premise was wrong anyway,
 and the thing the rootfs existed to provide can be had directly.
 
@@ -87,37 +89,94 @@ building on it would have produced a milestone the app cannot run.
 is not optional — without it `libjli.so` cannot find `libz.so.1`, which is a
 Termux package rather than part of the JDK.
 
-## 4. What M9 should do instead
+## 4. Replacing the launcher fixes it
 
-**Replace the launcher.** `bin/java` is a thin wrapper around
-`JNI_CreateJavaVM` in `libjvm.so`, and its re-exec is a convenience for fixing
-its own environment. A launcher of our own does not re-exec, and M7 shipped a C
-compiler that can build one. That is the next spike, and it is small.
+`bin/java` is a wrapper around `JNI_CreateJavaVM` in `libjvm.so`, and its
+re-exec is a convenience for fixing its own environment. A launcher that calls
+that entry point directly has nothing to fix and never re-execs.
+`spike/rootfs/src/main/jni/launch_jvm.c` is ~120 lines and does exactly that:
+`dlopen` the VM, `JNI_CreateJavaVM`, `FindClass`, call `main`.
 
-Failing that, two fallbacks worth naming rather than discovering later:
+**It ships in `jniLibs`, so it needs no linker trick at all.** That directory is
+extracted to `nativeLibraryDir`, which is the one place an app may execute from
+— the same route `:toolchain:native` ships aapt2 by. `dlopen` of `libjvm.so`
+out of app storage is permitted; only `execve` is not.
 
-- **Load `libjvm.so` into the app process** with `JNI_CreateJavaVM` directly.
-  No second process at all. A second VM beside ART in one process is unusual
-  and would need care about signals and `SIGSEGV` handlers, which both runtimes
-  install.
-- **Lower `targetSdk` to 28**, which is what Termux does and the whole reason it
-  can execute its own files. That reopens the rootfs route and PRoot with it,
-  at the cost of the platform's current-target requirements. `docs/PLAN.md`
-  already makes F-Droid the primary channel, so this is less costly here than
-  it would be elsewhere — but it is a large decision and belongs to the project
-  owner, not to a spike.
+Measured in the app's own process, API 34 x86_64:
 
-## 5. Whether the JVM can fork is still open
+| | |
+|---|---|
+| `JNI_CreateJavaVM` | returns 0 |
+| `javac` on a one-class file | ~400 ms |
+| Running the compiled class | ~165 ms |
+| Reported | `21.0.12 on amd64` |
 
-Gradle's normal mode is a long-lived daemon it forks. A child would have to
-`execve` out of app storage, which is forbidden — so `--no-daemon` is the
-likely shape. Untested, because the VM does not yet start in the app.
+Two things cost an hour each and are worth writing down.
+
+**`-Djava.home` is not optional.** The VM otherwise derives it from the
+launcher's own path, and the launcher is in `nativeLibraryDir`, nowhere near the
+JDK. Without it the VM cannot find its own modules.
+
+**A shared library with `-Wl,-e,main` is not an executable.** `ndk-build`
+refuses an extension in an executable's module name, and the obvious way around
+that — build a shared library and give it an entry point — produces a file that
+starts and then segfaults *before reaching `main`*, with no output at all. A
+shared object is linked without the C runtime startup, so libc and TLS are never
+initialised and the first `fprintf` dies. It has to be a real executable, merely
+*named* `lib….so`. The build compiles it with the NDK's clang directly for that
+reason.
+
+**The NDK's `jni.h` is Android's**, and stops at JNI 1.6. OpenJDK's VM wants at
+least 1.8 in `JavaVMInitArgs.version`, so the constant is defined in the
+launcher rather than included. The header at hand and the runtime being driven
+are not the same implementation.
+
+## 5. The VM can fork, but only if told how
+
+Gradle's normal mode is a daemon it forks. The default answer looks like "no":
+
+```
+java.io.IOException: Cannot run program "/system/bin/echo":
+  Failed to exec spawn helper
+```
+
+That is not the platform refusing to spawn. The JVM's default launch mechanism
+on Linux is `POSIX_SPAWN`, which runs a small JDK binary called `jspawnhelper`
+and has *it* exec the target — and `jspawnhelper` is in app-private storage,
+which is what may not be executed. The failure is about the helper.
+
+`-Djdk.lang.Process.launchMechanism=vfork` skips it and execs the target
+directly. `/system/bin/echo` is in an executable location, so it runs:
+`FORK-OK 0 child-ran`.
+
+**So the constraint is what gets exec'd, not that anything is.** A child under
+`/system/bin` is fine; a child in app storage is not — which means a Gradle
+daemon, being another `java`, still cannot be spawned the way Gradle spawns it.
+It would have to be started through this launcher, or Gradle run with
+`--no-daemon`.
+
+## What this means for M9
+
+No rootfs, no PRoot, no second libc. A JDK installed the way the C/C++
+toolchain is, plus a launcher of ours in `jniLibs`, and the JVM runs. The
+remaining work is Gradle on top of it.
+
+| Module | What it has to do |
+|---|---|
+| `:toolchain:manager` | Install the JDK — the gzipped-tar path already exists |
+| `:toolchain:native` | Ship the launcher in `jniLibs`, beside aapt2 |
+| A Gradle bridge | Drive Gradle through the launcher, `--no-daemon` or a daemon started the same way |
 
 ## Open
 
-- Does a hand-written launcher avoid the re-exec? (The next spike.)
-- Why does the launcher decide differently under the two domains? The stack-size
-  hypothesis is untested.
-- Gradle itself: 164 MB installed, entirely unexercised here.
-- x86_64 is untested; only arm64 was measured. The mechanism is
-  architecture-independent but the claim is not.
+- **Gradle itself is entirely unexercised.** 164 MB installed, and it is the
+  whole point. Whether it runs, and how it behaves without a daemon, is the
+  next question.
+- **Why the stock launcher decides differently under `run-as`** is still not
+  established. It no longer blocks anything, but it is unexplained.
+- **The launcher was measured on x86_64.** It builds for both ABIs and the
+  arm64 JDK was exercised through the stock launcher under `run-as`, but the
+  launcher itself has not run on arm64 — the phone was unplugged before that
+  test existed.
+- **Memory.** A JVM plus Gradle plus the C/C++ toolchain on a phone is a lot of
+  resident set, and nothing here measured it.
