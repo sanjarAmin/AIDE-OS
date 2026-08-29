@@ -92,6 +92,10 @@ include(":spike:ai")
 // is exactly when they need re-checking. Not part of the app.
 include(":spike:clang")
 
+// Spike R11 -- PRoot and a Linux rootfs on a current Android, which is what
+// risk R4 is about and what M9 rests on. Not part of the app.
+include(":spike:rootfs")
+
 // Spike R9 -- executing a downloaded native binary, which M7 is designed
 // around and which docs/PLAN.md is currently inconsistent about. Not part of
 // the app.
