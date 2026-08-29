@@ -142,6 +142,39 @@ class JvmToolchain(
     }
 
     /**
+     * Runs an executable jar, as `java -jar` does.
+     *
+     * The main class comes from the jar's own manifest. Worth having because it
+     * is how a Gradle wrapper starts: `gradlew` is a shell script whose real
+     * work is `java -jar gradle-wrapper.jar`, and a project that pins its
+     * Gradle version expects to be built that way.
+     */
+    suspend fun runJar(
+        jar: File,
+        vmOptions: List<String> = emptyList(),
+        arguments: List<String> = emptyList(),
+        workingDir: File? = null,
+        environment: Map<String, String> = emptyMap(),
+        onLine: (ToolLine) -> Unit = {},
+    ): AppResult<ToolResult> {
+        if (!isInstalled) {
+            return AppResult.Failure(
+                AppError("The Java runtime is not installed, or its download did not finish."),
+            )
+        }
+        return runner.run(
+            plan = LaunchPlan(
+                command = listOf(launcher.absolutePath) + vmOptions +
+                    listOf("-jar", jar.absolutePath) + arguments,
+                environment = defaultEnvironment() + environment,
+            ),
+            workingDir = workingDir,
+            describedAs = "java -jar",
+            onLine = onLine,
+        )
+    }
+
+    /**
      * What the JVM needs to find its own libraries.
      *
      * The launcher sets this for itself when it has to, but passing it here

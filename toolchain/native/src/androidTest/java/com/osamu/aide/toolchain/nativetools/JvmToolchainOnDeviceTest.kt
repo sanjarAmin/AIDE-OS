@@ -153,6 +153,59 @@ class JvmToolchainOnDeviceTest {
         assertEquals("FORK 0 child-ran", output)
     }
 
+    /**
+     * `-jar`, which is how a Gradle wrapper starts.
+     *
+     * `gradlew` is a shell script whose real work is
+     * `java -jar gradle-wrapper.jar`, so a project pinning its Gradle version
+     * expects this to work. The main class comes from the jar's manifest, read
+     * through `java.util.jar.JarFile` once the VM is up rather than by parsing
+     * the zip in C — continuation lines and attribute sections are what a
+     * hand-rolled reader gets wrong on the one jar that matters.
+     *
+     * The jar is assembled here rather than with the JDK's `jar` tool, so the
+     * test depends on one thing at a time.
+     */
+    @Test
+    fun it_runs_an_executable_jar() = runTest(timeout = kotlin.time.Duration.parse("10m")) {
+        File(work, "Jarred.java").writeText(
+            """
+            public class Jarred {
+                public static void main(String[] args) {
+                    System.out.println("$MARKER from a jar " + args.length);
+                }
+            }
+            """.trimIndent(),
+        )
+        val (compiled, compileOutput) = run(
+            mainClass = "com.sun.tools.javac.Main",
+            arguments = listOf(File(work, "Jarred.java").absolutePath, "-d", work.absolutePath),
+        )
+        assertTrue("javac failed: $compileOutput", (compiled as AppResult.Success).value.isSuccess)
+
+        val jar = File(work, "jarred.jar")
+        java.util.zip.ZipOutputStream(jar.outputStream()).use { zip ->
+            zip.putNextEntry(java.util.zip.ZipEntry("META-INF/MANIFEST.MF"))
+            zip.write("Manifest-Version: 1.0\nMain-Class: Jarred\n\n".toByteArray())
+            zip.closeEntry()
+            zip.putNextEntry(java.util.zip.ZipEntry("Jarred.class"))
+            zip.write(File(work, "Jarred.class").readBytes())
+            zip.closeEntry()
+        }
+
+        val output = StringBuilder()
+        val result = jvm.runJar(
+            jar = jar,
+            arguments = listOf("one", "two"),
+            workingDir = work,
+            environment = mapOf("TMPDIR" to work.absolutePath),
+        ) { output.appendLine(it.text) }
+
+        Log.i(TAG, "-jar: ${output.toString().trim()}")
+        assertTrue("running the jar failed: $output", (result as AppResult.Success).value.isSuccess)
+        assertEquals("$MARKER from a jar 2", output.toString().trim())
+    }
+
     /** A missing JDK is refused by name rather than failing somewhere inside. */
     @Test
     fun an_absent_runtime_is_refused_with_a_message() = runTest {

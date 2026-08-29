@@ -192,9 +192,9 @@ For that to work the launcher takes **`java`'s own arguments**: `-cp`, `-D…`,
 comes from `JAVA_HOME` or, failing that, is derived from `argv[0]` exactly as
 the real launcher does — which is what makes the symlink self-configuring,
 since `argv[0]` is then the path inside the JDK rather than the launcher's own.
-`-jar` is refused rather than half-implemented: running a jar means reading
-`Main-Class` from its manifest, and silently running the wrong thing would be
-worse than saying no.
+`-jar` reads `Main-Class` from the jar's manifest, through
+`java.util.jar.JarFile` once the VM is up rather than by parsing the zip in C.
+It matters because a Gradle wrapper is `java -jar gradle-wrapper.jar`.
 
 **Measured in the app's own process**, API 34 x86_64: a `java-library` project
 compiles and `demo.jar` contains `demo/Greeter.class`, in about ten seconds.
@@ -326,8 +326,6 @@ remaining work is Gradle on top of it.
   package parser -- the one `PackageInstaller` uses -- so it is a package
   Android would accept, not merely a zip with the right entries. Installing and
   running one is what `:engine:fast`'s tests do and this spike does not.
-- **`-jar` is not supported** by the launcher, and something will eventually
-  want it.
 - **Everything in §6 and §7 was measured on x86_64.** The launcher and
   `jspawnhelper` ship for both ABIs and the arm64 JDK ran under the stock
   launcher, but no arm64 device was attached when this was written.

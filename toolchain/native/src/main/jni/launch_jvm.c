@@ -51,6 +51,7 @@ struct parsed {
     int option_count;
     char *class_path;       /* the last -cp wins, as with java */
     char *main_class;
+    char *jar;              /* -jar: the main class comes from its manifest */
     char *program_args[MAX_ARGS];
     int program_arg_count;
     int print_version;
@@ -156,11 +157,21 @@ static int parse(int argc, char **argv, struct parsed *out) {
             continue;
         }
         if (strcmp(arg, "-jar") == 0) {
-            /* Refused rather than half-implemented: running a jar means
-             * reading Main-Class out of its manifest, and silently running
-             * the wrong thing would be worse than saying no. */
-            fprintf(stderr, "-jar is not supported; pass -cp and a main class\n");
-            return -1;
+            if (i + 1 >= argc) {
+                fprintf(stderr, "-jar requires a path\n");
+                return -1;
+            }
+            /* As with java, the jar becomes the whole classpath and its
+             * manifest names the class; anything -cp said is discarded.
+             *
+             * And everything after it belongs to the program, not the VM --
+             * `java -jar app.jar one two` passes one and two to main. Carrying
+             * on parsing options here made the first program argument look
+             * like a main class name. */
+            out->jar = argv[++i];
+            out->class_path = out->jar;
+            i++;
+            break;
         }
         add_option(out, arg);
     }
@@ -243,6 +254,57 @@ static int run_tool(JNIEnv *env, const char *tool, char **args, int arg_count) {
     return (int) result;
 }
 
+/*
+ * The `Main-Class` a jar's manifest names.
+ *
+ * Read through `java.util.jar.JarFile` rather than by parsing the zip in C:
+ * the VM is already running by this point, and the manifest's rules --
+ * continuation lines, encoding, which attributes section wins -- are exactly
+ * the kind of thing a hand-rolled reader gets subtly wrong on the one jar that
+ * matters. `gradlew` runs `java -jar gradle-wrapper.jar`, so this is not
+ * hypothetical.
+ *
+ * Returns a string owned by the caller, or NULL with the reason printed.
+ */
+static char *main_class_of_jar(JNIEnv *env, const char *jar) {
+    jclass jar_file = (*env)->FindClass(env, "java/util/jar/JarFile");
+    jmethodID open = (*env)->GetMethodID(env, jar_file, "<init>", "(Ljava/lang/String;)V");
+    jobject instance = (*env)->NewObject(env, jar_file, open, (*env)->NewStringUTF(env, jar));
+    if (instance == NULL) {
+        (*env)->ExceptionDescribe(env);
+        fprintf(stderr, "cannot open %s\n", jar);
+        return NULL;
+    }
+
+    jmethodID get_manifest = (*env)->GetMethodID(
+        env, jar_file, "getManifest", "()Ljava/util/jar/Manifest;");
+    jobject manifest = (*env)->CallObjectMethod(env, instance, get_manifest);
+    if (manifest == NULL) {
+        fprintf(stderr, "%s has no manifest\n", jar);
+        return NULL;
+    }
+
+    jclass manifest_class = (*env)->FindClass(env, "java/util/jar/Manifest");
+    jmethodID main_attributes = (*env)->GetMethodID(
+        env, manifest_class, "getMainAttributes", "()Ljava/util/jar/Attributes;");
+    jobject attributes = (*env)->CallObjectMethod(env, manifest, main_attributes);
+
+    jclass attributes_class = (*env)->FindClass(env, "java/util/jar/Attributes");
+    jmethodID get_value = (*env)->GetMethodID(
+        env, attributes_class, "getValue", "(Ljava/lang/String;)Ljava/lang/String;");
+    jstring value = (jstring) (*env)->CallObjectMethod(
+        env, attributes, get_value, (*env)->NewStringUTF(env, "Main-Class"));
+    if (value == NULL) {
+        fprintf(stderr, "%s has no Main-Class in its manifest\n", jar);
+        return NULL;
+    }
+
+    const char *text = (*env)->GetStringUTFChars(env, value, NULL);
+    char *copy = strdup(text);
+    (*env)->ReleaseStringUTFChars(env, value, text);
+    return copy;
+}
+
 /* The name this was invoked under, which decides whether it is `java`. */
 static const char *invoked_as(const char *argv0) {
     const char *slash = strrchr(argv0, '/');
@@ -309,7 +371,7 @@ int main(int argc, char **argv) {
 
     if (!as_tool) {
         if (parse(argc, argv, &parsed) != 0) return 2;
-        if (parsed.main_class == NULL && !parsed.print_version) {
+        if (parsed.main_class == NULL && parsed.jar == NULL && !parsed.print_version) {
             fprintf(stderr, "usage: java [options] <main-class> [args...]\n");
             return 2;
         }
@@ -376,6 +438,15 @@ int main(int argc, char **argv) {
         int result = run_tool(env, name, argv + 1, argc - 1);
         (*vm)->DestroyJavaVM(vm);
         return result;
+    }
+
+    /* With -jar the class is not known until the VM can read the manifest. */
+    if (parsed.jar != NULL && parsed.main_class == NULL) {
+        parsed.main_class = main_class_of_jar(env, parsed.jar);
+        if (parsed.main_class == NULL) {
+            (*vm)->DestroyJavaVM(vm);
+            return 6;
+        }
     }
 
     if (parsed.print_version && parsed.main_class == NULL) {
