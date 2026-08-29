@@ -28,6 +28,7 @@
 | 🟡 | **M5** AI ⭐ | Feature-complete; three assertions parked until a live API key exists. Everything testable without one is tested. `ai/core/FINDINGS.md` |
 | 🟢 | **M6** Compose | A Compose app builds, installs, launches and **draws**, on device, with its libraries' manifests merged. Six fixes, none visible to a build-only test. `engine/deps/FINDINGS.md` |
 | 🟢 | **M7** C/C++ | A JNI project builds on device: clang compiles `src/main/cpp`, the library is packaged into the APK, and it loads and runs. **clangd answers too** — diagnostics, completion, go-to-definition and hover for C and C++, through the same interface the Java service implements. Verified on API 34 x86_64 and Android 16 arm64. `tools/clang/FINDINGS.md` |
+| 🟡 | **M9** Gradle path | `:engine:gradle` builds an Android project on the device with the project's own Gradle, on Termux's OpenJDK started by our launcher — 871 KB APK in 28 s, accepted by the platform's package parser. **Not installable yet**: the JDK, Gradle and an SDK are staged by hand. `tools/rootfs/FINDINGS.md` |
 | 🟢 | **M8** Git + Terminal | Clone, edit, stage, commit, push and diff, with identity and tokens in the Keystore. A real terminal: Termux's emulator vendored unmodified, characters sent as typed. `vcs/git/FINDINGS.md`, `terminal/FINDINGS.md` |
 
 **M2 in detail.** All six stages exist in `:engine:fast` and run on a device:
@@ -161,14 +162,14 @@ Convert `:app` into a thin Compose shell over a multi-module Gradle build. Add t
 
 :engine:api             BuildSystem interface, BuildRequest/BuildResult, progress event stream
 :engine:fast            ECJ/kotlinc -> D8 -> aapt2 -> apksig -> PackageInstaller
-:engine:gradle          Gradle Tooling API bridge into the rootfs
+:engine:gradle          Gradle on the device's own JVM (no rootfs — see spike R11)
 :engine:deps            Maven resolution (maven-resolver), AAR extraction, artifact cache
 
 :toolchain:native       jniLibs packaging for aapt2/clang/lld, exec harness, W^X handling
 :toolchain:manager      Component download, checksum verification, install, version pinning
 
 :terminal               PTY terminal emulator widget
-:runtime:linux          Rootfs bootstrap, PRoot + linker64/LD_PRELOAD exec strategies
+:runtime:linux          ~~Rootfs bootstrap, PRoot~~ — not needed; spike R11 closed that route
 
 :ai:core                Anthropic client, session state, tool definitions, context assembly
 :ai:ui                  Chat panel, inline completion, quick-fix affordances
@@ -270,7 +271,7 @@ Bring-your-own-key, no backend infrastructure, no per-user liability for you.
 | ✅ **M6** Compose | Compose compiler plugin hosted in on-device kotlinc | A Compose hello-world builds and runs |
 | **M7** C/C++ | Termux clang/lld toolchain download, NDK sysroot, clangd | JNI project with a native `.so` builds — **met**, clangd included |
 | **M8** Git + Terminal | JGit, PTY terminal | Clone from GitHub, edit, commit, push |
-| **M9** Gradle path | ~~Rootfs bootstrap~~ → Termux's **Bionic-built OpenJDK 21**, a launcher of our own, and symlinks for the binaries a build execs | An unmodified Android Studio project builds — **the mechanism is proven** (spike R11); what remains is installing the pieces and a real project |
+| **M9** Gradle path | ~~Rootfs bootstrap~~ → Termux's **Bionic-built OpenJDK 21**, a launcher of our own, and `:engine:gradle` | An unmodified Android Studio project builds — **`:engine:gradle` does it** on device, through the `BuildSystem` interface. What remains is *installing* the JDK and Gradle: `:toolchain:manager` has no component for either, and hosting them is an unmade decision |
 | **M10** JS / C# | QuickJS + Node; .NET SDK (experimental) | Node project runs; C# console app compiles |
 
 M0–M5 is the real v1.0. Everything from M6 on is expansion.
