@@ -84,6 +84,7 @@ dependencies {
     implementation(project(":engine:api"))
     implementation(project(":engine:deps"))
     implementation(project(":engine:fast"))
+    implementation(project(":engine:gradle"))
     implementation(project(":lsp:java"))
     implementation(project(":lsp:native"))
     implementation(project(":toolchain:native"))

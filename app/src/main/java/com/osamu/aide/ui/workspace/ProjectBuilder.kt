@@ -9,7 +9,9 @@ import com.osamu.aide.engine.fast.AndroidPlatformProvider
 import android.os.Build
 import com.osamu.aide.core.fs.ProjectLayout
 import com.osamu.aide.engine.fast.FastBuildSystem
+import com.osamu.aide.core.fs.BuildEngine
 import com.osamu.aide.engine.fast.NativeToolchainProvider
+import com.osamu.aide.engine.gradle.GradleToolchainProvider
 import com.osamu.aide.engine.fast.KotlinCompiler
 import com.osamu.aide.toolchain.manager.ToolchainComponent
 import com.osamu.aide.toolchain.manager.ToolchainManager
@@ -48,6 +50,12 @@ class ProjectBuilder(
      * singleton. The provider is the singleton; the toolchain is not.
      */
     private val native: NativeToolchainProvider,
+    /**
+     * The Gradle engine, asked per build like the others. It resolves to null
+     * on any device without a JDK and a Gradle distribution -- roughly 470 MB
+     * that most projects never need, since the fast path is the default.
+     */
+    private val gradle: GradleToolchainProvider,
     private val dispatchers: DispatcherProvider,
     /**
      * Cache, not the project directory. Intermediates are large, regenerable,
@@ -76,6 +84,16 @@ class ProjectBuilder(
     }
 
     fun build(project: Project): Flow<BuildEvent> = flow {
+        // **Which engine is a property of the project**, recorded when it was
+        // created or imported. Checked before anything else because the Gradle
+        // path needs none of what follows: it resolves its own dependencies and
+        // finds its own platform, so asking for android.jar or a dependency
+        // resolve first would make a Gradle build wait on work it will not use.
+        if (project.engine == BuildEngine.GRADLE) {
+            emitAll(buildWithGradle(project))
+            return@flow
+        }
+
         val androidJar = toolchain.androidJar()
         if (androidJar == null) {
             // Reachable if the platform is deleted between the check and the
@@ -116,6 +134,35 @@ class ProjectBuilder(
                     outputDir = outputFor(project),
                     dependencies = resolved,
                 ),
+            ),
+        )
+    }
+
+    /**
+     * Builds with the project's own Gradle.
+     *
+     * A missing runtime is reported the way a missing platform is -- an
+     * ordinary failed build carrying a sentence -- rather than thrown: the
+     * caller is a UI with somewhere to show this and nowhere to show a crash.
+     */
+    private fun buildWithGradle(project: Project): Flow<BuildEvent> = flow {
+        val engine = gradle.engine()
+        if (engine == null) {
+            emit(
+                BuildEvent.Finished(
+                    BuildResult.Failure(
+                        stage = null,
+                        message = "This project builds with Gradle, which needs a Java runtime " +
+                            "and a Gradle distribution. Neither is installed.",
+                        durationMillis = 0,
+                    ),
+                ),
+            )
+            return@flow
+        }
+        emitAll(
+            engine.build(
+                BuildRequest(project = project, outputDir = outputFor(project)),
             ),
         )
     }

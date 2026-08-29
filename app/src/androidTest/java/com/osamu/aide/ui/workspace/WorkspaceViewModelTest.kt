@@ -14,6 +14,7 @@ import com.osamu.aide.editor.EditorLanguages
 import com.osamu.aide.engine.fast.AndroidPlatformProvider
 import com.osamu.aide.engine.fast.KotlinToolchainProvider
 import com.osamu.aide.engine.fast.NativeToolchainProvider
+import com.osamu.aide.engine.gradle.GradleToolchainProvider
 import com.osamu.aide.engine.fast.ApkInstaller
 import com.osamu.aide.toolchain.manager.ToolchainManager
 import com.osamu.aide.toolchain.nativetools.NativeToolRunner
@@ -97,6 +98,9 @@ class WorkspaceViewModelTest {
                 // holds no 551 MB clang, which is what almost every device
                 // looks like.
                 native = NativeToolchainProvider(context, dispatchers),
+                // Also absent: no JDK, no Gradle. Which is what a device that
+                // has never opened a Gradle project looks like.
+                gradle = GradleToolchainProvider(context, dispatchers),
                 dispatchers = dispatchers,
                 outputRoot = File(context.cacheDir, "builds-test"),
             ),

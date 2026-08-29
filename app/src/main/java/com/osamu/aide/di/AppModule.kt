@@ -16,6 +16,7 @@ import com.osamu.aide.engine.deps.DependencyResolver
 import com.osamu.aide.engine.fast.ApkInstaller
 import com.osamu.aide.engine.fast.KotlinToolchainProvider
 import com.osamu.aide.engine.fast.NativeToolchainProvider
+import com.osamu.aide.engine.gradle.GradleToolchainProvider
 import com.osamu.aide.toolchain.manager.ToolchainManager
 import com.osamu.aide.toolchain.nativetools.NativeToolRunner
 import com.osamu.aide.toolchain.nativetools.NativeToolchain
@@ -100,6 +101,11 @@ val appModule = module {
     // registered; what it finds is asked for per build.
     single { NativeToolchainProvider(get(), get()) }
 
+    // The Gradle engine's runtimes are the largest downloads in the app and the
+    // ones fewest projects need. Absent is the normal state, so this is a
+    // provider rather than a nullable definition -- Koin cannot hold null.
+    single { GradleToolchainProvider(get(), get()) }
+
     single {
         ProjectBuilder(
             toolchain = get(),
@@ -108,6 +114,7 @@ val appModule = module {
             dependencies = get(),
             kotlin = get(),
             native = get(),
+            gradle = get(),
             dispatchers = get(),
             outputRoot = get(named(BUILD_OUTPUT_ROOT)),
         )
