@@ -17,6 +17,7 @@
 | ✅ | Spike R6 — JGit on ART | Resolved, and **unmodified** — the first "pure JVM" claim here that held. `tools/git/FINDINGS.md` |
 | ✅ | Spike R7 — PTY + shell on a device | Resolved, and retired into `:terminal`. `forkpty` works from an untrusted app, **job control included**. `tools/pty/FINDINGS.md` |
 | ✅ | Spike R9 — executing a downloaded binary | Resolved. Via `/system/bin/linker64`, from **internal** storage only. `tools/nativeexec/FINDINGS.md` |
+| 🟡 | Spike R11 — the Gradle path's foundation | The rootfs route is **closed** (PRoot works; a musl guest cannot be executed) and **unnecessary**: Termux's OpenJDK 21 is a Bionic binary. It runs under `run-as` and **not yet in the app** — the launcher re-execs through `/proc/self/exe`. `tools/rootfs/FINDINGS.md` |
 | ✅ | Spike R10 — clang on the device | Resolved, on **API 34 x86_64 and Android 16 arm64**. Termux clang 21.1.8 builds C and C++ into a `.so` that loads and runs. **One job per invocation, and the driver can never run the linker** — plan with `-###`, execute it ourselves. `tools/clang/FINDINGS.md` |
 | ✅ | License | GPLv3 |
 | 🟢 | **M0** Skeleton | `:app`, `:core:{common,fs,ui}`, `:editor`, `:engine:{api,fast,deps}`, `:toolchain:{native,manager}`, `:lsp:java`, `:ai:{core,ui}`, `:terminal`, `:vcs:git` — 15 of 22 planned modules, plus six spikes. The remaining seven arrive with the milestones that need them. |
@@ -269,7 +270,7 @@ Bring-your-own-key, no backend infrastructure, no per-user liability for you.
 | ✅ **M6** Compose | Compose compiler plugin hosted in on-device kotlinc | A Compose hello-world builds and runs |
 | **M7** C/C++ | Termux clang/lld toolchain download, NDK sysroot, clangd | JNI project with a native `.so` builds — **met**, clangd included |
 | **M8** Git + Terminal | JGit, PTY terminal | Clone from GitHub, edit, commit, push |
-| **M9** Gradle path | Rootfs bootstrap, Tooling API bridge | An unmodified Android Studio project builds |
+| **M9** Gradle path | ~~Rootfs bootstrap~~ → Termux's **Bionic-built OpenJDK 21** plus a launcher of our own, then the Tooling API bridge | An unmodified Android Studio project builds |
 | **M10** JS / C# | QuickJS + Node; .NET SDK (experimental) | Node project runs; C# console app compiles |
 
 M0–M5 is the real v1.0. Everything from M6 on is expansion.
@@ -283,7 +284,7 @@ M0–M5 is the real v1.0. Everything from M6 on is expansion.
 | ~~R1~~ | ~~Building `aapt2` from AOSP for Android/aarch64~~ | **CLOSED** | Resolved. Builds clean for arm64-v8a and x86_64; ours is PIE where AndroidIDE's prebuilt is not, so the fallback was not needed. `tools/aapt2/FINDINGS.md`. |
 | ~~R2~~ | ~~Compose compiler plugin inside on-device kotlinc~~ | **CLOSED** | Resolved. Compiler and plugin dex into one archive; startup needed seven separate fixes, all recorded in `tools/kotlinc/FINDINGS.md`. The "route Compose to the Gradle path" fallback is retired. |
 | R3 | kotlinc memory footprint (1 GB+) OOMs on mid-range devices | Medium | Separate `:build` process, `largeHeap`, no incremental Kotlin initially, degrade gracefully with a clear message |
-| R4 | PRoot broken on Android 15+ seccomp | Medium — bounded by design | Fast path never touches PRoot. Rootfs is opt-in. Fallback exec strategies: `linker64` direct invocation, `termux-exec` LD_PRELOAD interception. |
+| ~~R4~~ | ~~PRoot broken on Android 15+ seccomp~~ | **CLOSED — and it was the wrong worry** | PRoot is not broken: on Android 16 it starts, ptraces its child and rewrites paths. What cannot happen is the *guest*. An app on a modern `targetSdk` may not `execve` its own files, and `linker64` is Bionic's loader and cannot host a musl program; PRoot rewrites paths but grants no permission and supplies no second libc. So the rootfs route is closed unless `targetSdk` drops to 28, which is what Termux does. It is also unnecessary — see the M9 row. `tools/rootfs/FINDINGS.md` |
 | R5 | Google Play policy on code-executing apps | Medium | Primary channels **F-Droid + direct APK + GitHub Releases**. Play as a secondary, possibly feature-reduced build. AIDE is on Play, so it's not categorically banned. |
 | R6 | sora-editor LGPL-2.1 obligations | Low | Consume as an **unmodified** Maven dependency; upstream any changes; document the relink path. Keeps the rest of the app under your chosen license. |
 | R9 | The `linker64` exec route closing in a future Android | Medium — M7 rests on it | The gap it uses (`noexec` mount, `PROT_EXEC` mapping permitted) is not a documented guarantee. Measured working on API 34, and **on Android 16 / API 36 arm64 on a vendor ROM** — two API levels on, it has not closed. Spike R10 exercised it with a real toolchain and it held, at the cost of two workarounds for what the route breaks (`/proc/self/exe`, and spawning child tools). `tools/nativeexec/FINDINGS.md`, `tools/clang/FINDINGS.md` §6. The manual device matrix is the early warning, and `:toolchain:native`'s harness already supports more than one strategy. |
