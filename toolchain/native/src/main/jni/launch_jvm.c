@@ -25,6 +25,7 @@
  */
 #include <dlfcn.h>
 #include <jni.h>
+#include <malloc.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -39,6 +40,17 @@
  */
 #ifndef JNI_VERSION_1_8
 #define JNI_VERSION_1_8 0x00010008
+#endif
+
+/*
+ * Bionic's knob for heap pointer tagging. Declared here rather than relying on
+ * the NDK header, which only exposes it from a recent API level.
+ */
+#ifndef M_BIONIC_SET_HEAP_TAGGING_LEVEL
+#define M_BIONIC_SET_HEAP_TAGGING_LEVEL (-206)
+#endif
+#ifndef M_HEAP_TAGGING_LEVEL_NONE
+#define M_HEAP_TAGGING_LEVEL_NONE 0
 #endif
 
 #define MAX_OPTIONS 256
@@ -350,6 +362,31 @@ static void set_library_path_and_restart(const char *java_home, char **argv) {
 }
 
 int main(int argc, char **argv) {
+    /*
+     * **Turn off heap pointer tagging, or the JVM dies on arm64.**
+     *
+     * Android tags native heap pointers on arm64 (top-byte-ignore). Code that
+     * stores a pointer in fewer than 64 bits loses the tag, and freeing it
+     * aborts the process:
+     *
+     *   Pointer tag for 0x793ba4a1a0 was truncated, see
+     *   https://source.android.com/devices/tech/debug/tagged-pointers
+     *
+     * OpenJDK's allocator does exactly that, so javac and everything else the
+     * VM runs died on a phone while working on the x86_64 emulator -- which is
+     * why this was invisible until the tests ran on hardware.
+     *
+     * Done here rather than with `android:allowNativeHeapPointerTagging` in the
+     * manifest, for two reasons. The manifest flag applies to the *app*
+     * process, and this is a child, so it does not reach the JVM at all -- that
+     * was tried. And it is narrower: tagging catches a class of use-after-free
+     * and stays on everywhere except the process that is about to become a JVM.
+     *
+     * A no-op on x86_64 and on devices without tagging, and unsupported values
+     * are simply refused, so the return is not worth checking.
+     */
+    mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_NONE);
+
     struct parsed parsed;
     memset(&parsed, 0, sizeof(parsed));
 
