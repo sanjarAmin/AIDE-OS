@@ -303,6 +303,40 @@ it is handed: AGP execs `jlink` with its own. Re-exec is safe *here* for exactly
 the reason it is fatal for the stock launcher — `/proc/self/exe` is this file, in
 `nativeLibraryDir`, not the dynamic linker.
 
+## 8. arm64, and the bug only hardware could find
+
+Everything above was measured on the x86_64 emulator. On an Android 16 arm64
+phone the whole stack works — the launcher compiles and runs a class, forks a
+child, runs an executable jar, and `:engine:gradle` builds an Android APK in
+61 seconds — but **only after one arm64-specific fix**, and every green sweep on
+the emulator had hidden it.
+
+Every JVM invocation aborted:
+
+```
+Pointer tag for 0x793ba4a1a0 was truncated, see
+https://source.android.com/devices/tech/debug/tagged-pointers
+```
+
+Android tags native heap pointers on arm64 (top-byte-ignore). Code that stores a
+pointer in fewer than 64 bits loses the tag, and freeing it aborts the process.
+OpenJDK's allocator does exactly that. There is nothing to see on x86_64,
+because there are no tags there.
+
+The launcher now calls
+`mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_NONE)` before
+anything else.
+
+**`android:allowNativeHeapPointerTagging="false"` does not work here**, and was
+tried first: the manifest attribute configures the *app* process, and the JVM is
+a child of it, so the setting never reaches the VM. Doing it in the launcher is
+also narrower — tagging catches a class of use-after-free and stays on
+everywhere except the process about to become a JVM.
+
+The lesson is the plainer one: an emulator is a different CPU, and "verified" on
+it means verified on x86_64. This spike ran green on the emulator for a day with
+a defect that made it useless on every phone.
+
 ## What this means for M9
 
 No rootfs, no PRoot, no second libc. A JDK installed the way the C/C++
@@ -329,8 +363,9 @@ remaining work is Gradle on top of it.
 - **Everything in §6 and §7 was measured on x86_64.** The launcher and
   `jspawnhelper` ship for both ABIs and the arm64 JDK ran under the stock
   launcher, but no arm64 device was attached when this was written.
-- **The SDK is staged by hand.** `:toolchain:manager` would have to install a
-  platform and build-tools the way it installs the others.
+- **The SDK is still staged by hand.** The JDK and Gradle are components now;
+  a platform and build-tools are not, so an Android build still needs those put
+  in place for it.
 - **Why the stock launcher decides differently under `run-as`** is still not
   established. It no longer blocks anything, but it is unexplained.
 - **The launcher was measured on x86_64.** It builds for both ABIs and the
