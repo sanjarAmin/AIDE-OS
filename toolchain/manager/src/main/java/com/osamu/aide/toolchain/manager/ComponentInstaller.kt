@@ -223,7 +223,78 @@ class ComponentInstaller(
         when (component.archive) {
             is ComponentArchive.ZipEntries -> extractEntries(component, archive)
             is ComponentArchive.GzippedTar -> extractTree(component, archive)
+            is ComponentArchive.ZipTree -> extractZipTree(component, archive)
         }
+
+    /**
+     * Unpacks a whole zip, into a sibling directory moved into place at the end.
+     *
+     * The same staging discipline as [extractTree] and for the same reason: a
+     * 145 MB extraction interrupted by the user backgrounding the app must not
+     * leave a half-tree that answers "installed".
+     *
+     * No permissions are restored, because `java.util.zip` does not read them
+     * and nothing in a Gradle distribution is executed by us — the engine runs
+     * `GradleMain` on our own JVM rather than the `bin/gradle` script.
+     */
+    /**
+     * Whether an entry stays inside the directory being extracted into.
+     *
+     * An archive can name `../` and write anywhere; ours do not, and one that
+     * did would be an attack.
+     *
+     * **The archive's own root is not an escape.** A tar packed as
+     * `tar -C prefix .` begins with an entry `./`, which resolves to exactly
+     * the staging directory — the first version of this rejected it, so a JDK
+     * packed that way failed to install with "contains an unsafe path: ./"
+     * while a toolchain packed as `usr/` installed fine.
+     */
+    private fun isInside(destination: File, staging: File): Boolean {
+        val root = staging.canonicalPath
+        val path = destination.canonicalPath
+        return path == root || path.startsWith(root + File.separator)
+    }
+
+    private fun extractZipTree(component: ToolchainComponent, archive: File): File {
+        val target = storage.directoryFor(component)
+        val staging = File(target.parentFile, "${target.name}.partial")
+        staging.deleteRecursively()
+        staging.mkdirs()
+
+        ZipFile(archive).use { zip ->
+            for (entry in zip.entries()) {
+                val destination = File(staging, entry.name)
+                // A zip can name `../` and write outside the directory it is
+                // extracted into. Ours does not; one that did would be an
+                // attack, and the check is cheap.
+                if (!isInside(destination, staging)) {
+                    throw IOException("${component.displayName} contains an unsafe path: ${entry.name}")
+                }
+                if (entry.isDirectory) {
+                    destination.mkdirs()
+                } else {
+                    destination.parentFile?.mkdirs()
+                    zip.getInputStream(entry).use { input ->
+                        destination.outputStream().buffered().use { input.copyTo(it) }
+                    }
+                }
+            }
+        }
+
+        if (!File(staging, component.archive.installedMarker).exists()) {
+            staging.deleteRecursively()
+            throw IOException(
+                "${component.displayName} does not contain ${component.archive.installedMarker}.",
+            )
+        }
+
+        target.deleteRecursively()
+        if (!staging.renameTo(target)) {
+            staging.deleteRecursively()
+            throw IOException("${component.displayName} could not be installed.")
+        }
+        return storage.fileFor(component)
+    }
 
     /**
      * Unpacks a whole tree, preserving what makes it a toolchain.
@@ -254,7 +325,7 @@ class ComponentInstaller(
                     // A tar can name `../` and write outside the directory it
                     // was extracted into. Ours does not; an archive that did
                     // would be an attack, and this is cheap.
-                    if (!destination.canonicalPath.startsWith(staging.canonicalPath + File.separator)) {
+                    if (!isInside(destination, staging)) {
                         throw IOException("${component.displayName} contains an unsafe path: ${entry.name}")
                     }
                     when {

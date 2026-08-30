@@ -22,6 +22,12 @@ class TarballServer(private val escaping: Boolean = false) {
 
     val archive: ByteArray = ByteArrayOutputStream().also { bytes ->
         TarArchiveOutputStream(GZIPOutputStream(bytes)).use { tar ->
+            // The archive's own root, which `tar -C prefix .` writes and the
+            // JDK archive really has. It resolves to the extraction directory
+            // itself, which an over-eager traversal check reads as an escape.
+            tar.putArchiveEntry(TarArchiveEntry("./").also { it.mode = DIRECTORY_MODE })
+            tar.closeArchiveEntry()
+
             tar.putArchiveEntry(TarArchiveEntry("usr/bin/").also { it.mode = DIRECTORY_MODE })
             tar.closeArchiveEntry()
 

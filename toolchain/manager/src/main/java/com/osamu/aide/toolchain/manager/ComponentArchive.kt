@@ -40,4 +40,14 @@ sealed interface ComponentArchive {
      * what selects the language it compiles.
      */
     data class GzippedTar(override val installedMarker: String) : ComponentArchive
+
+    /**
+     * A zip unpacked whole, rather than picked over.
+     *
+     * Gradle's own distribution is this shape: a tree of jars under one
+     * directory named for the version. Unlike [GzippedTar] the format carries
+     * no symlinks and none are needed — nothing in it is executed directly,
+     * since the engine runs `GradleMain` on our JVM rather than `bin/gradle`.
+     */
+    data class ZipTree(override val installedMarker: String) : ComponentArchive
 }

@@ -96,6 +96,90 @@ data class ToolchainComponent(
         )
 
         /**
+         * A JVM, for the Gradle build path.
+         *
+         * Ours, for the reason the Kotlin compiler and clang are: nothing
+         * upstream ships a JDK that runs on Android. Termux builds OpenJDK
+         * against Bionic, so `bin/java` is an ordinary Android ELF whose
+         * interpreter is `/system/bin/linker64` — the one shape this app can
+         * start. `tools/rootfs/fetch-jvm.sh` assembles it.
+         *
+         * **Three of its binaries have to be replaced before it works**, all
+         * because an app may execute only what is in `nativeLibraryDir`:
+         * `bin/java` re-execs itself and dies, the tools a build execs cannot
+         * start, and `lib/jspawnhelper` is what the JVM uses to spawn anything
+         * at all. `JvmToolchain.prepare()` does it; installing this component
+         * without that leaves a JDK that looks fine and runs nothing.
+         *
+         * No SDK licence: OpenJDK is GPLv2 with the Classpath Exception.
+         */
+        fun openJdk(abi: String): ToolchainComponent? = when (abi) {
+            "arm64-v8a" -> openJdk(
+                architecture = "aarch64",
+                sha1 = "59a24c994952ec5f391e0779260a6e4d5e114c13",
+                archiveBytes = 148_583_010L,
+                installedBytes = 303_000_000L,
+            )
+            "x86_64" -> openJdk(
+                architecture = "x86_64",
+                sha1 = "e4552933358bfd47de40c819cc1071004f86c7dd",
+                archiveBytes = 149_797_431L,
+                installedBytes = 305_000_000L,
+            )
+            // Not built for the 32-bit ABIs. Null rather than a component that
+            // cannot install, so the caller says "not on this device" instead
+            // of failing mid-download.
+            else -> null
+        }
+
+        private fun openJdk(
+            architecture: String,
+            sha1: String,
+            archiveBytes: Long,
+            installedBytes: Long,
+        ) = ToolchainComponent(
+            // Matches GradleToolchainProvider.JDK_COMPONENT_ID; a test checks.
+            // No ABI in the id, unlike clang's: a device runs one architecture
+            // and the engine looks the JDK up by this name alone.
+            id = "openjdk-21",
+            displayName = "Java runtime (OpenJDK 21.0.12)",
+            archiveUrl = "https://github.com/sanjarAmin/AIDE-OS/releases/download/" +
+                "openjdk-21.0.12/openjdk-21.0.12-$architecture.tar.gz",
+            archiveSha1 = sha1,
+            archiveBytes = archiveBytes,
+            // The JDK directory carries its version, so the marker names what
+            // cannot move: the server VM, without which nothing starts.
+            archive = ComponentArchive.GzippedTar("lib/jvm/java-21-openjdk/lib/server/libjvm.so"),
+            installedBytes = installedBytes,
+            requiresSdkLicense = false,
+        )
+
+        /**
+         * Gradle itself, from Gradle.
+         *
+         * **Not re-hosted.** Unlike the JDK, the compiler and clang, this runs
+         * unmodified on any JVM and its publisher ships checksummed
+         * distributions; copying it onto this project's releases would add a
+         * second thing to keep current and nothing else. The pin is the version
+         * in the URL.
+         *
+         * The SHA-1 here was taken from the file after checking it against
+         * Gradle's own published SHA-256 — so the pin is anchored to what the
+         * publisher signed, not merely to what a download once returned.
+         */
+        val GRADLE = ToolchainComponent(
+            // Matches GradleToolchainProvider.GRADLE_COMPONENT_ID.
+            id = "gradle",
+            displayName = "Gradle 9.7.1",
+            archiveUrl = "https://services.gradle.org/distributions/gradle-9.7.1-bin.zip",
+            archiveSha1 = "9291eadd0d5f2122ff70115d5abfea4c60cdb7f5",
+            archiveBytes = 151_433_392L,
+            archive = ComponentArchive.ZipTree("gradle-9.7.1/lib/gradle-launcher-9.7.1.jar"),
+            installedBytes = 175_000_000L,
+            requiresSdkLicense = false,
+        )
+
+        /**
          * clang and lld, for building native code on the device.
          *
          * Ours, like the Kotlin compiler and for the same reason: nothing
