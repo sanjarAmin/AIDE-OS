@@ -40,3 +40,9 @@ cfd412ca653ce6fef8d5322c3e0e58b26f0c58dc3f72fc088d68b2e844c67860  228853  analys
 # nothing here will say so; the symptom would be a NoSuchMethodError inside
 # the cache.
 7dd15f9df1be238ffaa367ce6f556737a88031de4294dad18eef57c474ddf1d3  889211  caffeine.jar  com.github.ben-manes.caffeine:caffeine:3.1.8  central
+
+# kotlinx-collections-immutable was invisible until the relocation in
+# relocate.sh had been applied: before it, jdeps reported every reference as
+# unresolved and this one was lost among 298 others. It is a real dependency of
+# the Analysis API and, like caffeine, the platform is expected to supply it.
+72e9a9b0003ec5254b638186f7ca1675b08006bdde4c9c4c589970342ccd2e77  246751  kotlinx-collections-immutable.jar  org.jetbrains.kotlinx:kotlinx-collections-immutable-jvm:0.3.8  central

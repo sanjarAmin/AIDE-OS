@@ -5,9 +5,10 @@ Java and C/C++ and returns nothing for a `.kt` file, and the compiler archive we
 already ship has the K2 front end but **zero** Analysis API classes. This is the
 toolchain that closes it, and what it cost to establish that the route works.
 
-**Status: inputs pinned and reproducible; nothing dexed or running yet.**
-`fetch-jars.sh` rebuilds the set from a clean machine and verifies every jar.
-What has *not* happened is the dex build, the relocation §4 requires, or a
+**Status: inputs pinned, relocation done and verified; nothing dexed or
+running yet.** `fetch-jars.sh` rebuilds the set from a clean machine and
+verifies every jar; `relocate.sh` rewrites it onto the compiler's namespace and
+refuses to leave a partial result. What has *not* happened is the dex build or a
 single query answered on a device.
 
 ---
@@ -90,7 +91,8 @@ So the two cannot simply be put on one classpath. Three ways out:
 1. **Relocate the Analysis API's references** to match what we already ship —
    rewrite `com/intellij/` → `org/jetbrains/kotlin/com/intellij/`, and the same
    for guava, opentelemetry and picocontainer. §3 says the targets are all
-   present, so this is the cheap route and the one to try first.
+   present. **This is what `relocate.sh` does, and it works**: 8877 references
+   rewritten across 4327 classes, none left behind. §5 is what it took.
 2. **Ship the unrelocated compiler and a real intellij-core** beside it. Correct
    by construction, and it means a *second* Kotlin compiler in the APK.
 3. **Un-relocate the compiler's copy.** Rewriting the 54 MB artifact everything
@@ -100,7 +102,43 @@ So the two cannot simply be put on one classpath. Three ways out:
 architecture or libc: every one of these jars is portable JVM bytecode. What
 does not line up is a *name*, chosen by whoever shaded the compiler.
 
-## 5. What is still unknown
+## 5. A relocation is four rewrites, and three of them are invisible
+
+`Relocate.java` uses the ASM already inside `kotlin-compiler-embeddable`
+(`ClassRemapper` included), so it adds no dependency. The byte patching next
+door in `../kotlinc/build-kotlinc-dex.py` could not be used at all: it asserts
+every rewrite is the same length, because a constant-pool name is
+length-prefixed UTF-8, and these prefixes grow by 21 characters.
+
+`ClassRemapper` alone gets the constant pool right and **leaves three other
+carriers of class names untouched**. Each was found by counting what remained,
+and each fails in its own way and at its own distance from the cause:
+
+| Carrier | Found via | What a stale name does |
+|---|---|---|
+| Constant pool | `ClassRemapper` | nothing — this part is correct |
+| `@kotlin.Metadata` `d2` | 83 left after the first pass | jars **run** fine; Kotlin code *compiled against them* resolves parameters to classes that are not on the classpath |
+| `SourceDebugExtension` — the attribute **and** the `@kotlin.jvm.internal.SourceDebugExtension` annotation that duplicates it | 61, then 12 | an inlined stack frame is attributed to a class that does not exist |
+| Signature strings in `LDC` constants | the last 12 | a Kotlin callable reference (`Symbol::psi`) is compiled as `PropertyReference1Impl` holding its signature **as a string**; reflection then looks up a member by a descriptor naming a class that is not there, and it fails when the reference is *used*, not when it is made |
+
+Two of those are worth dwelling on.
+
+`d1` in `@Metadata` is protobuf whose class references are **indices into
+`d2`**, so `d2` is the string table and rewriting it is complete rather than
+approximate — there is no second place to fix.
+
+The `SourceDebugExtension` duplication is the trap that most looks like a bug in
+the fix. Handling the class attribute halves the residue and leaves the
+annotation copy behind, so the count drops and does not reach zero, which reads
+exactly like the rewrite not working.
+
+The signature-string rewrite is the one guarded heuristic here: it fires only on
+strings that name a shaded class **in descriptor position** (`Lcom/intellij/…`)
+*and* look like a signature. Prose mentioning the package is left alone. That
+guard is a judgement, and it is the line most worth re-reading if something
+reflective misbehaves later.
+
+## 6. What is still unknown
 
 Honest limits of what has been established. None of this is evidence yet.
 
@@ -116,3 +154,8 @@ Honest limits of what has been established. None of this is evidence yet.
   and does not predict this either way.
 - **The 2 missing platform classes may or may not matter.** Both sit on paths a
   simple completion request might never take. "Might never" is not a plan.
+- **`kotlinx-collections-immutable` was invisible until the relocation worked.**
+  Before it, `jdeps` reported every reference as unresolved and this one was
+  lost among 298; afterwards it stood out as the only non-optional gap besides
+  the two platform classes. Anything else hiding the same way will only appear
+  once the dex build runs.
