@@ -2,12 +2,12 @@
 
 > **Provenance.** This plan was written in a planning session and lived only in
 > that session's transcript until 2026-08-21, when it was recovered and
-> committed. It is reproduced as written, with eight amendments where reality
+> committed. It is reproduced as written, with ten amendments where reality
 > has since diverged; each is marked in place and listed at the end.
 
 ## Status
 
-*As of 2026-08-28.*
+*As of 2026-09-02.*
 
 | | Milestone | State |
 |---|---|---|
@@ -25,7 +25,7 @@
 | 🟢 | **M2** First APK ⭐ | **The thesis holds, and it is reachable.** A person can create a project, edit it, tap Build, and end up with the app installed — all on the device. |
 | 🟢 | **M3** Intelligence | Completion, diagnostics-as-you-type, go-to-definition, signature hints. **76 ms** warm completion on an AndroidX type against the 200 ms budget. |
 | 🟢 | **M4** Deps + Kotlin | A Kotlin project using `androidx.appcompat` builds on device: 41 artifacts resolved, kotlinc ahead of ECJ. Resolution reads Gradle Module Metadata, so AndroidX aligns the way Gradle aligns it. `engine/deps/FINDINGS.md` |
-| 🟡 | **M5** AI ⭐ | Feature-complete; three assertions parked until a live API key exists. Everything testable without one is tested. `ai/core/FINDINGS.md` |
+| 🟡 | **M5** AI ⭐ | Feature-complete, and **multi-provider** since 2026-09-02: Gemini (default, with Google Sign-In), OpenAI, anything OpenAI-compatible, and Anthropic. Three assertions still parked until a live API key exists. `ai/core/FINDINGS.md` — **not yet updated for the provider work** |
 | 🟢 | **M6** Compose | A Compose app builds, installs, launches and **draws**, on device, with its libraries' manifests merged. Six fixes, none visible to a build-only test. `engine/deps/FINDINGS.md` |
 | 🟢 | **M7** C/C++ | A JNI project builds on device: clang compiles `src/main/cpp`, the library is packaged into the APK, and it loads and runs. **clangd answers too** — diagnostics, completion, go-to-definition and hover for C and C++, through the same interface the Java service implements. Verified on API 34 x86_64 and Android 16 arm64. `tools/clang/FINDINGS.md` |
 | 🟡 | **M9** Gradle path | `:engine:gradle` builds an Android project on the device with the project's own Gradle, on Termux's OpenJDK started by our launcher — 871 KB APK in 28 s, accepted by the platform's package parser. Verified on x86_64 **and on Android 16 arm64**, which took disabling heap pointer tagging the emulator could never have shown. The JDK and Gradle **install themselves** now; an Android **SDK** is still staged by hand. `tools/rootfs/FINDINGS.md` |
@@ -171,7 +171,7 @@ Convert `:app` into a thin Compose shell over a multi-module Gradle build. Add t
 :terminal               PTY terminal emulator widget
 :runtime:linux          ~~Rootfs bootstrap, PRoot~~ — not needed; spike R11 closed that route
 
-:ai:core                Anthropic client, session state, tool definitions, context assembly
+:ai:core                Provider clients, session state, tool definitions, context assembly
 :ai:ui                  Chat panel, inline completion, quick-fix affordances
 
 :vcs:git                JGit — clone/commit/diff/push
@@ -247,14 +247,16 @@ Ordered by (value × feasibility), matching your stated priority:
 
 Bring-your-own-key, no backend infrastructure, no per-user liability for you.
 
-- **SDK:** `com.anthropic:anthropic-java` via `AnthropicOkHttpClient` (OkHttp works fine on Android).
-- **Model:** `claude-opus-5` with `thinking: {type: "adaptive"}` and `output_config.effort` — `low` for inline completion, `high` for chat and agentic edits.
+- **SDK:** `com.anthropic:anthropic-java` via `AnthropicOkHttpClient` (OkHttp works fine on Android). The other three providers are hand-rolled over OkHttp and `org.json`, because each speaks its own format and none ships an Android-friendly SDK worth the dependency.
+- **Model:** `claude-opus-5` with `thinking: {type: "adaptive"}` and `output_config.effort` — `low` for inline completion, `high` for chat and agentic edits. **Model IDs live in exactly one place**, `AiProviderType`; the clients derive their defaults from it. They were written in five places once and drifted, and a retired ID fails at no build or startup check — only as a 404 on the first request, which reads to the user as the assistant being broken.
 - **Streaming everywhere.** Token-by-token into the chat panel; also prevents HTTP timeouts on long agentic turns.
 - **Prompt caching is the cost lever, and it dictates prompt layout.** Caching is prefix-match, rendered `tools` → `system` → `messages`. So: stable tool definitions and system prompt first, then the project context block (file tree, open buffers, relevant symbols) behind a `cache_control: {type: "ephemeral"}` breakpoint, and only *then* the volatile user turn. Anything time-varying (timestamps, cursor position) must sit after the last breakpoint or it silently invalidates the whole cache. Verify with `usage.cache_read_input_tokens` — if it's zero across turns, something upstream is churning.
 - **Tool use turns the assistant into an agent:** `read_file`, `edit_file`, `grep`, `list_files`, `run_build`, `read_build_errors`. Gate every mutating tool behind an explicit user confirmation in the UI.
 - **Killer feature:** pipe compiler diagnostics straight into a fix suggestion. On-device builds produce errors on a device with no Stack Overflow tab open — one-tap "explain and fix this error" is worth more here than on desktop.
 - **Key storage:** Android Keystore-backed encrypted preferences. Never log the key; never ship a default key.
-- **The endpoint is configurable, and that is the whole multi-provider story for now.** `AnthropicOkHttpClient.baseUrl` points the same SDK at anything speaking this wire format — a self-hosted proxy, a gateway in front of another model. It costs one builder call and no abstraction. A genuinely different provider (Gemini, an OpenAI-shaped API) is a port rather than a setting: implicit prefix caching and verbatim thinking-block replay have no equivalent elsewhere, so `PromptAssembler`'s entire design would have nothing to do. Do not build a provider interface before something needs one — it would be the intersection of the two, which is the API minus everything M5 was built around.
+- **The endpoint is configurable, and that is the whole multi-provider story for now.** *(Amended — see [Amendment 10](#amendments). A provider interface exists as of 2026-09-02. The paragraph below is kept because its reasoning turned out to be right about the shape of the thing.)* `AnthropicOkHttpClient.baseUrl` points the same SDK at anything speaking this wire format — a self-hosted proxy, a gateway in front of another model. It costs one builder call and no abstraction. A genuinely different provider (Gemini, an OpenAI-shaped API) is a port rather than a setting: implicit prefix caching and verbatim thinking-block replay have no equivalent elsewhere, so `PromptAssembler`'s entire design would have nothing to do. Do not build a provider interface before something needs one — it would be the intersection of the two, which is the API minus everything M5 was built around.
+
+- **What the provider interface actually became.** `AiClient` did *not* subsume the Anthropic path, exactly as predicted above. It sits beside it: `AiSession` holds two loops, `sendAnthropic` over the SDK's own types and `sendGeneric` over `AiClient`, sharing nothing but tool execution. The Anthropic path keeps `PromptAssembler`, its cache breakpoints and verbatim thinking replay; the generic path has none of those because none of the other providers offer them. The provider-neutral vocabulary is deliberately thin — text, thought, function call, function response — and even that leaks: Gemini has no call ids and matches a result to its call by function name, while OpenAI rejects a `tool` message whose `tool_call_id` it did not issue. **The cost of the second loop is that every rule M5 paid for had to be re-established in it, and the existing suite went on passing throughout**, because all of it drove the other path. Anything added to one loop needs deciding for the other.
 
 ---
 
@@ -267,7 +269,7 @@ Bring-your-own-key, no backend infrastructure, no per-user liability for you.
 | **M2** First APK ⭐ | `:toolchain:native` (aapt2 in jniLibs), `:build:fast` for Java, PackageInstaller | Hello-world Java project builds + installs in **< 10s**. *This is the make-or-break milestone.* |
 | **M3** Intelligence | `:lsp:java`, completion, diagnostics-as-you-type, go-to-definition | Completion on AndroidX types < 200ms |
 | **M4** Deps + Kotlin | maven-resolver, AAR extraction, kotlinc integration | Project with `androidx.appcompat` + Kotlin sources builds |
-| **M5** AI ⭐ | `:ai:core` + `:ai:ui`, chat, inline completion, fix-my-error | BYO key → chat with project context, one-tap error fix works |
+| **M5** AI ⭐ | `:ai:core` + `:ai:ui`, chat, inline completion, fix-my-error — **plus a provider interface**: Gemini (default, Google Sign-In or key), OpenAI, OpenAI-compatible, Anthropic | BYO key → chat with project context, one-tap error fix works. Still needs a live key to close |
 | ✅ **M6** Compose | Compose compiler plugin hosted in on-device kotlinc | A Compose hello-world builds and runs |
 | **M7** C/C++ | Termux clang/lld toolchain download, NDK sysroot, clangd | JNI project with a native `.so` builds — **met**, clangd included |
 | **M8** Git + Terminal | JGit, PTY terminal | Clone from GitHub, edit, commit, push |
@@ -302,7 +304,7 @@ M0–M5 is the real v1.0. Everything from M6 on is expansion.
 - **Build-time budgets as failing tests**, not aspirations: M2's "< 10s hello-world" is an assertion, and a PR that regresses it fails.
 - **`:lsp` correctness**: fixture files with expected completion/diagnostic positions.
 - **Manual device matrix**: one low-RAM (4 GB) phone, one flagship, one tablet, spanning Android 10 / 14 / 16 — because W^X, PRoot, and exec behavior all vary by OS version and are invisible on an emulator.
-- **`:ai:core`**: mock the Anthropic transport for loop/tool logic; assert `cache_read_input_tokens > 0` on the second turn of a live smoke test to catch silent cache invalidation.
+- **`:ai:core`**: mock the transport for loop/tool logic; assert `cache_read_input_tokens > 0` on the second turn of a live smoke test to catch silent cache invalidation. **There are two loops to cover, not one** — `sendAnthropic` and `sendGeneric` share nothing but tool execution, so a green suite over either says nothing about the other. Drive the real provider clients against a local server rather than a fake `AiClient`: the wire format is where a provider rejects a request, and a fake never emits one.
 
 ---
 
@@ -356,6 +358,16 @@ M0–M5 is the real v1.0. Everything from M6 on is expansion.
    at all: Koin cannot hold `null` in a singleton, so `single<KotlinCompiler?>`
    had been crashing every project open on any device without the Kotlin
    toolchain since M4 — the state every new user is in.
+
+   **M5 went multi-provider on 2026-09-02**, which the AI Layer section covers
+   in full. What matters at roadmap level: `AiSession` now has *two* tool loops,
+   the acceptance test is unchanged and still unmet for want of a key, and two
+   things are knowingly unfinished. The Google OAuth client ID in
+   `GoogleAuthManager` is a placeholder, so Sign-In cannot complete until a real
+   client is registered for the package — Gemini by API key is unaffected. And
+   `ai/core/FINDINGS.md`, the milestone's other deliverable, has not been
+   updated for any of it; three providers and a second tool loop arrived without
+   a line in the document that is supposed to explain them.
 
 9. **M6 Compose — the build half is done and proven.** Spike R2 had already put
    the Compose plugin in the same dex archive as the compiler, and
@@ -579,3 +591,19 @@ and committed. The plan is otherwise as originally written.
 9. **`:build:*` renamed `:engine:*`** — a source directory named `build/` is the
    root project's own Gradle output directory. `gradlew clean` would delete it
    and `.gitignore` would hide it. Naming only; the plan's structure is intact.
+
+Made 2026-09-02:
+
+10. **A provider interface exists** — the AI Layer section said not to build one
+    before something needed it, and predicted that one would be "the API minus
+    everything M5 was built around." Something needed it: the assistant now
+    speaks to Gemini, OpenAI and OpenAI-compatible endpoints as well as
+    Anthropic, with Gemini the default.
+
+    The prediction was right about the shape, which is why the original
+    paragraph is kept rather than replaced. The interface did **not** become the
+    intersection of the two APIs — that would indeed have been worthless.
+    `AiClient` sits *beside* the Anthropic path instead of subsuming it, and the
+    price is a second tool loop with its own copy of every rule the first one
+    learned. Read as a warning it still reads correctly; read as a prohibition
+    it was overtaken.
