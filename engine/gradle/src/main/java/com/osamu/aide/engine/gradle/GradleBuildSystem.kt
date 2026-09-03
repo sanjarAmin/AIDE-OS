@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.flowOn
 import java.io.File
+import java.util.jar.JarFile
 
 /**
  * The other engine: a project's own Gradle build, run on the device.
@@ -54,10 +55,40 @@ class GradleBuildSystem(
     private val sdk: AndroidSdk? = null,
 ) : BuildSystem {
 
-    /** The jar holding `GradleMain`; its name carries the version. */
+    /** The distribution's entry-point jar; its name carries the version. */
     private val launcherJar: File?
         get() = File(gradleHome, "lib").listFiles()
             ?.firstOrNull { it.name.startsWith("gradle-launcher-") && it.extension == "jar" }
+
+    /**
+     * The launcher jar **and every jar its manifest names**.
+     *
+     * `gradle-launcher-9.7.1.jar` does not contain `GradleMain`. It is a thin
+     * jar whose manifest `Class-Path` points at `gradle-gradle-cli-main-*.jar`,
+     * which does — and our launcher hands the JVM a flat
+     * `-Djava.class.path`, so nothing expands that attribute for us. Putting
+     * only the launcher jar on the classpath starts a perfectly healthy JVM
+     * that then cannot find the class it was started for, which the launcher
+     * reports as exit 6 and reads like a broken install.
+     *
+     * Read from the manifest rather than hardcoded, because the jar it points
+     * at is a detail of the distribution's own layout: Gradle split the
+     * launcher at some version, and naming today's second jar here would break
+     * on the version that splits it again.
+     */
+    private fun launcherClassPath(): List<File> {
+        val jar = launcherJar ?: return emptyList()
+        val lib = jar.parentFile ?: return listOf(jar)
+        val referenced = runCatching {
+            JarFile(jar).use { it.manifest?.mainAttributes?.getValue("Class-Path") }
+        }.getOrNull()
+            .orEmpty()
+            .split(' ', '\t')
+            .filter { it.isNotBlank() }
+            .map { File(lib, it.trim()) }
+            .filter { it.isFile }
+        return listOf(jar) + referenced
+    }
 
     val isInstalled: Boolean get() = jvm.isInstalled && launcherJar != null
 
@@ -91,7 +122,7 @@ class GradleBuildSystem(
 
         val result = jvm.run(
             mainClass = GRADLE_MAIN,
-            classPath = listOfNotNull(launcherJar),
+            classPath = launcherClassPath(),
             vmOptions = vmOptions(),
             arguments = gradleArguments(request),
             workingDir = projectRoot,
@@ -177,6 +208,14 @@ class GradleBuildSystem(
     }
 
     private fun vmOptions(): List<String> = listOf(
+        // **Gradle ships its own native library, and not for this platform.**
+        // `libnative-platform.so` is published for `linux-amd64` and friends,
+        // meaning glibc; on Bionic it does not load and Gradle stops before it
+        // has configured anything, with "Could not initialize native services".
+        // Turning it off is Gradle's own supported answer for a platform it has
+        // no build for -- it falls back to pure-Java implementations of the
+        // file-system and process handling it would otherwise do natively.
+        "-Dorg.gradle.native=false",
         // The Termux JDK bakes in Termux's own prefix as java.io.tmpdir, and
         // that directory does not exist here; Gradle fails inside service
         // construction rather than saying so.
