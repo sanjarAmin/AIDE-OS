@@ -125,25 +125,106 @@ plainly installed.
 
 ---
 
+## 8. Gradle 9's launcher jar does not contain `GradleMain`
+
+`gradle-launcher-9.7.1.jar` is a thin jar. Its manifest `Class-Path` names
+`gradle-gradle-cli-main-9.7.1.jar`, which holds the entry point — and our
+launcher hands the JVM a flat `-Djava.class.path`, so nothing expands that
+attribute for us.
+
+The failure is unhelpful in a specific way: the JVM starts perfectly and then
+cannot find the class it was started for, which the launcher reports as exit 6.
+Nothing in that mentions the classpath.
+
+The classpath is now the launcher jar plus every jar its manifest names, read
+from the manifest rather than hardcoded — which jar holds the entry point is the
+distribution's business, and it has moved once already.
+
+---
+
+## 9. Gradle's own native library is built for glibc
+
+Gradle ships `libnative-platform.so` for `linux-amd64`, meaning glibc. On Bionic
+it does not load, and Gradle stops before configuring anything:
+
+```
+Could not initialize native services.
+> Failed to load native library 'libnative-platform.so' for Linux amd64.
+```
+
+`-Dorg.gradle.native=false` is Gradle's own answer for a platform it has no
+build for; it falls back to pure-Java file-system and process handling. This is
+the difference between "Gradle cannot run here" and a 52-second build.
+
+---
+
+## 10. What AGP actually needs from an SDK, measured
+
+Each of these was established by deleting something and building again, not by
+reading AGP's source.
+
+- **`android.jar` alone is enough for the platform.** With `data/`, `optional/`,
+  `skins/`, `templates/`, `core-for-system-modules.jar` and the rest of
+  `platforms/android-36/` deleted, the build succeeds. This is why the existing
+  platform component — which installs one file — is reusable as-is.
+- **`build-tools/` must exist and be *complete*, not useful.** Trimmed to only
+  the tools AGP runs, the build fails with `Installed Build Tools revision
+  36.0.0 is corrupted`. Trimmed instead by dropping `lib64/`, `lld-bin/` and
+  `renderscript/` — RenderScript's toolchain, dead since Android 12, and 111 MB
+  of the 147 — it passes. So 36 MB is downloaded to be looked at: almost nothing
+  in it can execute here (§ the table in Open, below).
+- **The licence file's format is exact.** `sdkmanager` writes a leading newline,
+  then one hash per line, with no trailing newline. The terms have been revised,
+  so a file carrying only the older hash fails with `some licences have not been
+  accepted` — which names neither the package nor the fact that a hash is what
+  is being compared. Both hashes are written, as `sdkmanager` itself does.
+- **Symlinks are fine.** The SDK root is composed out of links into the
+  component directories, and AGP follows them without complaint.
+
+---
+
+## 11. Staging as root breaks the app in ways that look like product bugs
+
+Not a finding about the product — a finding about *testing* it, and it cost more
+time than anything else here. `GradleBuildSystemTest` skips unless a JDK, a
+Gradle distribution and an SDK are staged out of band, and staging them as root
+produces failures that read exactly like code faults:
+
+- **`chcon -R` does not relabel symlinks.** Files extracted by root under
+  `/data/data` get `app_data_file:s0` without the app's MLS categories, and
+  `chcon -R` fixes the regular files while leaving every symlink behind. The app
+  then cannot read the link at all. Use `find … -type l -exec chcon -h`.
+- **This cost a whole false diagnosis.** The JVM was failing to load `libz.so.1`
+  and could not read a single jar, which looked like a real platform limit —
+  Termux's JDK needs a SONAME Bionic does not have. A fix was written for it,
+  with a confident explanation about app linker namespaces ignoring
+  `LD_LIBRARY_PATH`. **All of it was wrong.** The library was unreadable only
+  because it is shipped as a symlink and the symlink had the wrong label; with
+  the labels fixed, `LD_LIBRARY_PATH` finds it exactly as
+  `JvmToolchain.defaultEnvironment` intended, and the fix was reverted. The
+  lesson is the repo's own: `run-as` and root are not the app, and a staging
+  artefact will happily impersonate a platform limitation.
+- **Native libraries need `apk_data_file`.** Installing the test APK by hand can
+  leave `nativeLibraryDir`'s `.so` files labelled `app_data_file`, and executing
+  app *data* is the one thing the platform forbids — so `libjvmlauncher.so`
+  fails with `error=13` while looking perfectly executable. `restorecon -RF` on
+  that directory fixes it.
+
+The durable answer is to let the app unpack its own archives, which is what
+`unpack()` in the test does when it can see them. Its silence is the trap:
+it returns quietly when the archive is missing, so a wrong staging directory
+presents as "no JDK staged" rather than as a missing file.
+
+---
+
 ## Open
 
-- **There is still no SDK component.** The JDK and Gradle install themselves
-  now, and the engine configures the project itself, but the SDK is still staged
-  by hand for the tests — which is why `GradleBuildSystemTest` skips on a
-  machine that has not staged one.
+- ~~**There is no SDK component.**~~ **Closed.** `ANDROID_BUILD_TOOLS` installs
+  build-tools, and `GradleToolchainProvider.androidSdk()` composes an SDK root
+  from it and the existing platform component. §10 is what that rests on.
 
-  `ToolchainComponent.ANDROID_PLATFORM` does **not** close this. It installs a
-  bare `android.jar`, which is all `:engine:fast` ever needed; AGP wants an SDK
-  *directory* — `platforms/android-36/`, a `build-tools/` beside it, and an
-  accepted `licenses/android-sdk-license`.
-
-  **And build-tools cannot simply be downloaded.** Google publishes them as
-  Linux x86_64 binaries, which is the same wall aapt2 hit and is why §7 exists.
-  The working SDK the tests use was assembled by hand and nobody wrote down what
-  was in it, so this is the last thing between M9 and closed.
-
-  What is known, from reading a real `build-tools/36.0.0` (`file(1)` on each
-  entry) — this narrows the spike considerably and is worth not re-deriving:
+  The table below is why the download is 60 MB of things that cannot run, and
+  is kept because it is the answer to "surely we only need the tools it uses":
 
   | Entry | What it is | Can it run here |
   |---|---|---|
@@ -152,13 +233,9 @@ plainly installed.
   | `lib/d8.jar`, `lib/apksigner.jar` | ordinary jars | **Yes**, on our JVM |
   | `source.properties` | `Pkg.Revision=36.0.0` | metadata; how AGP reads the version |
 
-  So the executable half is entirely unusable and the useful half is jars. The
-  open question is therefore narrower than "port build-tools": it is **which of
-  these AGP 9 actually invokes as a process**. Modern AGP does dexing with R8
-  resolved from Maven, and signs and aligns in-process through `apksig` and
-  zipflinger, so the answer may be *none* — with the directory needing to exist,
-  carry `source.properties`, and little else. That is a guess until a minimal
-  SDK is assembled and the acceptance test run against it, which is the spike.
+  What AGP *executes* is our aapt2, via `android.aapt2FromMavenOverride`; it
+  dexes and signs with R8 and apksig resolved from Maven, inside its own JVM.
+  The rest is inventory it checks and never opens.
 - **Heap.** `org.gradle.jvmargs` is set by the test fixture, not the engine.
   What a Gradle build may use on a phone is R3's question, and answering it
   inside this engine would settle it by accident.
