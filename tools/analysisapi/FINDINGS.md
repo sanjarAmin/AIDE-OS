@@ -5,11 +5,12 @@ Java and C/C++ and returns nothing for a `.kt` file, and the compiler archive we
 already ship has the K2 front end but **zero** Analysis API classes. This is the
 toolchain that closes it, and what it cost to establish that the route works.
 
-**Status: inputs pinned, relocation done and verified; nothing dexed or
-running yet.** `fetch-jars.sh` rebuilds the set from a clean machine and
-verifies every jar; `relocate.sh` rewrites it onto the compiler's namespace and
-refuses to leave a partial result. What has *not* happened is the dex build or a
-single query answered on a device.
+**Status: the toolchain builds; nothing has run on a device.** `fetch-jars.sh`
+rebuilds the set from a clean machine and verifies every jar, `relocate.sh`
+rewrites it onto the compiler's namespace and refuses to leave a partial
+result, and `build-dex.sh` produces a **1.9 MB archive holding a 6.9 MB
+`classes.dex` of 7310 classes**, byte-identical between runs. What has *not*
+happened is loading it on ART or answering a single query.
 
 ---
 
@@ -138,13 +139,41 @@ strings that name a shaded class **in descriptor position** (`Lcom/intellij/…`
 guard is a judgement, and it is the line most worth re-reading if something
 reflective misbehaves later.
 
-## 6. What is still unknown
+## 6. Dexing was the easy part, which was not expected
+
+The compiler needed seven startup fixes before it ran on ART, so the working
+assumption was that this would need its own crop. It did not.
+
+`d8` accepted the relocated set at `--min-api 30` — the same floor as the
+compiler archive and aapt2 — with no shim, no class replaced and no rewrite.
+The reason is visible in what the Analysis API reaches for: **no
+`java.lang.management`, no AWT, and three classes touching `javax.swing`**,
+against a compiler that needed `java.lang.management` rewritten wholesale. This
+is a library that reads code, not one that runs a build.
+
+Two things the archive gets right that are easy to miss:
+
+- **The compiler jars are `--classpath`, not input.** They are already dexed in
+  the kotlinc archive; dexing them again would put two copies of the platform on
+  one device and leave the loader's parent ambiguous.
+- **`META-INF/analysis-api/*.xml` ships beside the dex.** Those descriptors are
+  how the API registers its services, and they are taken from the *relocated*
+  jars so the class names in them match the dex next to them. An archive with
+  the dex and without them loads every class and provides nothing.
+
+The archive is **reproducible**: `d8` is deterministic, so with timestamps
+normalised two builds are byte-identical. That is what lets it be pinned the way
+`jars.lock` pins its inputs, rather than merely published.
+
+## 7. What is still unknown
 
 Honest limits of what has been established. None of this is evidence yet.
 
-- **Nothing has been dexed.** `../kotlinc/FINDINGS.md` records seven startup
-  fixes that the compiler needed before it ran on ART, and there is no reason to
-  assume this needs zero. The relocation in §4 has to survive d8 as well.
+- **Nothing has been loaded on ART.** Dexing cleanly is not running: the
+  compiler dexed cleanly too and then needed seven fixes to start. The
+  classloader arrangement is designed and untried — the Analysis API archive
+  wants the kotlinc archive's loader as its *parent*, since it is compiled
+  against those classes and must not get a second copy.
 - **Nothing has answered a query.** Feasibility of the *closure* is not
   feasibility of *completion*.
 - **No latency number exists.** M3 holds Java completion to a 200 ms budget and

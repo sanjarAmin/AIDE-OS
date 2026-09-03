@@ -142,6 +142,22 @@ public final class Relocate {
                     if (name.startsWith("META-INF/services/")) {
                         bytes = relocateText(bytes);
                     }
+                    // The plugin descriptors under META-INF/analysis-api are
+                    // the same hazard in XML: `serviceInterface` and
+                    // `serviceImplementation` are class names, and a descriptor
+                    // naming a class that is not there registers nothing and
+                    // says nothing.
+                    //
+                    // Note what must *not* move: `defaultExtensionNs="com.intellij"`
+                    // is an extension-point namespace, a string the platform
+                    // matches on, not a type. Relocating it would unregister
+                    // every extension in the file. The dotted rewrite is
+                    // anchored on a trailing dot for exactly that reason --
+                    // `com.intellij.` matches the class, `com.intellij"` does
+                    // not match the namespace.
+                    if (name.startsWith("META-INF/analysis-api/") && name.endsWith(".xml")) {
+                        bytes = relocateDottedBytes(bytes);
+                    }
                     copied++;
                 }
 
@@ -311,6 +327,37 @@ public final class Relocate {
             result.append(relocateDotted(line));
         }
         return result.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    /**
+     * The dotted rewrite, applied anywhere in a blob of text.
+     *
+     * Each shaded prefix is matched **with its trailing dot**, which is what
+     * separates a class name from a namespace that merely shares its start.
+     */
+    private static byte[] relocateDottedBytes(byte[] bytes) {
+        String text = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+        String dottedPrefix = PREFIX.replace('/', '.');
+        for (String shaded : SHADED) {
+            String dotted = shaded.replace('/', '.');
+            StringBuilder out = new StringBuilder(text.length() + 64);
+            int from = 0;
+            while (true) {
+                int at = text.indexOf(dotted, from);
+                if (at < 0) {
+                    out.append(text, from, text.length());
+                    break;
+                }
+                boolean done = at >= dottedPrefix.length()
+                    && text.startsWith(dottedPrefix, at - dottedPrefix.length());
+                out.append(text, from, at);
+                if (!done) out.append(dottedPrefix);
+                out.append(dotted);
+                from = at + dotted.length();
+            }
+            text = out.toString();
+        }
+        return text.getBytes(java.nio.charset.StandardCharsets.UTF_8);
     }
 
     /** The same mapping for names written with dots rather than slashes. */
