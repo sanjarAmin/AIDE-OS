@@ -23,7 +23,7 @@ import kotlinx.coroutines.withContext
  */
 class AnthropicAiClient(
     private val client: AnthropicClient,
-    override val model: String = "claude-3-7-sonnet-20250219",
+    override val model: String = AiProviderType.ANTHROPIC.defaultModel,
 ) : AiClient {
 
     override val provider: AiProviderType = AiProviderType.ANTHROPIC

@@ -18,7 +18,7 @@ import org.json.JSONObject
 class OpenAiClient(
     private val apiKey: String? = null,
     private val customBaseUrl: String? = null,
-    override val model: String = "gpt-4o",
+    override val model: String = AiProviderType.OPENAI.defaultModel,
     override val provider: AiProviderType = AiProviderType.OPENAI,
     private val httpClient: OkHttpClient = OkHttpClient(),
 ) : AiClient {

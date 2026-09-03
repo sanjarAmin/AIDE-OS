@@ -40,7 +40,7 @@ data class ChatUiState(
     /** True when there is no API key or sign-in for the active provider. */
     val needsKey: Boolean = false,
     val activeProvider: AiProviderType = AiProviderType.GEMINI,
-    val activeModel: String = "gemini-3.7-flash",
+    val activeModel: String = AiProviderType.DEFAULT.defaultModel,
     val isGoogleSignedIn: Boolean = false,
     val userEmail: String? = null,
     val shareProjectContext: Boolean = true,

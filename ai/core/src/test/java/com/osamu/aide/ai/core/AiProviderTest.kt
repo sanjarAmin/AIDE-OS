@@ -13,12 +13,56 @@ class AiProviderTest {
         assertEquals("Google Gemini", AiProviderType.DEFAULT.displayName)
     }
 
+    /**
+     * The current defaults, spelled out.
+     *
+     * This test has to be edited when a provider retires a generation, and that
+     * is the point: the IDs here went stale once already, and nothing failed
+     * until a request came back 404. A test that has to be updated deliberately
+     * is the cheapest alarm available.
+     */
     @Test
-    fun gemini_default_model_is_gemini_3_7_flash() {
-        assertEquals("gemini-3.7-flash", AiProviderType.GEMINI.defaultModel)
-        assertTrue(AiProviderType.GEMINI.availableModels.contains("gemini-3.7-flash"))
-        assertTrue(AiProviderType.GEMINI.availableModels.contains("gemini-3.5-flash-lite"))
-        assertTrue(AiProviderType.GEMINI.availableModels.contains("gemini-2.5-pro"))
+    fun each_provider_defaults_to_a_current_model() {
+        assertEquals("gemini-3.8-flash", AiProviderType.GEMINI.defaultModel)
+        assertEquals("gpt-5.6", AiProviderType.OPENAI.defaultModel)
+        assertEquals("claude-opus-5", AiProviderType.ANTHROPIC.defaultModel)
+    }
+
+    /**
+     * No retired ID survives anywhere in the menu.
+     *
+     * The menu is what the user picks from, so a dead ID in it is a 404 they
+     * chose. These are the ones this list actually shipped with.
+     */
+    @Test
+    fun no_retired_model_is_still_offered() {
+        val retired = listOf(
+            "gpt-4o", "gpt-4o-mini", "o3-mini", "o1",
+            "claude-3-7-sonnet-20250219", "claude-3-5-sonnet-latest", "claude-3-5-haiku-latest",
+            "gemini-2.0-flash", "gemini-2.0-flash-lite",
+        )
+        for (provider in AiProviderType.entries) {
+            for (model in provider.availableModels) {
+                assertTrue(
+                    "$provider still offers the retired model $model",
+                    model !in retired,
+                )
+            }
+        }
+    }
+
+    /**
+     * A client's default is the enum's default.
+     *
+     * Each client used to carry its own literal, and that is exactly how the
+     * two drifted: the enum offered one model and the client requested another,
+     * with nothing to say so. Tying them is the fix; this is what keeps them
+     * tied.
+     */
+    @Test
+    fun a_client_defaults_to_the_model_its_provider_advertises() {
+        assertEquals(AiProviderType.GEMINI.defaultModel, GeminiAiClient().model)
+        assertEquals(AiProviderType.OPENAI.defaultModel, OpenAiClient().model)
     }
 
     @Test

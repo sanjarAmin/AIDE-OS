@@ -5,6 +5,16 @@ package com.osamu.aide.ai.core
  *
  * [GEMINI] is the flagship default provider, matching Android Studio's Gemini
  * integration with Google Sign-In and Gemini API keys.
+ *
+ * **This is the only place a model ID is written.** Each client used to carry
+ * its own default as a literal as well, and the two drifted: the enum offered
+ * models the client would never pick, and both lists outlived the models
+ * themselves. A retired ID does not fail at build time, or at startup, or when
+ * the user picks it from the menu — it fails on the first request, as a 404
+ * from the provider, which reads to the user as "the assistant is broken".
+ *
+ * These expire. When a provider retires a generation, this list is what needs
+ * editing; nothing else should need touching.
  */
 enum class AiProviderType(
     val id: String,
@@ -15,8 +25,9 @@ enum class AiProviderType(
     GEMINI(
         id = "gemini",
         displayName = "Google Gemini",
-        defaultModel = "gemini-3.7-flash",
+        defaultModel = "gemini-3.8-flash",
         availableModels = listOf(
+            "gemini-3.8-flash",
             "gemini-3.7-flash",
             "gemini-3.5-flash-lite",
             "gemini-3.1-pro-preview",
@@ -26,23 +37,25 @@ enum class AiProviderType(
     OPENAI(
         id = "openai",
         displayName = "OpenAI",
-        defaultModel = "gpt-4o",
+        // `gpt-5.6` is the alias for `gpt-5.6-sol`, the flagship; terra and luna
+        // are the cheaper tiers of the same generation. The GPT-4o and o-series
+        // IDs this list used to carry are retired.
+        defaultModel = "gpt-5.6",
         availableModels = listOf(
-            "gpt-4o",
-            "gpt-4o-mini",
-            "o3-mini",
-            "o1",
+            "gpt-5.6",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
         ),
     ),
     ANTHROPIC(
         id = "anthropic",
         displayName = "Anthropic",
-        defaultModel = "claude-3-7-sonnet-20250219",
+        defaultModel = "claude-opus-5",
         availableModels = listOf(
-            "claude-3-7-sonnet-20250219",
-            "claude-3-5-sonnet-latest",
-            "claude-3-5-haiku-latest",
             "claude-opus-5",
+            "claude-sonnet-5",
+            "claude-haiku-4-5",
+            "claude-fable-5-1",
         ),
     ),
     CUSTOM(

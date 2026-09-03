@@ -20,7 +20,7 @@ import java.util.UUID
 class GeminiAiClient(
     private val apiKey: String? = null,
     private val oauthToken: String? = null,
-    override val model: String = "gemini-3.7-flash",
+    override val model: String = AiProviderType.GEMINI.defaultModel,
     private val customEndpoint: String? = null,
     private val httpClient: OkHttpClient = OkHttpClient(),
 ) : AiClient {
