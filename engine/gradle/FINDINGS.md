@@ -139,11 +139,26 @@ plainly installed.
 
   **And build-tools cannot simply be downloaded.** Google publishes them as
   Linux x86_64 binaries, which is the same wall aapt2 hit and is why §7 exists.
-  What AGP actually reads out of that directory when it runs here, and which of
-  it must be a native binary rather than a jar, is not known — the working SDK
-  the tests use was assembled by hand and nobody wrote down what was in it.
-  **That is a spike, not an afternoon**, and it is the last thing between M9 and
-  closed.
+  The working SDK the tests use was assembled by hand and nobody wrote down what
+  was in it, so this is the last thing between M9 and closed.
+
+  What is known, from reading a real `build-tools/36.0.0` (`file(1)` on each
+  entry) — this narrows the spike considerably and is worth not re-deriving:
+
+  | Entry | What it is | Can it run here |
+  |---|---|---|
+  | `aapt2`, `zipalign`, `aidl`, `aapt`, `dexdump`, `split-select` | x86_64 ELF, glibc | **No** — wrong architecture on a phone, wrong libc on the emulator |
+  | `d8`, `apksigner` | `#!/bin/bash` wrappers | Not as written — Android has `sh`, not `bash` |
+  | `lib/d8.jar`, `lib/apksigner.jar` | ordinary jars | **Yes**, on our JVM |
+  | `source.properties` | `Pkg.Revision=36.0.0` | metadata; how AGP reads the version |
+
+  So the executable half is entirely unusable and the useful half is jars. The
+  open question is therefore narrower than "port build-tools": it is **which of
+  these AGP 9 actually invokes as a process**. Modern AGP does dexing with R8
+  resolved from Maven, and signs and aligns in-process through `apksig` and
+  zipflinger, so the answer may be *none* — with the directory needing to exist,
+  carry `source.properties`, and little else. That is a guess until a minimal
+  SDK is assembled and the acceptance test run against it, which is the spike.
 - **Heap.** `org.gradle.jvmargs` is set by the test fixture, not the engine.
   What a Gradle build may use on a phone is R3's question, and answering it
   inside this engine would settle it by accident.
