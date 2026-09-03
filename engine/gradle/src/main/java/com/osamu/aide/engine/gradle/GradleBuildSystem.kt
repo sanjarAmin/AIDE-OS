@@ -43,6 +43,15 @@ class GradleBuildSystem(
      * user's home, which on Android is not a place anything should write to.
      */
     private val gradleUserHome: File,
+    /**
+     * The SDK to build against, or null on a device where none is installed.
+     *
+     * Nullable rather than absent because this engine is the escape hatch: the
+     * fast engine needs only `android.jar`, so a device can perfectly well have
+     * a working IDE and no SDK for Gradle to use. That is a refusal with a
+     * sentence, not a broken app.
+     */
+    private val sdk: AndroidSdk? = null,
 ) : BuildSystem {
 
     /** The jar holding `GradleMain`; its name carries the version. */
@@ -71,6 +80,12 @@ class GradleBuildSystem(
         // this produced LINK_RESOURCES four times interleaved with DEX twice,
         // which is a flickering progress bar rather than progress.
         val reported = mutableSetOf<BuildStage>()
+
+        // Before Gradle starts, not as part of writing the project: an imported
+        // project's local.properties names a desktop SDK path, and AGP prefers
+        // it to anything in the environment. AndroidSdk explains why rewriting
+        // this particular file is legitimate.
+        sdk?.pointProjectAtSdk(projectRoot)
 
         send(BuildEvent.Note("Running Gradle. The first build downloads its dependencies."))
 
@@ -129,18 +144,37 @@ class GradleBuildSystem(
         !File(request.project.rootDir, "settings.gradle.kts").isFile &&
             !File(request.project.rootDir, "settings.gradle").isFile ->
             "This project has no settings.gradle, so Gradle has nothing to build."
+        sdk == null ->
+            "No Android SDK is installed. Gradle builds compile against a real SDK; " +
+                "the fast engine does not."
+        sdk.platformJar == null ->
+            "The Android SDK at ${sdk.dir} has no platform installed, so there is " +
+                "nothing to compile against."
+        // Checked here rather than left to AGP, which does say so itself --
+        // after a minute of starting, configuring and executing on hardware
+        // that can spare neither.
+        !sdk.licenceAccepted ->
+            "The Android SDK licence has not been accepted, and Gradle will not " +
+                "build until it is."
         else -> null
     }
 
-    private fun gradleArguments(request: BuildRequest): List<String> = listOf(
-        if (request.debuggable) "assembleDebug" else "assembleRelease",
+    private fun gradleArguments(request: BuildRequest): List<String> = buildList {
+        add(if (request.debuggable) "assembleDebug" else "assembleRelease")
         // **Not a preference.** Gradle's daemon is another JVM, and although
         // the launcher makes one startable, a daemon that outlives the build
         // holds a heap the size of the build on a device that has none to
         // spare. The single-use daemon Gradle forks anyway is enough.
-        "--no-daemon",
-        "-g", gradleUserHome.absolutePath,
-    )
+        add("--no-daemon")
+        add("-g")
+        add(gradleUserHome.absolutePath)
+        // **On the command line, not in gradle.properties.** That file is the
+        // user's, checked into their repository and carrying their own
+        // settings; a build that rewrites it to inject a tool path corrupts
+        // something the user owns. A project property is scoped to this
+        // invocation and leaves nothing behind.
+        sdk?.aapt2Override()?.let { add("-Pandroid.aapt2FromMavenOverride=${it.absolutePath}") }
+    }
 
     private fun vmOptions(): List<String> = listOf(
         // The Termux JDK bakes in Termux's own prefix as java.io.tmpdir, and

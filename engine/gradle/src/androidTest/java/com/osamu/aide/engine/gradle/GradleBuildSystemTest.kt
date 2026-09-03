@@ -45,6 +45,7 @@ class GradleBuildSystemTest {
     private lateinit var engine: GradleBuildSystem
     private lateinit var project: Project
     private lateinit var support: File
+    private lateinit var androidSdk: AndroidSdk
 
     @Before
     fun setUp() {
@@ -71,10 +72,15 @@ class GradleBuildSystemTest {
         assertTrue("preparing the JDK failed", jvm.prepare() is AppResult.Success)
 
         support = File(context.filesDir, "gradle-home").apply { mkdirs() }
-        engine = GradleBuildSystem(jvm, gradleHome!!, dispatchers, support)
+        androidSdk = AndroidSdk(
+            dir = sdk,
+            bundledAapt2 = File(context.applicationInfo.nativeLibraryDir, "libaapt2.so"),
+            linkDir = File(support, "bin"),
+        )
+        engine = GradleBuildSystem(jvm, gradleHome!!, dispatchers, support, androidSdk)
         assertTrue("the engine reports itself uninstalled", engine.isInstalled)
 
-        project = writeProject(sdk)
+        project = writeProject()
     }
 
     /** Unpacked by this process; see `tools/clang/FINDINGS.md` §4. */
@@ -90,7 +96,7 @@ class GradleBuildSystemTest {
             .apply { inputStream.readBytes(); waitFor(10, TimeUnit.MINUTES) }
     }
 
-    private fun writeProject(sdk: File): Project {
+    private fun writeProject(): Project {
         val root = File(context.filesDir, "gradle-project").apply { deleteRecursively(); mkdirs() }
         File(root, "src/main/java/demo/app").mkdirs()
         File(root, "settings.gradle.kts").writeText(
@@ -121,19 +127,14 @@ class GradleBuildSystemTest {
         File(root, "src/main/java/demo/app/Hello.java").writeText(
             "package demo.app;\npublic class Hello { public static String greet() { return \"gradle\"; } }\n",
         )
-        File(root, "local.properties").writeText("sdk.dir=${sdk.absolutePath}\n")
-        // aapt2 from this APK: AGP's own is a Linux x86_64 binary. The name
-        // must be `aapt2`, hence the link rather than the .so directly.
-        val bin = File(support, "bin").apply { mkdirs() }
-        val aapt2 = File(bin, "aapt2")
-        aapt2.delete()
-        java.nio.file.Files.createSymbolicLink(
-            aapt2.toPath(),
-            File(context.applicationInfo.nativeLibraryDir, "libaapt2.so").toPath(),
-        )
-        File(root, "gradle.properties").writeText(
-            "android.aapt2FromMavenOverride=${aapt2.absolutePath}\norg.gradle.jvmargs=-Xmx1g\n",
-        )
+        // No local.properties and no aapt2 override written here any more:
+        // both are the engine's job now, which is the point of this fixture
+        // looking like an ordinary project rather than a staged one.
+        //
+        // The heap size stays, and stays here: what a Gradle build may use on a
+        // phone is R3's question, and inventing an answer inside the engine
+        // would settle it by accident.
+        File(root, "gradle.properties").writeText("org.gradle.jvmargs=-Xmx1g\n")
 
         return Project(
             name = "gradledemo",

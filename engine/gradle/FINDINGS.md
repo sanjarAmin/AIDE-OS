@@ -98,15 +98,57 @@ output renaming the project does — none of which this engine decides. It takes
 the newest `*.apk` under `outputs/apk/<variant>/`, so a stale artifact from an
 earlier variant is not mistaken for this build's.
 
+## 7. An imported project already knows where its SDK is, and it is wrong
+
+The project M9 exists to build is one that came from somewhere else, and every
+such project carries a `local.properties` whose `sdk.dir` names a path on a
+desktop. **AGP prefers it to `ANDROID_HOME`**, so exporting the environment
+variable and hoping is not enough — the stale line has to go.
+
+Rewriting it is legitimate where rewriting `gradle.properties` would not be.
+`local.properties` is machine-specific by definition, gitignored by every
+Android template, and Android Studio rewrites it for exactly this reason;
+`gradle.properties` is checked in and carries the user's own settings. So
+`sdk.dir` is rewritten in place — **and only that key**, because a project may
+keep its NDK path or a signing location in the same file, and taking those away
+to fix the SDK path trades one broken build for another.
+
+Everything else the engine needs goes on the **command line** instead:
+`-Pandroid.aapt2FromMavenOverride=…` is scoped to the invocation and leaves
+nothing behind in a file the user owns. `AndroidSdkTest` pins both halves,
+including that `gradle.properties` is not touched at all.
+
+The aapt2 that property points at is ours, and the link to it is rebuilt on
+every build: `nativeLibraryDir` moves when the app is updated, and a link left
+from the previous install fails as a *missing binary* on a device where aapt2 is
+plainly installed.
+
+---
+
 ## Open
 
-- **Installation.** The JDK, Gradle and an Android SDK are staged by hand for
-  the tests. `:toolchain:manager` has no component for any of them, and hosting
-  a ~300 MB JDK is a decision for the project owner.
-- **aapt2.** AGP fetches a **Linux x86_64** aapt2 from Maven, which cannot run
-  here at all. `android.aapt2FromMavenOverride` has to point at ours, and AGP
-  insists the path be named `aapt2` — so a symlink, not the `.so` directly.
-  Nothing in the engine writes that property yet; the tests do it by hand.
-- **Multi-module projects** are untried. Everything built so far is one module.
+- **There is still no SDK component.** The JDK and Gradle install themselves
+  now, and the engine configures the project itself, but the SDK is still staged
+  by hand for the tests — which is why `GradleBuildSystemTest` skips on a
+  machine that has not staged one.
+
+  `ToolchainComponent.ANDROID_PLATFORM` does **not** close this. It installs a
+  bare `android.jar`, which is all `:engine:fast` ever needed; AGP wants an SDK
+  *directory* — `platforms/android-36/`, a `build-tools/` beside it, and an
+  accepted `licenses/android-sdk-license`.
+
+  **And build-tools cannot simply be downloaded.** Google publishes them as
+  Linux x86_64 binaries, which is the same wall aapt2 hit and is why §7 exists.
+  What AGP actually reads out of that directory when it runs here, and which of
+  it must be a native binary rather than a jar, is not known — the working SDK
+  the tests use was assembled by hand and nobody wrote down what was in it.
+  **That is a spike, not an afternoon**, and it is the last thing between M9 and
+  closed.
+- **Heap.** `org.gradle.jvmargs` is set by the test fixture, not the engine.
+  What a Gradle build may use on a phone is R3's question, and answering it
+  inside this engine would settle it by accident.
+- **Multi-module projects** are untried. Everything built so far is one module,
+  and an Android Studio project is almost never one module — so M9's acceptance
+  test is weaker than it reads.
 - **Cancellation.** Collecting the flow can be cancelled, but the Gradle process
   is not yet killed when it is.

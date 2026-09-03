@@ -27,7 +27,8 @@ emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu host
 ## Layout
 
 ```
-:ai:core             Anthropic client, session loop, tools, prompts. FINDINGS.
+:ai:core             Provider clients, session loop, tools, prompts. Two loops:
+                     one Anthropic, one for the rest. FINDINGS.
 :ai:ui               The chat panel. Thin: the decisions live in :ai:core
 :app                 Compose shell — navigation, DI (Koin), screens
 :core:common         Result types, dispatchers, logging
