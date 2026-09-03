@@ -11,6 +11,12 @@ has a test that fails when the line is removed.
 
 Measured on `aideos_test` (API 34, x86_64) unless stated otherwise.
 
+**§§1–10 were written when this layer spoke to Anthropic and nothing else.**
+Since 2026-09-02 it speaks to Gemini (the default), OpenAI and anything
+OpenAI-compatible as well, and §§11–14 are what that cost. Read §11 first if you
+are changing anything in `AiSession`: there are two tool loops now, and the
+rules above hold in only one of them.
+
 ---
 
 ## 1. Koin cannot hold `null` in a singleton — and it took the app down
@@ -71,6 +77,10 @@ messages += assistantTurn(text)  // wrong: silently drops thinking and tool_use
 thinking block with a signature specifically so a session that drops them fails
 here rather than against the real endpoint.
 
+**This is Anthropic-only, but the hazard is not.** The other providers have no
+thinking blocks to preserve, and the same mistake still breaks them in a
+different shape. See §12.
+
 ---
 
 ## 3. Parallel tool results go in **one** user message
@@ -84,6 +94,10 @@ Related and sharper: **every `tool_use` needs a matching `tool_result`,
 including refused ones.** A missing result is a 400. A tool the user declined is
 a result with `is_error: true` — which is also information the model can act on,
 where a hole is not.
+
+**"One message" is a fact about this API, not about tool loops.** It holds for
+Gemini and is false for OpenAI. Porting this section literally to another
+provider asserts a bug — §12.
 
 ---
 
@@ -260,6 +274,140 @@ structurally different provider is a port, not a setting — see `docs/PLAN.md`.
 
 ---
 
+## 11. There are two tool loops, and the suite covered one of them
+
+*Added 2026-09-02, with the multi-provider work.*
+
+`AiSession` holds `sendAnthropic` and `sendGeneric`. They share `executeTool`
+and nothing else — not the history, not the request assembly, not the rule about
+batching results. `sendAnthropic` speaks the SDK's `MessageParam`;
+`sendGeneric` speaks `AiClient`'s `AiMessage`/`AiPart`.
+
+**The rules that live in the loop had to be re-established in the second one,
+and the suite went on passing while they were not.** All 87 instrumented tests
+in this module drove the Anthropic path, because that is the path they were
+written for. A second loop with no §2 and no §3 in it is not a red suite; it is
+a green one, and the assistant answers correctly on the provider nobody is
+testing.
+
+What carries over for free is whatever sits behind `executeTool`: §6's relative
+paths are enforced by `ProjectFiles`, and the confirmation gate by
+`ProjectToolset.execute`, so both loops inherit them. That is the whole list.
+Anything above that line — history, request assembly, result batching — exists
+twice and agrees only by hand.
+
+The lesson generalises past this file: **a green suite is evidence about the
+code paths it executes and nothing else.** Two implementations of one behaviour
+need two sets of tests, and the second set does not write itself when the first
+one passes.
+
+`GenericSessionTest` is the second set — the nine cases from `AiSessionTest`
+ported, plus two the generic path needs on its own, with `GeminiSessionTest` and
+`OpenAiSessionTest` supplying the provider. It drives the **real**
+`GeminiAiClient` and `OpenAiClient` against `ScriptedProviderApi` rather than a
+fake `AiClient`, for the reason §7 gives about fakes: the wire format is where a
+provider rejects a request, and a fake never emits one.
+
+Two of them exist because the generic loop builds its own system instruction
+rather than going through `PromptAssembler`, so nothing on the Anthropic side
+guarantees either:
+
+- **the tools are declared** — a request with no declarations gets a perfectly
+  good answer; the model just never asks to read a file, and the assistant
+  quietly degrades into a chatbot that cannot see the project;
+- **the project context is in the instruction** — same shape, no error, it
+  simply answers about a project it cannot see.
+
+Both were verified by mutation rather than assumed: forcing `tools` to
+`emptyList()` and dropping the assistant turn from the history produces eight
+failures across the two providers, in exactly the tests that name those things.
+
+---
+
+## 12. The provider-neutral vocabulary leaks, and porting a rule can assert a bug
+
+*Added 2026-09-02.*
+
+`AiPart` — text, thought, function call, function response — is deliberately
+thin, and it still does not mean the same thing on both sides of it.
+
+**Tool results batch differently, and §3 is the trap.** Anthropic wants every
+`tool_result` in one user message. Gemini agrees: one `user` turn of
+`functionResponse` parts. OpenAI wants the opposite — one `role: "tool"` message
+*per* call. A test ported literally from `AiSessionTest` asserts the Anthropic
+shape and therefore asserts an OpenAI bug. `GenericSessionTest` keeps only the
+provider-independent claim in the shared case (both calls ran, neither result
+was dropped) and pushes the shape into each subclass.
+
+**Call ids mean different things.** OpenAI issues a `tool_call_id` and rejects a
+`tool` message carrying one it did not issue. Gemini has no call ids at all and
+matches a result to its call by function name — so `GeminiAiClient` synthesises
+a UUID on parse purely to satisfy the shared type, and that id never goes back
+on the wire. The shared field invites one provider's convention into the other,
+which is why the id round trip is pinned only where it is real
+(`OpenAiSessionTest.a_result_carries_back_the_id_the_server_issued`) and why the
+shared refusal case asserts on the tool *name*.
+
+This bit during the port. The shared declined-edit test first asserted the id
+appeared in the follow-up request; it passes on OpenAI and fails on Gemini, for
+a correct implementation.
+
+**§2's failure survives without §2's mechanism.** There are no thinking blocks
+here, but the history still has to carry the turn that asked for a tool.
+Dropping it leaves the result an orphan: OpenAI answers with a 400 naming an
+orphaned `tool` message, Gemini just loses the thread. Same defect, different
+symptom, no local sign of it either way.
+
+---
+
+## 13. `AiPart.Thought` does not round-trip on the Gemini path
+
+*Added 2026-09-02. Known gap, not a fixed bug.*
+
+`GeminiAiClient.parseResponse` only ever emits `AiPart.Text` and
+`AiPart.FunctionCall` — it never constructs a `Thought`. The encoder, meanwhile,
+writes a `Thought` out as an ordinary `text` part and drops its `signature`.
+
+So thoughts cannot survive a turn on this path today. It is inert because
+nothing produces one; it stops being inert the moment thought signatures are
+parsed, and then it is §2 again with Gemini's spelling. Anything added here
+needs the encoder and the parser changed together.
+
+Adjacent and same species: the thinking budget is gated on
+`model.contains("3.7") || model.contains("flash")`. That is a version substring,
+and it rots the way §14 describes. It is currently harmless — every Flash model
+in the list matches on `"flash"` — but the Pro models get no budget, which is a
+product decision nobody has actually made.
+
+---
+
+## 14. Model IDs rot, and nothing catches it until a 404
+
+*Added 2026-09-02.*
+
+The provider menu shipped IDs that no longer existed: OpenAI's entire list was
+the retired GPT-4o and o-series generation, and Anthropic's was three Claude 3.x
+IDs beside one current model.
+
+**A dead ID fails at none of the places that would catch it.** Not the build,
+not startup, not when the user picks it from the menu. It fails on the first
+request, as a 404 from the provider, which reaches the user as "the assistant is
+broken" and reaches the log as someone else's error message.
+
+They rotted because they were written in **five** places: `AiProviderType`, plus
+a literal default in each of the three clients and in `ChatController`. The enum
+offered models the client would never request and nothing said so. The clients
+now derive their defaults from the enum, which makes it the only place a model
+ID appears, and `AiProviderTest` pins that they agree.
+
+**Check the provider's own documentation, not your memory of it.** This was
+established the embarrassing way: `gemini-3.7-flash` and `gemini-3.1-pro-preview`
+were called invented in this repo's own session notes, and both are real. The
+stale lists were the two nobody doubted. A model ID is a fact with an expiry
+date, and it is cheap to look up and expensive to guess.
+
+---
+
 ## Still open — needs a real API key
 
 Two questions are semantics rather than platform, and a local fake must not be
@@ -275,3 +423,23 @@ allowed to look like it settled them. They remain skipped tests in
 ./gradlew :spike:ai:connectedDebugAndroidTest \
   -Pandroid.testInstrumentationRunnerArguments.anthropicApiKey=sk-ant-...
 ```
+
+**The multi-provider work made this list longer, not shorter.** The first
+question above now exists once per provider, and it is least answered for the
+one that matters most:
+
+- **No request has ever reached Google or OpenAI.** Every test of those clients
+  runs against `ScriptedProviderApi`, which proves the JSON matches *our reading
+  of the spec* and nothing about whether the provider accepts it. **Gemini is
+  the default**, so this is unverified on the path every new user takes. There
+  is no `:spike:ai` equivalent of `AnthropicOnDeviceTest` for either; one
+  modelled on it, skipping without a key, is the cheapest way to close this.
+- **Google Sign-In cannot complete.** `GoogleAuthManager.DEFAULT_CLIENT_ID` is a
+  placeholder and not the shape of a real Google client ID. The PKCE mechanics
+  are implemented and unit-tested, but the flow is dead until a real OAuth
+  client is registered for this package. Gemini by pasted API key is unaffected,
+  which is why this is easy to miss.
+- **Prompt caching has no analogue on the generic path**, so §5 simply does not
+  apply there. Whether these providers offer anything equivalent, and what it
+  would cost to use it, is unexamined. Today the generic loop pays full price
+  every turn.
