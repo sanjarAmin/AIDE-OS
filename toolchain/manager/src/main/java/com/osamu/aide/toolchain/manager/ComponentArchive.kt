@@ -49,5 +49,50 @@ sealed interface ComponentArchive {
      * no symlinks and none are needed — nothing in it is executed directly,
      * since the engine runs `GradleMain` on our JVM rather than `bin/gradle`.
      */
-    data class ZipTree(override val installedMarker: String) : ComponentArchive
+    data class ZipTree(
+        override val installedMarker: String,
+        /**
+         * Renames the archive's single top-level directory on the way in.
+         *
+         * Google names the build-tools zip's root for the platform codename —
+         * `android-16` — while AGP looks it up by *revision*, under
+         * `build-tools/36.0.0`. The archive is published; the layout AGP wants
+         * is not negotiable; so the rename happens here rather than by leaving
+         * a directory whose name means nothing to the thing that reads it.
+         */
+        val renameRoot: Pair<String, String>? = null,
+        /**
+         * Top-level names dropped, relative to the (possibly renamed) root.
+         *
+         * Not an optimisation for its own sake. Three of build-tools' entries
+         * are RenderScript's toolchain, dead since Android 12 and 111 MB of the
+         * 147; AGP validates the directory but never reads them. Verified by
+         * building with them absent, not assumed — the more obvious trim, down
+         * to the tools AGP actually runs, **fails**: the directory is checked
+         * for completeness, so most of what is kept is kept to be looked at.
+         */
+        val exclude: Set<String> = emptySet(),
+    ) : ComponentArchive {
+
+        /**
+         * The path this entry installs to, or null if it is dropped.
+         *
+         * Exclusion is applied *after* the rename so both are expressed in the
+         * layout the caller wants, rather than one of them in the archive's
+         * accident of naming.
+         */
+        fun rewrite(entryName: String): String? {
+            val renamed = renameRoot?.let { (from, to) ->
+                when {
+                    entryName == from || entryName == "$from/" -> to
+                    entryName.startsWith("$from/") -> to + entryName.removePrefix(from)
+                    else -> return@let entryName
+                }
+            } ?: entryName
+
+            val relative = renameRoot?.let { renamed.removePrefix("${it.second}/") } ?: renamed
+            val top = relative.substringBefore('/')
+            return if (top in exclude) null else renamed
+        }
+    }
 }

@@ -65,6 +65,51 @@ data class ToolchainComponent(
         )
 
         /**
+         * Build-tools, which AGP requires to exist and barely uses.
+         *
+         * Needed only by `:engine:gradle`. The fast engine ships its own aapt2
+         * and calls D8 and apksig as libraries, so it never looks at this;
+         * AGP, running a real Gradle build, validates the SDK's `build-tools`
+         * directory before it will compile anything and refuses with "Installed
+         * Build Tools revision 36.0.0 is corrupted" if it is not to its liking.
+         *
+         * **Almost none of it can run here.** `aapt2`, `zipalign`, `aidl`,
+         * `aapt` and `dexdump` are x86_64 glibc ELF — wrong architecture on a
+         * phone and wrong libc on the emulator — and `d8` and `apksigner` are
+         * `#!/bin/bash` wrappers, on a system whose shell is `sh`. What AGP
+         * actually executes is our aapt2, pointed at by
+         * `android.aapt2FromMavenOverride`; what it dexes and signs with are
+         * R8 and apksig resolved from Maven and run in its own JVM. So this is
+         * downloaded to be *looked at*, which is a strange thing to spend 60 MB
+         * on and worth stating plainly.
+         *
+         * The three excluded directories are RenderScript's toolchain, dead
+         * since Android 12 and 111 MB of the 147 installed. Removing them was
+         * verified by building with them absent. Trimming further — to only the
+         * tools AGP runs — was also tried, and **fails**: the directory is
+         * checked for completeness, not for usefulness.
+         *
+         * The root is renamed because Google names it for the platform
+         * codename, `android-16`, while AGP looks it up by revision.
+         */
+        val ANDROID_BUILD_TOOLS = ToolchainComponent(
+            id = "build-tools;36.0.0",
+            displayName = "Android SDK Build-Tools 36",
+            archiveUrl = "https://dl.google.com/android/repository/build-tools_r36_linux.zip",
+            archiveSha1 = "b0b6376977657e8ad9b969bacf4093601da2c6fb",
+            archiveBytes = 63_737_259L,
+            archive = ComponentArchive.ZipTree(
+                installedMarker = "$BUILD_TOOLS_REVISION/source.properties",
+                renameRoot = "android-16" to BUILD_TOOLS_REVISION,
+                exclude = setOf("lib64", "lld-bin", "renderscript"),
+            ),
+            installedBytes = 38_000_000L,
+        )
+
+        /** The revision AGP looks build-tools up by, and the directory's name. */
+        const val BUILD_TOOLS_REVISION = "36.0.0"
+
+        /**
          * The Kotlin compiler and the Compose plugin, dexed to run on ART.
          *
          * Unlike the platform, this is **ours**: built by

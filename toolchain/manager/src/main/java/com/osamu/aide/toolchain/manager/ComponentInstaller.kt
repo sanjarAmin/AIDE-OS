@@ -261,14 +261,17 @@ class ComponentInstaller(
         staging.deleteRecursively()
         staging.mkdirs()
 
+        val shape = component.archive as ComponentArchive.ZipTree
+
         ZipFile(archive).use { zip ->
             for (entry in zip.entries()) {
-                val destination = File(staging, entry.name)
+                val name = shape.rewrite(entry.name) ?: continue
+                val destination = File(staging, name)
                 // A zip can name `../` and write outside the directory it is
                 // extracted into. Ours does not; one that did would be an
                 // attack, and the check is cheap.
                 if (!isInside(destination, staging)) {
-                    throw IOException("${component.displayName} contains an unsafe path: ${entry.name}")
+                    throw IOException("${component.displayName} contains an unsafe path: $name")
                 }
                 if (entry.isDirectory) {
                     destination.mkdirs()
