@@ -2,6 +2,8 @@ package com.osamu.aide.ui.workspace
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.osamu.aide.ai.core.AiProviderType
+import com.osamu.aide.ai.core.ApiKeyStore
 import com.osamu.aide.ai.core.Assistant
 import com.osamu.aide.ai.core.CompletionContext
 import com.osamu.aide.core.common.AppResult
@@ -25,52 +27,23 @@ import java.io.File
 
 /**
  * Keeps one conversation alive for as long as the workspace is open.
- *
- * Separate from [WorkspaceViewModel] rather than folded into it because the
- * two have nothing to say to each other: the assistant reads the project from
- * disk through its own sandbox, not from the editor's buffers. Sharing a view
- * model would only mean a rotation in the editor and a rotation in the chat
- * were the same event, which they are not.
- *
- * The scope is [viewModelScope], so a turn in flight survives a rotation and is
- * cancelled when the workspace is actually left -- including a turn parked on
- * an approval the user never answered.
  */
 class AssistantViewModel(
     private val assistant: Assistant,
     private val builder: ProjectBuilder,
     private val projects: ProjectRepository,
+    private val keys: ApiKeyStore? = null,
 ) : ViewModel() {
 
-    /** Shared by both build tools, so one can read what the other produced. */
     private val lastBuild = LastBuild()
-
     private val _completing = MutableStateFlow(false)
 
-    /** True while a completion is in flight, so the button can say so. */
     val completing: StateFlow<Boolean> = _completing
 
     private val noticeChannel = Channel<String>(Channel.BUFFERED)
-
-    /**
-     * Things the user needs told that are not part of the conversation.
-     *
-     * A completion that finds nothing, or fails, has to say so somewhere. The
-     * chat panel is the wrong place -- the user is in the editor and may never
-     * open it -- and silence is worse: a button that sometimes does nothing and
-     * never explains reads as broken.
-     */
     val notices: Flow<String> get() = noticeChannel.receiveAsFlow()
 
-    /**
-     * The open project, looked up when a tool asks rather than held.
-     *
-     * `run_build` needs a [Project] -- name, application id, dependencies --
-     * and the screen only hands over a directory. Reading it at call time also
-     * means a dependency the user added mid-conversation is in the build.
-     */
     private var openProject: Project? = null
-
     private val controller = MutableStateFlow<ChatController?>(null)
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -78,7 +51,6 @@ class AssistantViewModel(
         .flatMapLatest { it?.state ?: flowOf(ChatUiState()) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, ChatUiState())
 
-    /** Idempotent, because the screen calls it from a LaunchedEffect. */
     fun open(projectDir: File) {
         if (controller.value?.projectDir == projectDir) return
 
@@ -87,12 +59,11 @@ class AssistantViewModel(
             projectDir = projectDir,
             scope = viewModelScope,
             extraTools = buildTools(
-                // The summary, not the log -- see BuildTools.summarise for what
-                // is dropped and why.
                 runBuild = { target -> builder.build(target).toList().summarise(target.rootDir) },
                 project = { openProject },
                 lastBuild = lastBuild,
             ),
+            keys = keys,
         )
 
         viewModelScope.launch {
@@ -107,13 +78,15 @@ class AssistantViewModel(
 
     fun dismissError() = controller.value?.dismissError() ?: Unit
 
-    /**
-     * Completes at [cursor] and hands the text back to be inserted.
-     *
-     * Guarded against overlap rather than queued: two completions in flight
-     * would insert twice at a cursor that has since moved, and the second one
-     * would be answering a question about text that no longer exists.
-     */
+    fun switchProvider(provider: AiProviderType) =
+        controller.value?.switchProvider(provider) ?: Unit
+
+    fun switchModel(model: String) =
+        controller.value?.switchModel(model) ?: Unit
+
+    fun toggleShareContext(share: Boolean) =
+        controller.value?.toggleShareContext(share) ?: Unit
+
     fun complete(path: String, text: String, cursor: Int, onInsert: (String) -> Unit) {
         if (_completing.value) return
         _completing.value = true
@@ -122,7 +95,7 @@ class AssistantViewModel(
             val completer = assistant.completer()
             if (completer == null) {
                 _completing.value = false
-                noticeChannel.trySend("Add your Anthropic API key in Settings to use completion.")
+                noticeChannel.trySend("Add your AI credentials in Settings to use completion.")
                 return@launch
             }
 

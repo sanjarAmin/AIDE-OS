@@ -6,11 +6,10 @@ import com.osamu.aide.core.common.DispatcherProvider
 import java.io.File
 
 /**
- * Builds a session for one project, if there is a key to build it with.
+ * Builds a session for one project, for the active AI model provider.
  *
- * The two things this exists to keep out of the UI are the client's lifetime
- * and the project context string. Neither is complicated; both are easy to get
- * subtly wrong in a composable.
+ * Supports Gemini as the default provider with Google Sign-In or API Key,
+ * as well as OpenAI, Anthropic, and Custom/Compatible endpoints.
  */
 class Assistant(
     private val keys: ApiKeyStore,
@@ -19,64 +18,106 @@ class Assistant(
 ) {
 
     /**
-     * Null when the user has not supplied a key. That is the normal state.
-     *
-     * [extraTools] is fixed for the life of the session on purpose: tool
-     * definitions sit at the very front of the cached prefix, so a list that
-     * varies between turns costs the cache on every one of them. Building it
-     * here, once, is what makes that hard to get wrong.
+     * Null when the user has not supplied credentials for the active provider.
      */
     fun session(
         projectDir: File,
         approver: Approver,
         extraTools: List<AideTool> = emptyList(),
     ): AiSession? {
-        val key = keys.read() ?: return null
         val toolset = ProjectToolset(ProjectFiles(projectDir), extraTools)
+        val provider = keys.activeProvider()
 
-        return AiSession(
-            client = clientFactory(key, keys.baseUrl()),
-            assembler = PromptAssembler(toolset),
-            toolset = toolset,
-            approver = approver,
-            dispatchers = dispatchers,
-        )
+        return when (provider) {
+            AiProviderType.GEMINI -> {
+                val apiKey = keys.geminiApiKey()
+                val oauthToken = keys.googleAccessToken()
+                if (apiKey.isNullOrBlank() && oauthToken.isNullOrBlank()) return null
+                val client = GeminiAiClient(
+                    apiKey = apiKey,
+                    oauthToken = oauthToken,
+                    model = keys.activeModel(AiProviderType.GEMINI),
+                )
+                AiSession(client, toolset, approver, dispatchers)
+            }
+            AiProviderType.OPENAI -> {
+                val apiKey = keys.openAiApiKey() ?: return null
+                val client = OpenAiClient(
+                    apiKey = apiKey,
+                    customBaseUrl = keys.openAiBaseUrl(),
+                    model = keys.activeModel(AiProviderType.OPENAI),
+                    provider = AiProviderType.OPENAI,
+                )
+                AiSession(client, toolset, approver, dispatchers)
+            }
+            AiProviderType.CUSTOM -> {
+                val client = OpenAiClient(
+                    apiKey = keys.customApiKey(),
+                    customBaseUrl = keys.customBaseUrl(),
+                    model = keys.activeModel(AiProviderType.CUSTOM),
+                    provider = AiProviderType.CUSTOM,
+                )
+                AiSession(client, toolset, approver, dispatchers)
+            }
+            AiProviderType.ANTHROPIC -> {
+                val key = keys.read() ?: return null
+                AiSession(
+                    client = clientFactory(key, keys.baseUrl()),
+                    assembler = PromptAssembler(toolset),
+                    toolset = toolset,
+                    approver = approver,
+                    dispatchers = dispatchers,
+                )
+            }
+        }
     }
 
     /**
-     * A completer, if there is a key. Cheap to build -- it holds no state.
-     *
-     * Its own client for the same reason [session] gets one: the key can change
-     * while the app is running, and a cached client keeps using the old one.
+     * A completer for the active provider, if credentials exist.
      */
     fun completer(): InlineCompleter? {
-        val key = keys.read() ?: return null
-        return InlineCompleter(clientFactory(key, keys.baseUrl()), dispatchers)
+        val provider = keys.activeProvider()
+        return when (provider) {
+            AiProviderType.GEMINI -> {
+                val apiKey = keys.geminiApiKey()
+                val oauthToken = keys.googleAccessToken()
+                if (apiKey.isNullOrBlank() && oauthToken.isNullOrBlank()) return null
+                val client = GeminiAiClient(
+                    apiKey = apiKey,
+                    oauthToken = oauthToken,
+                    model = keys.activeModel(AiProviderType.GEMINI),
+                )
+                InlineCompleter(client, dispatchers)
+            }
+            AiProviderType.OPENAI -> {
+                val apiKey = keys.openAiApiKey() ?: return null
+                val client = OpenAiClient(
+                    apiKey = apiKey,
+                    customBaseUrl = keys.openAiBaseUrl(),
+                    model = keys.activeModel(AiProviderType.OPENAI),
+                    provider = AiProviderType.OPENAI,
+                )
+                InlineCompleter(client, dispatchers)
+            }
+            AiProviderType.CUSTOM -> {
+                val client = OpenAiClient(
+                    apiKey = keys.customApiKey(),
+                    customBaseUrl = keys.customBaseUrl(),
+                    model = keys.activeModel(AiProviderType.CUSTOM),
+                    provider = AiProviderType.CUSTOM,
+                )
+                InlineCompleter(client, dispatchers)
+            }
+            AiProviderType.ANTHROPIC -> {
+                val key = keys.read() ?: return null
+                InlineCompleter(clientFactory(key, keys.baseUrl()), dispatchers)
+            }
+        }
     }
 
-    // internal rather than private so the *default* factory can be tested.
-    // Every other test in this module injects a fake one, which would leave
-    // the one line that actually reaches the SDK unexercised -- and that line
-    // is the whole feature.
     internal companion object {
-        /**
-         * One client per session rather than a shared singleton.
-         *
-         * The client holds the API key, and the key can change while the app is
-         * running -- the settings screen exists for that. A cached client would
-         * keep authenticating with the old one until the process restarted, and
-         * the symptom is a 401 the user cannot explain after they just fixed
-         * their key.
-         *
-         * [baseUrl] rides along for the same reason and gets it for free: it is
-         * read on the same pass, so changing the endpoint takes effect on the
-         * next session rather than the next launch.
-         */
         fun defaultClient(apiKey: String, baseUrl: String?): AnthropicClient {
             var builder = AnthropicOkHttpClient.builder().apiKey(apiKey)
-            // Left unset for the default rather than passing Anthropic's own URL
-            // as a literal: the SDK's default is the one that stays right when
-            // the SDK changes it.
             if (baseUrl != null) builder = builder.baseUrl(baseUrl)
             return builder.build()
         }
@@ -84,13 +125,7 @@ class Assistant(
 }
 
 /**
- * The project, as the cached half of the prompt sees it.
- *
- * Derived from the file tree and nothing else. **Not** the open file, the
- * cursor, or the time: this string lands above the cache breakpoint, so
- * anything that changes per turn invalidates the whole prefix and costs the
- * cache for a line nobody reads. Per-turn detail belongs in the user's message.
- * `PromptAssembler`'s docs have the reasoning.
+ * The project, as the context block of the prompt sees it.
  */
 fun projectContext(files: ProjectFiles): String =
     when (val listing = files.list()) {

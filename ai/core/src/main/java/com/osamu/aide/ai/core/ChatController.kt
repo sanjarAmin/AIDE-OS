@@ -16,10 +16,6 @@ sealed interface ChatEntry {
 
     /**
      * A tool the assistant used, shown inline.
-     *
-     * Rendered rather than hidden because the assistant reads and writes the
-     * user's files: "I looked at Main.kt" is the difference between a tool loop
-     * the user can audit and one they have to trust.
      */
     data class Tool(
         val name: String,
@@ -41,23 +37,17 @@ data class ChatUiState(
     val sending: Boolean = false,
     val pendingApproval: ApprovalRequest? = null,
     val error: String? = null,
-    /** True when there is no API key, which is where every new user starts. */
+    /** True when there is no API key or sign-in for the active provider. */
     val needsKey: Boolean = false,
+    val activeProvider: AiProviderType = AiProviderType.GEMINI,
+    val activeModel: String = "gemini-3.7-flash",
+    val isGoogleSignedIn: Boolean = false,
+    val userEmail: String? = null,
+    val shareProjectContext: Boolean = true,
 )
 
 /**
- * The chat panel's state, with no Compose in it.
- *
- * Lives in `:ai:core` rather than `:ai:ui` so the parts worth testing — the
- * approval handshake in particular — can be tested against the same local
- * Messages API the session loop uses, instead of through a composition.
- *
- * The approval handshake is the reason this class is not just a wrapper. A
- * mutating tool has to stop the loop, put a prompt on screen, and resume with
- * the user's answer; [AiSession] models that as a suspending [Approver], so
- * here it becomes a state emission plus a [CompletableDeferred] the UI
- * completes. Nothing polls and nothing times out — the loop is genuinely parked
- * until someone answers.
+ * The chat panel's state and controller.
  */
 class ChatController(
     private val assistant: Assistant,
@@ -65,9 +55,22 @@ class ChatController(
     private val scope: CoroutineScope,
     /** Contributed by the app layer -- the build tools. See [Assistant.session]. */
     private val extraTools: List<AideTool> = emptyList(),
+    private val keys: ApiKeyStore? = null,
 ) {
 
-    private val _state = MutableStateFlow(ChatUiState())
+    private fun initialState(): ChatUiState {
+        val provider = keys?.activeProvider() ?: AiProviderType.GEMINI
+        val model = keys?.activeModel(provider) ?: provider.defaultModel
+        return ChatUiState(
+            activeProvider = provider,
+            activeModel = model,
+            isGoogleSignedIn = keys?.isGoogleSignedIn() == true,
+            userEmail = keys?.googleUserEmail(),
+            shareProjectContext = keys?.shareProjectContext() ?: true,
+        )
+    }
+
+    private val _state = MutableStateFlow(initialState())
     val state: StateFlow<ChatUiState> = _state.asStateFlow()
 
     private var session: AiSession? = null
@@ -87,9 +90,6 @@ class ChatController(
         }
 
         scope.launch {
-            // Resolved per send rather than in the constructor: the user may add
-            // a key in settings after opening the panel, and a panel that stayed
-            // keyless until it was closed and reopened would look broken.
             val active = session
                 ?: assistant.session(projectDir, ::approve, extraTools)?.also { session = it }
             if (active == null) {
@@ -97,15 +97,19 @@ class ChatController(
                 return@launch
             }
 
+            val contextString = if (_state.value.shareProjectContext) {
+                projectContext(ProjectFiles(projectDir))
+            } else {
+                "Project context sharing disabled by user preference."
+            }
+
             val reply = runCatching {
-                active.send(projectContext(ProjectFiles(projectDir)), message)
+                active.send(contextString, message)
             }
 
             reply.fold(
                 onSuccess = { done -> _state.update { it.render(done) } },
                 onFailure = { failure ->
-                    // The session keeps its history, so the user can retry
-                    // without losing the conversation. Only this turn is lost.
                     _state.update {
                         it.copy(
                             sending = false,
@@ -116,6 +120,32 @@ class ChatController(
                 },
             )
         }
+    }
+
+    fun switchProvider(provider: AiProviderType) {
+        keys?.setActiveProvider(provider)
+        session = null
+        val model = keys?.activeModel(provider) ?: provider.defaultModel
+        _state.update {
+            it.copy(
+                activeProvider = provider,
+                activeModel = model,
+                isGoogleSignedIn = keys?.isGoogleSignedIn() == true,
+                userEmail = keys?.googleUserEmail(),
+            )
+        }
+    }
+
+    fun switchModel(model: String) {
+        val provider = _state.value.activeProvider
+        keys?.setActiveModel(provider, model)
+        session = null
+        _state.update { it.copy(activeModel = model) }
+    }
+
+    fun toggleShareContext(share: Boolean) {
+        keys?.setShareProjectContext(share)
+        _state.update { it.copy(shareProjectContext = share) }
     }
 
     /** Answers whatever prompt is on screen. No-op if there is none. */
@@ -161,10 +191,6 @@ class ChatController(
                 name = name,
                 detail = input["path"] ?: input["query"] ?: "",
                 declined = declined,
-                // A refusal the user did not cause is a failure worth showing:
-                // a bad path, a file too large. Silently rendering it as a
-                // successful call is how the user ends up believing the
-                // assistant read something it never saw.
                 failed = !declined && outcome is ProjectFiles.Outcome.Refused,
             )
         }

@@ -42,89 +42,104 @@ data class Reply(
 /**
  * One conversation with the assistant, and the tool loop that drives it.
  *
- * The loop is the standard one — send, look at `stop_reason`, run whatever
- * tools were asked for, send the results back — with three details that are
- * easy to get wrong and produce no visible failure until much later:
- *
- * 1. **The assistant's turn is replayed whole.** [Message.toParam] rather than
- *    a reconstruction from the text, because thinking is adaptive and thinking
- *    blocks must go back to the API *unchanged*. Rebuilding the turn as plain
- *    text drops them, and the next request fails on block ordering rather than
- *    on anything that names the cause.
- * 2. **Every tool result goes in one user message.** A response may hold
- *    several `tool_use` blocks; splitting the results across messages teaches
- *    the model to stop asking for parallel calls, which shows up as a slower
- *    assistant and nothing else.
- * 3. **Every `tool_use` gets a `tool_result`, including the refused ones.** A
- *    missing result for a call the model made is a 400. A refusal is a result
- *    with `is_error` -- information the model can act on, not a hole.
- *
- * State is held here rather than passed in because a conversation is a
- * conversation; [history] is exposed read-only for the UI to render.
+ * Supports both Anthropic client (with verbatim thinking replay and prompt caching)
+ * and the unified [AiClient] for Gemini, OpenAI, and Custom providers.
  */
 class AiSession(
-    private val client: AnthropicClient,
-    private val assembler: PromptAssembler,
+    private val client: AnthropicClient?,
+    private val assembler: PromptAssembler?,
+    private val aiClient: AiClient?,
     private val toolset: ProjectToolset,
     private val approver: Approver,
     private val dispatchers: DispatcherProvider,
-    /**
-     * How many times the model may call tools before the turn is cut off.
-     *
-     * A cap rather than a timeout, because the failure this guards against is a
-     * loop that spends the *user's own* money -- read, edit, read the edit,
-     * edit again -- and every round of it looks like progress. Generous enough
-     * that a genuine multi-file change fits.
-     */
     private val maxToolRounds: Int = 12,
 ) {
 
-    private val messages = mutableListOf<MessageParam>()
+    /** Primary constructor for Anthropic client compatibility. */
+    constructor(
+        client: AnthropicClient,
+        assembler: PromptAssembler,
+        toolset: ProjectToolset,
+        approver: Approver,
+        dispatchers: DispatcherProvider,
+        maxToolRounds: Int = 12,
+    ) : this(
+        client = client,
+        assembler = assembler,
+        aiClient = null,
+        toolset = toolset,
+        approver = approver,
+        dispatchers = dispatchers,
+        maxToolRounds = maxToolRounds,
+    )
 
-    val history: List<MessageParam> get() = messages.toList()
+    /** Constructor for unified [AiClient] (Gemini, OpenAI, Custom). */
+    constructor(
+        aiClient: AiClient,
+        toolset: ProjectToolset,
+        approver: Approver,
+        dispatchers: DispatcherProvider,
+        maxToolRounds: Int = 12,
+    ) : this(
+        client = null,
+        assembler = null,
+        aiClient = aiClient,
+        toolset = toolset,
+        approver = approver,
+        dispatchers = dispatchers,
+        maxToolRounds = maxToolRounds,
+    )
 
-    /**
-     * Sends one user message and runs the tool loop until the model is done.
-     *
-     * [projectContext] is re-supplied per turn so a file created mid-session is
-     * visible on the next one -- and it belongs to the cached prefix, so it
-     * must stay derived from the project alone. See [PromptAssembler].
-     */
+    private val anthropicMessages = mutableListOf<MessageParam>()
+    private val genericMessages = mutableListOf<AiMessage>()
+
+    val history: List<Any>
+        get() = if (client != null) anthropicMessages.toList() else genericMessages.toList()
+
     suspend fun send(
         projectContext: String,
         userText: String,
         effort: OutputConfig.Effort = OutputConfig.Effort.HIGH,
     ): Reply {
-        messages += userTurn(userText)
+        return if (client != null && assembler != null) {
+            sendAnthropic(projectContext, userText, effort)
+        } else if (aiClient != null) {
+            sendGeneric(projectContext, userText, effort)
+        } else {
+            Reply("No AI client configured.", emptyList())
+        }
+    }
 
+    private suspend fun sendAnthropic(
+        projectContext: String,
+        userText: String,
+        effort: OutputConfig.Effort,
+    ): Reply {
+        anthropicMessages += userTurn(userText)
         val runs = mutableListOf<ToolRun>()
 
         repeat(maxToolRounds) {
             val response = withContext(dispatchers.io) {
-                client.messages().create(assembler.request(projectContext, messages, effort))
+                client!!.messages().create(assembler!!.request(projectContext, anthropicMessages, effort))
             }
 
-            // Detail 1: the whole turn, blocks intact.
-            messages += response.toParam()
+            anthropicMessages += response.toParam()
 
             val calls = response.content().mapNotNull { it.toolUse().orElse(null) }
             if (calls.isEmpty()) return Reply(response.textOnly(), runs)
 
             val results = calls.map { call ->
-                val run = execute(call)
+                val run = executeTool(call.name(), call.inputAsStrings())
                 runs += run
                 result(call.id(), run.outcome)
             }
 
-            // Detail 2 and 3: one message, one result per call.
-            messages += MessageParam.builder()
+            anthropicMessages += MessageParam.builder()
                 .role(MessageParam.Role.USER)
                 .contentOfBlockParams(results)
                 .build()
         }
 
-        // The cap was hit. The last assistant turn is already in the history, so
-        // the conversation stays valid and the user can simply say "carry on".
         return Reply(
             text = "I stopped after $maxToolRounds rounds of tool calls without finishing. " +
                 "Ask me to continue if that looked like progress.",
@@ -133,23 +148,84 @@ class AiSession(
         )
     }
 
-    private suspend fun execute(call: ToolUseBlock): ToolRun {
-        val input = call.inputAsStrings()
-        // An unknown tool is READ_ONLY here only so that it reaches
-        // ProjectToolset.execute, which is what refuses it by name. Prompting
-        // the user to approve a tool that does not exist would be worse.
-        val risk = toolset.find(call.name())?.risk ?: ToolRisk.READ_ONLY
-        val approved = risk == ToolRisk.MUTATING && approver.approve(call.name(), input)
+    private suspend fun sendGeneric(
+        projectContext: String,
+        userText: String,
+        effort: OutputConfig.Effort,
+    ): Reply {
+        genericMessages += AiMessage(AiRole.USER, userText)
+        val runs = mutableListOf<ToolRun>()
+
+        val instructions = buildString {
+            append("You are Gemini/AI assistant inside AIDE-OS, an IDE that runs on the user's Android device.\n")
+            append("You can list, read, search, and edit files in the project.\n")
+            append("Here is the project structure and context:\n\n")
+            append(projectContext)
+        }
+
+        repeat(maxToolRounds) {
+            val request = AiClientRequest(
+                systemInstruction = instructions,
+                messages = genericMessages,
+                tools = toolset.all(),
+                model = aiClient!!.model,
+                effort = effort,
+            )
+
+            val response = aiClient.send(request)
+
+            val modelMessage = AiMessage(
+                role = AiRole.ASSISTANT,
+                parts = response.parts,
+            )
+            genericMessages += modelMessage
+
+            val calls = response.functionCalls
+            if (calls.isEmpty()) {
+                return Reply(response.text, runs)
+            }
+
+            val results = mutableListOf<AiPart.FunctionResponse>()
+            for (call in calls) {
+                val run = executeTool(call.name, call.args)
+                runs += run
+
+                val content = when (val outcome = run.outcome) {
+                    is ProjectFiles.Outcome.Ok -> outcome.content
+                    is ProjectFiles.Outcome.Refused -> outcome.reason
+                }
+                results += AiPart.FunctionResponse(
+                    id = call.id,
+                    name = call.name,
+                    content = content,
+                    isError = run.outcome is ProjectFiles.Outcome.Refused,
+                )
+            }
+
+            genericMessages += AiMessage(
+                role = AiRole.USER,
+                parts = results,
+            )
+        }
+
+        return Reply(
+            text = "I stopped after $maxToolRounds rounds of tool calls without finishing. " +
+                "Ask me to continue if that looked like progress.",
+            toolRuns = runs,
+            truncated = true,
+        )
+    }
+
+    private suspend fun executeTool(name: String, input: Map<String, String>): ToolRun {
+        val risk = toolset.find(name)?.risk ?: ToolRisk.READ_ONLY
+        val approved = risk == ToolRisk.MUTATING && approver.approve(name, input)
 
         return ToolRun(
-            name = call.name(),
+            name = name,
             input = input,
             risk = risk,
             approved = approved,
-            // Approval is passed through rather than acted on here: ProjectToolset
-            // refuses a mutating tool without it regardless, so a bug in this
-            // method fails closed instead of writing to the project.
-            outcome = toolset.execute(call.name(), input, approved),
+            outcome = toolset.execute(name, input, approved),
         )
     }
 
@@ -165,26 +241,11 @@ class AiSession(
     }
 }
 
-/**
- * The visible answer, with thinking and tool calls left out.
- *
- * Concatenated rather than taking the first text block: with adaptive thinking
- * the model may interleave thinking and text, so a response can hold several
- * text blocks, and taking `first()` shows the user a fragment of their answer.
- */
 private fun Message.textOnly(): String = content()
     .mapNotNull { it.text().orElse(null)?.text() }
     .joinToString("\n")
     .trim()
 
-/**
- * The tool's arguments, flattened to strings.
- *
- * The tools declare every parameter as `"type": "string"`, but the model still
- * occasionally sends a number or a boolean where a string was asked for, and
- * `input` is untyped JSON either way. Coercing here keeps that out of every
- * handler.
- */
 private fun ToolUseBlock.inputAsStrings(): Map<String, String> {
     val raw = runCatching { _input().convert(Map::class.java) }.getOrNull() ?: return emptyMap()
     return raw.entries.mapNotNull { (key, value) ->

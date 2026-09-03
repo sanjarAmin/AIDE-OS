@@ -50,7 +50,14 @@ dependencies {
 
     api(project(":core:common"))
     api(libs.anthropic.java)
+    api(libs.okhttp)
+    api(libs.json)
     implementation(libs.kotlinx.coroutines.android)
+
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.okhttp.mockwebserver)
+    testImplementation(libs.json)
 
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.test.runner)

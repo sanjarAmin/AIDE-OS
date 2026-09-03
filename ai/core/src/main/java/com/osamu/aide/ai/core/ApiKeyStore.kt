@@ -11,49 +11,246 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /**
- * Holds the user's Anthropic API key, encrypted against the Android Keystore.
+ * Holds AI provider credentials encrypted against the Android Keystore.
  *
- * The key is the user's own credential and the most sensitive thing this app
- * will ever store: it is billable, it is bearer-authenticated, and a leak costs
- * them money rather than us. So it is encrypted with a key that **never leaves
- * the Keystore** — the secret material lives in hardware-backed storage where
- * the platform supports it, and this class only ever holds a handle to it.
- * Reading the app's preferences off a rooted device yields ciphertext.
+ * Supports multi-model providers with [AiProviderType.GEMINI] as the flagship default.
+ * Credentials (Gemini API key, Google OAuth tokens, OpenAI key, Anthropic key) are
+ * encrypted with hardware-backed Keystore keys and never leave the device in plaintext.
  *
- * Written directly against the Keystore rather than using
- * `androidx.security:security-crypto`. That library is the obvious choice and
- * is deprecated upstream; this is roughly eighty lines, has no dependency to go
- * stale, and the failure mode of a wrong answer here is a leaked credential.
- *
- * **Never log the key, never put it in an exception message, never write it to
- * a file.** The tests assert the persisted form is not the plaintext, which is
- * the only way that claim can be checked rather than asserted.
- *
- * It also holds the endpoint the key is sent to — see [baseUrl]. That is not a
- * secret and is stored in the clear, but it belongs beside the key rather than
- * in some general settings bag, because the two are only meaningful together:
- * a base URL is *where this credential goes*, and separating them is how a key
- * for one provider ends up being sent to another.
+ * Backward-compatible with earlier single-provider methods ([read], [save], [baseUrl]).
  */
 class ApiKeyStore(context: Context) {
 
     private val preferences = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 
-    /** True when a key has been saved. Does not decrypt, so it is cheap. */
-    fun hasKey(): Boolean = preferences.contains(KEY_CIPHERTEXT)
+    // -- Active Provider & Model Settings -----------------------------------
+
+    fun activeProvider(): AiProviderType {
+        val storedId = preferences.getString(KEY_ACTIVE_PROVIDER, null)
+        return if (storedId != null) {
+            AiProviderType.fromId(storedId)
+        } else {
+            // If legacy Anthropic key exists and no active provider was set, keep Anthropic
+            if (preferences.contains(KEY_CIPHERTEXT)) AiProviderType.ANTHROPIC else AiProviderType.DEFAULT
+        }
+    }
+
+    fun setActiveProvider(provider: AiProviderType) {
+        preferences.edit().putString(KEY_ACTIVE_PROVIDER, provider.id).commit()
+    }
+
+    fun activeModel(provider: AiProviderType = activeProvider()): String {
+        return preferences.getString(modelKey(provider), null) ?: provider.defaultModel
+    }
+
+    fun setActiveModel(provider: AiProviderType, model: String) {
+        preferences.edit().putString(modelKey(provider), model).commit()
+    }
+
+    fun shareProjectContext(): Boolean =
+        preferences.getBoolean(KEY_SHARE_CONTEXT, true)
+
+    fun setShareProjectContext(share: Boolean) {
+        preferences.edit().putBoolean(KEY_SHARE_CONTEXT, share).commit()
+    }
+
+    // -- Status Checks ------------------------------------------------------
+
+    /** True when a key or token is saved for the active provider, or legacy key exists. */
+    fun hasKey(): Boolean = when (activeProvider()) {
+        AiProviderType.GEMINI -> hasGemini()
+        AiProviderType.OPENAI -> hasOpenAi()
+        AiProviderType.ANTHROPIC -> hasAnthropic()
+        AiProviderType.CUSTOM -> hasCustom()
+    }
+
+    fun hasProviderKey(provider: AiProviderType): Boolean = when (provider) {
+        AiProviderType.GEMINI -> hasGemini()
+        AiProviderType.OPENAI -> hasOpenAi()
+        AiProviderType.ANTHROPIC -> hasAnthropic()
+        AiProviderType.CUSTOM -> hasCustom()
+    }
+
+    private fun hasGemini(): Boolean =
+        preferences.contains(KEY_GEMINI_KEY_CIPHER) || preferences.contains(KEY_GOOGLE_ACCESS_TOKEN_CIPHER)
+
+    private fun hasOpenAi(): Boolean =
+        preferences.contains(KEY_OPENAI_KEY_CIPHER)
+
+    private fun hasAnthropic(): Boolean =
+        preferences.contains(KEY_CIPHERTEXT) || preferences.contains(KEY_ANTHROPIC_KEY_CIPHER)
+
+    private fun hasCustom(): Boolean =
+        preferences.contains(KEY_CUSTOM_KEY_CIPHER) || preferences.contains(KEY_CUSTOM_BASE_URL)
+
+    // -- Legacy & Anthropic Compatibility -----------------------------------
 
     /**
-     * The stored key, or null when there is none.
-     *
-     * Also null when the stored value cannot be decrypted, which is a real
-     * state rather than a defect: the Keystore entry is dropped when the user
-     * removes their device lock or restores a backup onto new hardware, and the
-     * ciphertext then outlives the key that made it. Treated as "no key" so the
-     * app asks for one again instead of crashing on launch.
+     * Reads the active credential. If Anthropic is active (or legacy), reads the legacy key.
+     * If Gemini is active, reads the Gemini API key or OAuth token.
      */
     fun read(): String? {
-        val ciphertext = preferences.getString(KEY_CIPHERTEXT, null) ?: return null
-        val iv = preferences.getString(KEY_IV, null) ?: return null
+        return when (activeProvider()) {
+            AiProviderType.ANTHROPIC -> decryptPreference(KEY_CIPHERTEXT, KEY_IV)
+                ?: decryptPreference(KEY_ANTHROPIC_KEY_CIPHER, KEY_ANTHROPIC_IV)
+            AiProviderType.GEMINI -> geminiApiKey() ?: googleAccessToken()
+            AiProviderType.OPENAI -> openAiApiKey()
+            AiProviderType.CUSTOM -> customApiKey()
+        }
+    }
+
+    /** Legacy save: preserves exact test behavior and writes to legacy keys. */
+    fun save(apiKey: String) {
+        encryptAndStore(KEY_CIPHERTEXT, KEY_IV, apiKey)
+    }
+
+    fun baseUrl(): String? = preferences.getString(KEY_BASE_URL, null)
+
+    fun saveBaseUrl(endpoint: Endpoint) {
+        val editor = preferences.edit()
+        when (endpoint) {
+            is Endpoint.Custom -> editor.putString(KEY_BASE_URL, endpoint.baseUrl)
+            Endpoint.Default -> editor.remove(KEY_BASE_URL)
+            is Endpoint.Rejected -> return
+        }
+        editor.commit()
+    }
+
+    // -- Google / Gemini Credentials ----------------------------------------
+
+    fun geminiApiKey(): String? =
+        decryptPreference(KEY_GEMINI_KEY_CIPHER, KEY_GEMINI_IV)
+
+    fun saveGeminiApiKey(key: String) {
+        encryptAndStore(KEY_GEMINI_KEY_CIPHER, KEY_GEMINI_IV, key)
+    }
+
+    fun clearGeminiApiKey() {
+        preferences.edit()
+            .remove(KEY_GEMINI_KEY_CIPHER)
+            .remove(KEY_GEMINI_IV)
+            .commit()
+    }
+
+    fun isGoogleSignedIn(): Boolean =
+        preferences.contains(KEY_GOOGLE_ACCESS_TOKEN_CIPHER)
+
+    fun googleAccessToken(): String? =
+        decryptPreference(KEY_GOOGLE_ACCESS_TOKEN_CIPHER, KEY_GOOGLE_ACCESS_TOKEN_IV)
+
+    fun googleRefreshToken(): String? =
+        decryptPreference(KEY_GOOGLE_REFRESH_TOKEN_CIPHER, KEY_GOOGLE_REFRESH_TOKEN_IV)
+
+    fun googleUserEmail(): String? =
+        preferences.getString(KEY_GOOGLE_USER_EMAIL, null)
+
+    fun googleUserName(): String? =
+        preferences.getString(KEY_GOOGLE_USER_NAME, null)
+
+    fun saveGoogleOAuth(
+        accessToken: String,
+        refreshToken: String? = null,
+        email: String? = null,
+        name: String? = null,
+    ) {
+        encryptAndStore(KEY_GOOGLE_ACCESS_TOKEN_CIPHER, KEY_GOOGLE_ACCESS_TOKEN_IV, accessToken)
+        if (refreshToken != null) {
+            encryptAndStore(KEY_GOOGLE_REFRESH_TOKEN_CIPHER, KEY_GOOGLE_REFRESH_TOKEN_IV, refreshToken)
+        }
+        val editor = preferences.edit()
+        if (email != null) editor.putString(KEY_GOOGLE_USER_EMAIL, email)
+        if (name != null) editor.putString(KEY_GOOGLE_USER_NAME, name)
+        editor.commit()
+    }
+
+    fun signOutGoogle() {
+        preferences.edit()
+            .remove(KEY_GOOGLE_ACCESS_TOKEN_CIPHER)
+            .remove(KEY_GOOGLE_ACCESS_TOKEN_IV)
+            .remove(KEY_GOOGLE_REFRESH_TOKEN_CIPHER)
+            .remove(KEY_GOOGLE_REFRESH_TOKEN_IV)
+            .remove(KEY_GOOGLE_USER_EMAIL)
+            .remove(KEY_GOOGLE_USER_NAME)
+            .commit()
+    }
+
+    // -- OpenAI Credentials -------------------------------------------------
+
+    fun openAiApiKey(): String? =
+        decryptPreference(KEY_OPENAI_KEY_CIPHER, KEY_OPENAI_IV)
+
+    fun saveOpenAiApiKey(key: String) {
+        encryptAndStore(KEY_OPENAI_KEY_CIPHER, KEY_OPENAI_IV, key)
+    }
+
+    fun openAiBaseUrl(): String? =
+        preferences.getString(KEY_OPENAI_BASE_URL, null)
+
+    fun saveOpenAiBaseUrl(url: String?) {
+        val editor = preferences.edit()
+        if (url.isNullOrBlank()) editor.remove(KEY_OPENAI_BASE_URL) else editor.putString(KEY_OPENAI_BASE_URL, url.trim())
+        editor.commit()
+    }
+
+    // -- Custom Provider Credentials ----------------------------------------
+
+    fun customApiKey(): String? =
+        decryptPreference(KEY_CUSTOM_KEY_CIPHER, KEY_CUSTOM_IV)
+
+    fun saveCustomApiKey(key: String) {
+        encryptAndStore(KEY_CUSTOM_KEY_CIPHER, KEY_CUSTOM_IV, key)
+    }
+
+    fun customBaseUrl(): String? =
+        preferences.getString(KEY_CUSTOM_BASE_URL, null)
+
+    fun saveCustomBaseUrl(url: String?) {
+        val editor = preferences.edit()
+        if (url.isNullOrBlank()) editor.remove(KEY_CUSTOM_BASE_URL) else editor.putString(KEY_CUSTOM_BASE_URL, url.trim())
+        editor.commit()
+    }
+
+    // -- Clear / Removal ----------------------------------------------------
+
+    /** Forgets all keys. Preserves base URLs as per specification. */
+    fun clear() {
+        preferences.edit()
+            .remove(KEY_CIPHERTEXT)
+            .remove(KEY_IV)
+            .remove(KEY_GEMINI_KEY_CIPHER)
+            .remove(KEY_GEMINI_IV)
+            .remove(KEY_OPENAI_KEY_CIPHER)
+            .remove(KEY_OPENAI_IV)
+            .remove(KEY_ANTHROPIC_KEY_CIPHER)
+            .remove(KEY_ANTHROPIC_IV)
+            .remove(KEY_CUSTOM_KEY_CIPHER)
+            .remove(KEY_CUSTOM_IV)
+            .remove(KEY_GOOGLE_ACCESS_TOKEN_CIPHER)
+            .remove(KEY_GOOGLE_ACCESS_TOKEN_IV)
+            .remove(KEY_GOOGLE_REFRESH_TOKEN_CIPHER)
+            .remove(KEY_GOOGLE_REFRESH_TOKEN_IV)
+            .remove(KEY_GOOGLE_USER_EMAIL)
+            .remove(KEY_GOOGLE_USER_NAME)
+            .commit()
+        runCatching { keyStore().deleteEntry(ALIAS) }
+    }
+
+    // -- Keystore AES-GCM Encryption / Decryption ---------------------------
+
+    private fun encryptAndStore(cipherKeyPref: String, ivKeyPref: String, plaintext: String) {
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey())
+
+        val ciphertext = cipher.doFinal(plaintext.toByteArray(Charsets.UTF_8))
+        preferences.edit()
+            .putString(cipherKeyPref, Base64.encodeToString(ciphertext, Base64.NO_WRAP))
+            .putString(ivKeyPref, Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
+            .commit()
+    }
+
+    private fun decryptPreference(cipherKeyPref: String, ivKeyPref: String): String? {
+        val ciphertext = preferences.getString(cipherKeyPref, null) ?: return null
+        val iv = preferences.getString(ivKeyPref, null) ?: return null
 
         return runCatching {
             val cipher = Cipher.getInstance(TRANSFORMATION)
@@ -64,83 +261,6 @@ class ApiKeyStore(context: Context) {
             )
             String(cipher.doFinal(Base64.decode(ciphertext, Base64.NO_WRAP)), Charsets.UTF_8)
         }.getOrNull()
-    }
-
-    /**
-     * Encrypts and stores [apiKey], replacing anything already there.
-     *
-     * A fresh initialisation vector every time, because GCM is catastrophically
-     * broken by IV reuse under the same key — two ciphertexts sharing an IV
-     * leak the plaintext difference. The cipher generates one; this only stores
-     * what it chose.
-     */
-    fun save(apiKey: String) {
-        val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, secretKey())
-
-        val ciphertext = cipher.doFinal(apiKey.toByteArray(Charsets.UTF_8))
-        // commit(), not apply(). apply() returns before the write reaches disk,
-        // and this is a credential the user typed once by hand: if the process
-        // dies in that window they are asked for it again with no explanation.
-        // A blocking write of a few hundred bytes, on an action that happens
-        // about once per install, is the right side of that trade.
-        preferences.edit()
-            .putString(KEY_CIPHERTEXT, Base64.encodeToString(ciphertext, Base64.NO_WRAP))
-            .putString(KEY_IV, Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
-            .commit()
-    }
-
-    /**
-     * The custom base URL, or null for Anthropic's own API.
-     *
-     * Stored in the clear, unlike the key. It is not a credential — the
-     * settings screen displays it back, which a secret never gets — and
-     * encrypting it would put a Keystore round trip in front of every session
-     * for a value the user can read off their own screen. Encrypting things
-     * that do not need it is how the cost of encrypting the thing that does
-     * stops being noticed.
-     *
-     * Always already validated: [parseEndpoint] is the only way to produce one,
-     * so nothing downstream re-checks the scheme or trims a trailing slash.
-     */
-    fun baseUrl(): String? = preferences.getString(KEY_BASE_URL, null)
-
-    /**
-     * Stores a validated base URL; null restores Anthropic's own API.
-     *
-     * Takes the [Endpoint.Custom] rather than a String so a raw field value
-     * cannot reach it — the type is the check.
-     */
-    fun saveBaseUrl(endpoint: Endpoint) {
-        val editor = preferences.edit()
-        when (endpoint) {
-            is Endpoint.Custom -> editor.putString(KEY_BASE_URL, endpoint.baseUrl)
-            Endpoint.Default -> editor.remove(KEY_BASE_URL)
-            // Unreachable through the UI, which will not offer to save one.
-            // Ignored rather than thrown so a validation bug cannot crash the
-            // settings screen; the endpoint simply stays as it was.
-            is Endpoint.Rejected -> return
-        }
-        editor.commit()
-    }
-
-    /**
-     * Forgets the key entirely, Keystore entry included.
-     *
-     * Deleting the entry as well as the ciphertext matters: leaving the secret
-     * behind would mean "signed out" still had usable key material sitting in
-     * the Keystore, which is not what a user asking to remove their key means.
-     *
-     * The base URL survives, because it is a separate field whose value is on
-     * screen the whole time -- blanking it and saving is how it is cleared.
-     * Silently resetting a visible setting from a different button is worse
-     * than leaving it: the user can read what it still says.
-     */
-    fun clear() {
-        // commit() here for the same reason inverted: "forget my key" must be
-        // on disk before the call returns, not eventually.
-        preferences.edit().remove(KEY_CIPHERTEXT).remove(KEY_IV).commit()
-        runCatching { keyStore().deleteEntry(ALIAS) }
     }
 
     private fun keyStore(): KeyStore = KeyStore.getInstance(PROVIDER).apply { load(null) }
@@ -159,11 +279,6 @@ class ApiKeyStore(context: Context) {
                 )
                     .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                     .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                    // Deliberately not requiring authentication per use. The
-                    // key is read on every request, including background ones
-                    // during a build; a biometric prompt per API call would
-                    // make the feature unusable. Device-level lock still gates
-                    // access to the Keystore itself.
                     .setUserAuthenticationRequired(false)
                     .build(),
             )
@@ -172,14 +287,43 @@ class ApiKeyStore(context: Context) {
     private companion object {
         const val PROVIDER = "AndroidKeyStore"
         const val ALIAS = "aide.ai.apikey"
-
-        /** GCM, so the ciphertext is authenticated as well as secret. */
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val TAG_BITS = 128
 
         const val FILE = "aide-ai"
+
+        const val KEY_ACTIVE_PROVIDER = "provider.active"
+        const val KEY_SHARE_CONTEXT = "settings.share_context"
+
+        // Legacy / Anthropic keys
         const val KEY_CIPHERTEXT = "apiKey.ciphertext"
         const val KEY_IV = "apiKey.iv"
         const val KEY_BASE_URL = "endpoint.baseUrl"
+
+        // Gemini
+        const val KEY_GEMINI_KEY_CIPHER = "gemini.apiKey.ciphertext"
+        const val KEY_GEMINI_IV = "gemini.apiKey.iv"
+        const val KEY_GOOGLE_ACCESS_TOKEN_CIPHER = "google.oauth.access.ciphertext"
+        const val KEY_GOOGLE_ACCESS_TOKEN_IV = "google.oauth.access.iv"
+        const val KEY_GOOGLE_REFRESH_TOKEN_CIPHER = "google.oauth.refresh.ciphertext"
+        const val KEY_GOOGLE_REFRESH_TOKEN_IV = "google.oauth.refresh.iv"
+        const val KEY_GOOGLE_USER_EMAIL = "google.user.email"
+        const val KEY_GOOGLE_USER_NAME = "google.user.name"
+
+        // OpenAI
+        const val KEY_OPENAI_KEY_CIPHER = "openai.apiKey.ciphertext"
+        const val KEY_OPENAI_IV = "openai.apiKey.iv"
+        const val KEY_OPENAI_BASE_URL = "openai.baseUrl"
+
+        // Anthropic dedicated
+        const val KEY_ANTHROPIC_KEY_CIPHER = "anthropic.apiKey.ciphertext"
+        const val KEY_ANTHROPIC_IV = "anthropic.apiKey.iv"
+
+        // Custom
+        const val KEY_CUSTOM_KEY_CIPHER = "custom.apiKey.ciphertext"
+        const val KEY_CUSTOM_IV = "custom.apiKey.iv"
+        const val KEY_CUSTOM_BASE_URL = "custom.baseUrl"
+
+        fun modelKey(provider: AiProviderType): String = "model.${provider.id}"
     }
 }

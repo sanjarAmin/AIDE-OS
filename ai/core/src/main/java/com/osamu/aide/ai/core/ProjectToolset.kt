@@ -18,8 +18,8 @@ class AideTool(
     val name: String,
     val description: String,
     val risk: ToolRisk,
-    private val parameters: Map<String, Parameter>,
-    private val required: List<String>,
+    val parameters: Map<String, Parameter>,
+    val required: List<String>,
     private val handler: suspend (Map<String, String>) -> ProjectFiles.Outcome,
 ) {
     data class Parameter(val type: String, val description: String)

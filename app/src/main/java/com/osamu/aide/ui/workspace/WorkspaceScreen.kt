@@ -421,6 +421,13 @@ fun WorkspaceScreen(
                     isChatOpen = false
                     onOpenSettings()
                 },
+                onSignInGoogle = {
+                    isChatOpen = false
+                    onOpenSettings()
+                },
+                onSwitchProvider = assistant::switchProvider,
+                onSwitchModel = assistant::switchModel,
+                onToggleShareContext = assistant::toggleShareContext,
                 modifier = Modifier.fillMaxSize(),
             )
         }

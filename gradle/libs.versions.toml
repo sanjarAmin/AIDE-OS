@@ -102,6 +102,7 @@ apksig = { group = "com.android.tools.build", name = "apksig", version.ref = "ap
 nb-javac-android = { group = "io.github.itsaky", name = "nb-javac-android", version.ref = "nbJavac" }
 
 anthropic-java = { group = "com.anthropic", name = "anthropic-java", version.ref = "anthropicJava" }
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 okhttp-mockwebserver = { group = "com.squareup.okhttp3", name = "mockwebserver", version.ref = "okhttp" }
 
 maven-resolver-supplier = { group = "org.apache.maven.resolver", name = "maven-resolver-supplier", version.ref = "mavenResolver" }

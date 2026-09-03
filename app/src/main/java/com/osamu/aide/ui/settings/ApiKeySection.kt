@@ -1,19 +1,31 @@
 package com.osamu.aide.ui.settings
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -23,45 +35,42 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import com.osamu.aide.ai.core.AiProviderType
 import com.osamu.aide.ai.core.ApiKeyStore
 import com.osamu.aide.ai.core.Endpoint
+import com.osamu.aide.ai.core.GoogleAuthManager
 import com.osamu.aide.ai.core.parseEndpoint
 
 /**
- * Where the user's API key and the endpoint it is sent to are entered.
+ * Settings for the AI Assistant, with Gemini as the default provider.
  *
- * The stored key is never read back into the field. [ApiKeyStore] can decrypt
- * it, so this is not about capability -- it is that a screen which renders a
- * secret has to be right about screenshots, accessibility services and the
- * recents thumbnail forever after, and showing "a key is saved" costs nothing
- * and asks none of those questions. Replacing it means typing it again, which
- * is the same thing the user does when they rotate it anyway.
- *
- * The endpoint **is** shown back, and that asymmetry is the point: it is not a
- * secret, and a base URL the user cannot see is a base URL they cannot notice
- * is wrong -- while being exactly the setting that decides who receives their
- * key. It is also how the normalisation in `parseEndpoint` stays honest: the
- * field is rewritten with what was actually stored, so a stripped `/v1` is
- * visible rather than silent.
+ * Supports Google Sign-In, Gemini API keys, multi-model selection (OpenAI, Anthropic, Custom),
+ * and context sharing preferences.
  */
 @Composable
 fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    var activeProvider by remember { mutableStateOf(keys.activeProvider()) }
+    var activeModel by remember { mutableStateOf(keys.activeModel(activeProvider)) }
+    var shareContext by remember { mutableStateOf(keys.shareProjectContext()) }
+
+    var isGoogleSignedIn by remember { mutableStateOf(keys.isGoogleSignedIn()) }
+    var googleEmail by remember { mutableStateOf(keys.googleUserEmail()) }
+
     var saved by remember { mutableStateOf(keys.hasKey()) }
     var draft by remember { mutableStateOf("") }
     var revealed by remember { mutableStateOf(false) }
 
-    var stored by remember { mutableStateOf(keys.baseUrl().orEmpty()) }
-    var endpointDraft by remember { mutableStateOf(stored) }
+    var storedEndpoint by remember { mutableStateOf(keys.baseUrl().orEmpty()) }
+    var endpointDraft by remember { mutableStateOf(storedEndpoint) }
 
     val endpoint = parseEndpoint(endpointDraft)
-    // The normalised form the field would save, or null when it cannot save.
-    // Compared against what is stored rather than against the raw text, so
-    // retyping the same URL with a trailing slash is correctly "no change".
     val normalised = when (endpoint) {
         is Endpoint.Custom -> endpoint.baseUrl
         Endpoint.Default -> ""
@@ -69,17 +78,136 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
     }
 
     Column(
-        modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text("AI assistant", style = MaterialTheme.typography.titleMedium)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                Icons.Default.AutoAwesome,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Text("AI Assistant", style = MaterialTheme.typography.titleMedium)
+        }
+
         Text(
-            text = "Your own API key. It is encrypted with a key held in this " +
-                "device's hardware keystore and never leaves the device.",
+            text = "Gemini is the built-in default assistant. Sign in with Google or bring your own API key. " +
+                "Credentials are encrypted in the device's hardware Keystore.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
+        // -- Provider Selector Chips ----------------------------------------
+        Text("Provider", style = MaterialTheme.typography.labelMedium)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            AiProviderType.entries.forEach { provider ->
+                FilterChip(
+                    selected = activeProvider == provider,
+                    onClick = {
+                        activeProvider = provider
+                        keys.setActiveProvider(provider)
+                        activeModel = keys.activeModel(provider)
+                        saved = keys.hasKey()
+                    },
+                    label = { Text(provider.displayName) },
+                )
+            }
+        }
+
+        // -- Google Sign In for Gemini --------------------------------------
+        if (activeProvider == AiProviderType.GEMINI) {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.AccountCircle,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                        Text(
+                            text = if (isGoogleSignedIn) {
+                                "Signed in: ${googleEmail ?: "Google Account"}"
+                            } else {
+                                "Google Account (Android Studio style)"
+                            },
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                    }
+
+                    if (isGoogleSignedIn) {
+                        OutlinedButton(
+                            onClick = {
+                                keys.signOutGoogle()
+                                isGoogleSignedIn = false
+                                googleEmail = null
+                                saved = keys.hasKey()
+                            },
+                        ) {
+                            Text("Sign out")
+                        }
+                    } else {
+                        Button(
+                            onClick = {
+                                val authManager = GoogleAuthManager(keys)
+                                val request = authManager.createAuthorizationRequest()
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(request.authUrl))
+                                context.startActivity(intent)
+                            },
+                        ) {
+                            Text("Sign in with Google")
+                        }
+                    }
+                }
+            }
+        }
+
+        // -- Model Selector -------------------------------------------------
+        var showModelDropdown by remember { mutableStateOf(false) }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Model", style = MaterialTheme.typography.bodyMedium)
+            Box {
+                OutlinedButton(onClick = { showModelDropdown = true }) {
+                    Text(activeModel)
+                }
+                DropdownMenu(
+                    expanded = showModelDropdown,
+                    onDismissRequest = { showModelDropdown = false },
+                ) {
+                    activeProvider.availableModels.forEach { model ->
+                        DropdownMenuItem(
+                            text = { Text(model) },
+                            onClick = {
+                                activeModel = model
+                                keys.setActiveModel(activeProvider, model)
+                                showModelDropdown = false
+                            },
+                        )
+                    }
+                }
+            }
+        }
+
+        // -- Status Indicator -----------------------------------------------
         if (saved) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -100,11 +228,14 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                         keys.clear()
                         saved = false
                         draft = ""
+                        isGoogleSignedIn = false
+                        googleEmail = null
                     },
                 ) { Text("Remove") }
             }
         }
 
+        // -- API Key Input --------------------------------------------------
         OutlinedTextField(
             value = draft,
             onValueChange = { draft = it },
@@ -112,13 +243,18 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                 .fillMaxWidth()
                 .semantics { contentDescription = "API key" },
             label = { Text(if (saved) "Replace key" else "API key") },
-            placeholder = { Text("sk-ant-...") },
-            singleLine = true,
-            visualTransformation = if (revealed) {
-                VisualTransformation.None
-            } else {
-                PasswordVisualTransformation()
+            placeholder = {
+                Text(
+                    when (activeProvider) {
+                        AiProviderType.GEMINI -> "AIza..."
+                        AiProviderType.ANTHROPIC -> "sk-ant-..."
+                        AiProviderType.OPENAI -> "sk-..."
+                        AiProviderType.CUSTOM -> "API key (optional)"
+                    },
+                )
             },
+            singleLine = true,
+            visualTransformation = if (revealed) VisualTransformation.None else PasswordVisualTransformation(),
             trailingIcon = {
                 IconButton(onClick = { revealed = !revealed }) {
                     Icon(
@@ -129,6 +265,7 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
             },
         )
 
+        // -- Endpoint Input -------------------------------------------------
         OutlinedTextField(
             value = endpointDraft,
             onValueChange = { endpointDraft = it },
@@ -136,48 +273,73 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                 .fillMaxWidth()
                 .semantics { contentDescription = "API endpoint" },
             label = { Text("API endpoint") },
-            placeholder = { Text("Anthropic (default)") },
+            placeholder = {
+                Text(
+                    when (activeProvider) {
+                        AiProviderType.GEMINI -> "Google AI (default)"
+                        AiProviderType.ANTHROPIC -> "Anthropic (default)"
+                        AiProviderType.OPENAI -> "OpenAI (default)"
+                        AiProviderType.CUSTOM -> "https://my-proxy.local"
+                    },
+                )
+            },
             singleLine = true,
             isError = endpoint is Endpoint.Rejected,
             supportingText = {
                 Text(
                     text = when (endpoint) {
-                        // The warning is the whole reason this is shown rather
-                        // than hidden behind an "advanced" toggle: a custom
-                        // endpoint means the key above is sent somewhere the
-                        // user chose, and they should be told so plainly.
                         is Endpoint.Rejected -> endpoint.reason
                         is Endpoint.Custom -> "Your key will be sent to this address."
-                        Endpoint.Default ->
-                            "Leave blank for Anthropic. Any service that speaks the " +
-                                "same Messages API works here."
+                        Endpoint.Default -> "Leave blank for the default service endpoint."
                     },
                 )
             },
         )
 
+        // -- Code Context Sharing Switch ------------------------------------
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Share project context", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "Include project file structure and compiler diagnostics with queries.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = shareContext,
+                onCheckedChange = {
+                    shareContext = it
+                    keys.setShareProjectContext(it)
+                },
+            )
+        }
+
+        // -- Save Button ----------------------------------------------------
         Button(
             onClick = {
-                // A blank key field means "leave the key alone", because the
-                // saved one is never rendered back -- so it is blank whenever
-                // the user came here to change only the endpoint.
                 if (draft.isNotBlank()) {
-                    // Trimmed, because a key pasted from a browser arrives with
-                    // a trailing newline often enough that "invalid x-api-key"
-                    // on a key the user can see is correct is worth one call.
-                    keys.save(draft.trim())
+                    val trimmed = draft.trim()
+                    keys.save(trimmed)
+                    when (activeProvider) {
+                        AiProviderType.GEMINI -> keys.saveGeminiApiKey(trimmed)
+                        AiProviderType.OPENAI -> keys.saveOpenAiApiKey(trimmed)
+                        AiProviderType.ANTHROPIC -> keys.save(trimmed)
+                        AiProviderType.CUSTOM -> keys.saveCustomApiKey(trimmed)
+                    }
                     saved = true
                     draft = ""
                     revealed = false
                 }
                 keys.saveBaseUrl(endpoint)
-                stored = normalised.orEmpty()
-                // Rewritten with what was stored, not what was typed: this is
-                // where the user finds out a trailing slash or `/v1` was taken
-                // off, instead of wondering later why it looks different.
-                endpointDraft = stored
+                storedEndpoint = normalised.orEmpty()
+                endpointDraft = storedEndpoint
             },
-            enabled = normalised != null && (draft.isNotBlank() || normalised != stored),
+            enabled = normalised != null && (draft.isNotBlank() || normalised != storedEndpoint),
         ) { Text("Save") }
     }
 }

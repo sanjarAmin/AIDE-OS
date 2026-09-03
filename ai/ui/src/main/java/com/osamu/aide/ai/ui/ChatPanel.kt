@@ -1,6 +1,7 @@
 package com.osamu.aide.ai.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,18 +21,25 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -49,19 +57,18 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.osamu.aide.ai.core.AiProviderType
 import com.osamu.aide.ai.core.ApprovalRequest
 import com.osamu.aide.ai.core.ChatEntry
 import com.osamu.aide.ai.core.ChatUiState
 import com.osamu.aide.core.ui.theme.CodeTextStyle
 
 /**
- * The assistant panel.
+ * The assistant panel, styled like Gemini in Android Studio.
  *
- * Stateless apart from the draft in the input field: everything else comes from
- * [ChatUiState], which `ChatController` owns. That split is what keeps the
- * approval prompt honest — the panel cannot decide to skip it, because the
- * prompt is a field in the state and the loop is parked until [onApproval] is
- * called.
+ * Supports Google Gemini by default with Google Sign-In and API Key options,
+ * plus multi-model switching (OpenAI, Anthropic, Custom), quick action chips,
+ * and Android Studio-style diff previews.
  */
 @Composable
 fun ChatPanel(
@@ -70,17 +77,45 @@ fun ChatPanel(
     onApproval: (Boolean) -> Unit,
     onDismissError: () -> Unit,
     onAddKey: () -> Unit,
+    onSignInGoogle: () -> Unit = onAddKey,
+    onSwitchProvider: (AiProviderType) -> Unit = {},
+    onSwitchModel: (String) -> Unit = {},
+    onToggleShareContext: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Column(modifier.fillMaxWidth()) {
-        Transcript(state, Modifier.weight(1f))
+        AgentHeader(
+            state = state,
+            onSwitchProvider = onSwitchProvider,
+            onSwitchModel = onSwitchModel,
+            onToggleShareContext = onToggleShareContext,
+        )
+        HorizontalDivider()
+
+        Transcript(
+            state = state,
+            onSend = onSend,
+            onSignInGoogle = onSignInGoogle,
+            onAddKey = onAddKey,
+            modifier = Modifier.weight(1f),
+        )
 
         state.error?.let { ErrorBar(it, onDismissError) }
-        if (state.needsKey) KeyPrompt(onAddKey)
+        if (state.needsKey) {
+            KeyPrompt(
+                activeProvider = state.activeProvider,
+                onAddKey = onAddKey,
+                onSignInGoogle = onSignInGoogle,
+            )
+        }
 
         state.pendingApproval?.let { request ->
             HorizontalDivider()
             ApprovalPrompt(request, onApproval)
+        }
+
+        if (state.entries.isNotEmpty()) {
+            QuickActionsBar(onSend = onSend)
         }
 
         HorizontalDivider()
@@ -93,18 +128,118 @@ fun ChatPanel(
 }
 
 @Composable
-private fun Transcript(state: ChatUiState, modifier: Modifier = Modifier) {
+private fun AgentHeader(
+    state: ChatUiState,
+    onSwitchProvider: (AiProviderType) -> Unit,
+    onSwitchModel: (String) -> Unit,
+    onToggleShareContext: (Boolean) -> Unit,
+) {
+    var showProviderMenu by remember { mutableStateOf(false) }
+    var showModelMenu by remember { mutableStateOf(false) }
+
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(
+                    Icons.Default.AutoAwesome,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp),
+                )
+                Box {
+                    TextButton(onClick = { showProviderMenu = true }) {
+                        Text(
+                            text = state.activeProvider.displayName,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = showProviderMenu,
+                        onDismissRequest = { showProviderMenu = false },
+                    ) {
+                        AiProviderType.entries.forEach { provider ->
+                            DropdownMenuItem(
+                                text = { Text(provider.displayName) },
+                                onClick = {
+                                    onSwitchProvider(provider)
+                                    showProviderMenu = false
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box {
+                    AssistChip(
+                        onClick = { showModelMenu = true },
+                        label = {
+                            Text(
+                                text = state.activeModel,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        },
+                        colors = AssistChipDefaults.assistChipColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        ),
+                    )
+                    DropdownMenu(
+                        expanded = showModelMenu,
+                        onDismissRequest = { showModelMenu = false },
+                    ) {
+                        state.activeProvider.availableModels.forEach { model ->
+                            DropdownMenuItem(
+                                text = { Text(model) },
+                                onClick = {
+                                    onSwitchModel(model)
+                                    showModelMenu = false
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun Transcript(
+    state: ChatUiState,
+    onSend: (String) -> Unit,
+    onSignInGoogle: () -> Unit,
+    onAddKey: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     if (state.entries.isEmpty()) {
-        EmptyTranscript(modifier)
+        EmptyTranscript(
+            state = state,
+            onSend = onSend,
+            onSignInGoogle = onSignInGoogle,
+            onAddKey = onAddKey,
+            modifier = modifier,
+        )
         return
     }
 
     val listState = rememberLazyListState()
 
-    // Follow the tail as the conversation grows. Keyed on the entry count
-    // rather than on the state object, so re-rendering for an unrelated change
-    // -- an approval prompt appearing, say -- does not yank the user back down
-    // while they are reading something further up.
     LaunchedEffect(state.entries.size) {
         if (state.entries.isNotEmpty()) listState.animateScrollToItem(state.entries.lastIndex)
     }
@@ -125,29 +260,37 @@ private fun Transcript(state: ChatUiState, modifier: Modifier = Modifier) {
     }
 }
 
-/**
- * What the panel says before anyone has said anything.
- *
- * The assistant can read and edit the project, and neither is guessable from an
- * empty box with a text field under it. Saying so is also the only place the
- * user is told that an edit will be confirmed first, which is the fact that
- * makes trying it reasonable.
- */
 @Composable
-private fun EmptyTranscript(modifier: Modifier = Modifier) {
-    Box(modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+private fun EmptyTranscript(
+    state: ChatUiState,
+    onSend: (String) -> Unit,
+    onSignInGoogle: () -> Unit,
+    onAddKey: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(24.dp),
+        contentAlignment = Alignment.Center,
+    ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            // Deliberately not the composer's placeholder text. Two nodes
-            // reading "Ask about this project" is ambiguous to a screen reader
-            // and to anything else that addresses the screen by label.
+            Icon(
+                Icons.Default.AutoAwesome,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(36.dp),
+            )
+
             Text(
                 text = "Ask about your code",
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurface,
             )
+
             Text(
                 text = "The assistant can read and search the files in this project, " +
                     "and edit them once you confirm the change.",
@@ -155,7 +298,78 @@ private fun EmptyTranscript(modifier: Modifier = Modifier) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
+
+            if (state.needsKey && state.activeProvider == AiProviderType.GEMINI) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(top = 8.dp),
+                ) {
+                    Button(onClick = onSignInGoogle) {
+                        Text("Sign in with Google")
+                    }
+                    OutlinedButton(onClick = onAddKey) {
+                        Text("Add API Key")
+                    }
+                }
+            }
+
+            Column(
+                modifier = Modifier.padding(top = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    text = "Suggested Prompts",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    AssistChip(
+                        onClick = { onSend("Explain the architecture and files in this project.") },
+                        label = { Text("Explain architecture") },
+                    )
+                    AssistChip(
+                        onClick = { onSend("Find any build errors or missing dependencies in this project.") },
+                        label = { Text("Check build errors") },
+                    )
+                    AssistChip(
+                        onClick = { onSend("Help me create a new Compose screen for this app.") },
+                        label = { Text("Create Compose UI") },
+                    )
+                }
+            }
         }
+    }
+}
+
+@Composable
+private fun QuickActionsBar(onSend: (String) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        AssistChip(
+            onClick = { onSend("Explain what this code does.") },
+            label = { Text("Explain code") },
+        )
+        AssistChip(
+            onClick = { onSend("Check this project for potential bugs or improvements.") },
+            label = { Text("Find bugs") },
+        )
+        AssistChip(
+            onClick = { onSend("Generate unit tests for this project.") },
+            label = { Text("Generate test") },
+        )
+        AssistChip(
+            onClick = { onSend("Run the build and fix any compiler errors found.") },
+            label = { Text("Fix error") },
+        )
     }
 }
 
@@ -181,15 +395,6 @@ private fun Bubble(text: String, fromUser: Boolean) {
     }
 }
 
-/**
- * One tool call, shown rather than hidden.
- *
- * The assistant reads and writes the user's files; a transcript that shows only
- * prose is one the user has to take on trust. Declined and failed calls are
- * distinguished because they mean opposite things — "you said no" versus "I
- * never saw that file" — and a failed read the user reads as a successful one
- * is how they come to believe an answer that was based on nothing.
- */
 @Composable
 private fun ToolChip(entry: ChatEntry.Tool) {
     val colors = MaterialTheme.colorScheme
@@ -232,23 +437,34 @@ private fun String.icon(): ImageVector = when (this) {
 }
 
 /**
- * The confirmation gate, on screen.
- *
- * Inline rather than a dialog: the user needs the transcript above it to decide
- * — a dialog that covers "I'll rewrite Main.kt to do X" and then asks whether
- * to rewrite Main.kt is asking them to remember rather than to read.
+ * Android Studio-style diff and approval prompt.
  */
 @Composable
 private fun ApprovalPrompt(request: ApprovalRequest, onApproval: (Boolean) -> Unit) {
     val colors = MaterialTheme.colorScheme
 
-    Surface(color = colors.secondaryContainer) {
+    Surface(
+        color = colors.secondaryContainer,
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.padding(8.dp),
+    ) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                text = "Write ${request.path.ifBlank { "a file" }}?",
-                style = MaterialTheme.typography.titleSmall,
-                color = colors.onSecondaryContainer,
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(
+                    Icons.Default.Edit,
+                    contentDescription = null,
+                    tint = colors.onSecondaryContainer,
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    text = "Write ${request.path.ifBlank { "a file" }}?",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = colors.onSecondaryContainer,
+                )
+            }
             Text(
                 text = "This replaces the file's contents. Nothing is written until you allow it.",
                 style = MaterialTheme.typography.bodySmall,
@@ -303,9 +519,12 @@ private fun ErrorBar(message: String, onDismiss: () -> Unit) {
     }
 }
 
-/** Where every new user starts, so it is a prompt and not an error. */
 @Composable
-private fun KeyPrompt(onAddKey: () -> Unit) {
+private fun KeyPrompt(
+    activeProvider: AiProviderType = AiProviderType.GEMINI,
+    onAddKey: () -> Unit,
+    onSignInGoogle: () -> Unit = onAddKey,
+) {
     Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
         Row(
             Modifier
@@ -314,11 +533,18 @@ private fun KeyPrompt(onAddKey: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "The assistant needs your Anthropic API key. It stays on this device.",
+                text = if (activeProvider == AiProviderType.GEMINI) {
+                    "Gemini needs sign-in or an API key. Data stays on this device."
+                } else {
+                    "The assistant needs your ${activeProvider.displayName} API key. It stays on this device."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
+            if (activeProvider == AiProviderType.GEMINI) {
+                TextButton(onClick = onSignInGoogle) { Text("Sign in") }
+            }
             TextButton(onClick = onAddKey) { Text("Add key") }
         }
     }
@@ -346,9 +572,6 @@ private fun Composer(enabled: Boolean, sending: Boolean, onSend: (String) -> Uni
             onValueChange = { draft = it },
             modifier = Modifier.weight(1f),
             placeholder = { Text("Ask about this project") },
-            // Not disabled while sending: the user can keep typing the next
-            // question, and a field that greys out mid-thought loses whatever
-            // they had half-written.
             maxLines = 5,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
             keyboardActions = KeyboardActions(onSend = { submit() }),
@@ -367,10 +590,6 @@ private fun Composer(enabled: Boolean, sending: Boolean, onSend: (String) -> Uni
                 Icon(
                     Icons.AutoMirrored.Filled.Send,
                     contentDescription = "Send",
-                    // Explicitly dimmed rather than left to Color.Unspecified,
-                    // which resolves to the ambient content colour -- so a
-                    // disabled button rendered in full-strength black and
-                    // invited a tap that does nothing.
                     tint = if (canSend) {
                         MaterialTheme.colorScheme.primary
                     } else {
