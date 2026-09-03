@@ -5,7 +5,12 @@ Java and C/C++ and returns nothing for a `.kt` file, and the compiler archive we
 already ship has the K2 front end but **zero** Analysis API classes. This is the
 toolchain that closes it, and what it cost to establish that the route works.
 
-**Status: the toolchain builds; nothing has run on a device.** `fetch-jars.sh`
+**Status: it loads and resolves on a device.** Spike `:spike:kotlinls` runs the
+whole arrangement on the `aideos_test` emulator: the archives load, the
+relocated references resolve, and the descriptors read back correct. What has
+*not* happened is a session being opened or a query answered — §7.
+
+**The toolchain builds.** `fetch-jars.sh`
 rebuilds the set from a clean machine and verifies every jar, `relocate.sh`
 rewrites it onto the compiler's namespace and refuses to leave a partial
 result, and `build-dex.sh` produces a **1.9 MB archive holding a 6.9 MB
@@ -165,17 +170,64 @@ The archive is **reproducible**: `d8` is deterministic, so with timestamps
 normalised two builds are byte-identical. That is what lets it be pinned the way
 `jars.lock` pins its inputs, rather than merely published.
 
-## 7. What is still unknown
+## 7. It loads on ART, and the fixes it needed were not code
+
+The prediction in §6 was that dexing cleanly would not mean running. It was
+right to be suspicious and wrong about where the cost would fall: **the Analysis
+API needed no shim, no replaced class and no rewrite to load.** The compiler
+needed seven. What it needed instead was two facts about staging, and both
+present as the archive being broken.
+
+`AnalysisApiLoadTest` asserts, on device:
+
+- the compiler archive loads on its own — the control, so a staging mistake
+  cannot be mistaken for a relocation one;
+- `org.jetbrains.kotlin.com.intellij.psi.PsiElement` loads **under its relocated
+  name**, which is the premise everything else rests on;
+- `KaSession`, `KaCompletionCandidateChecker` and
+  `StandaloneAnalysisAPISessionBuilder` all load;
+- **the relocated references resolve**, not merely spell correctly — reading
+  `KaSession`'s method signatures forces 643 types across 252 methods to
+  resolve, and none of them lands on an unshaded `com.intellij` name. Loading a
+  class only reads its own bytes; this is what would have caught a rewrite that
+  pointed at something absent;
+- the registration descriptors read back through the loader with the class
+  relocated and the extension namespace intact.
+
+### The two traps, both of which look like a corrupt archive
+
+**A dex file the app can write to will not load.** Since API 29:
+
+```
+java.lang.SecurityException: Writable dex file
+  '/data/user/0/…/kotlin-compiler-2.2.10.zip' is not allowed.
+```
+
+Thrown by the `PathClassLoader` **constructor**, not by the first `loadClass`,
+so it reads as the archive being unopenable rather than as a permission on it.
+Anything the app downloads and then loads has to be made read-only first.
+
+**The published compiler component is a zip of two jars, not a dex archive.**
+`kotlinc.jar` is the loadable one, carrying six dex files; `kotlin-stdlib.jar`
+beside it is ordinary JVM bytecode the compiler reads as its `kotlin-home`, and
+`PathClassLoader` cannot open it at all. Handing the outer zip to the loader
+fails with `Entry not found`, which names neither the zip nor the jar. Anything
+loading this component must reach inside it first.
+
+## 8. What is still unknown
 
 Honest limits of what has been established. None of this is evidence yet.
 
-- **Nothing has been loaded on ART.** Dexing cleanly is not running: the
-  compiler dexed cleanly too and then needed seven fixes to start. The
-  classloader arrangement is designed and untried — the Analysis API archive
-  wants the kotlinc archive's loader as its *parent*, since it is compiled
-  against those classes and must not get a second copy.
-- **Nothing has answered a query.** Feasibility of the *closure* is not
-  feasibility of *completion*.
+- **No session has been opened and no query answered.** Classes loading is not
+  the API working: `StandaloneAnalysisAPISessionBuilder` builds a session out of
+  a project model, a virtual file system and a module structure, and none of
+  that has been attempted here. This is the next thing to try and the point at
+  which the two remaining platform classes in §3 might start to matter.
+- **Latency is still the milestone's real question.** M3 holds Java completion
+  to 200 ms and meets it at 76 ms. Nothing measured so far predicts what the
+  Analysis API costs to *answer*, only what it costs to load — which was 0.4 s
+  for the API archive on the emulator, against the compiler archive's eleven
+  seconds of startup.
 - **No latency number exists.** M3 holds Java completion to a 200 ms budget and
   meets it at 76 ms. Whether the Analysis API can be made to answer in that time
   on a phone is the question the milestone actually turns on, and it is

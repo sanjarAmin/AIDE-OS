@@ -100,6 +100,12 @@ include(":spike:clang")
 // risk R4 is about and what M9 rests on. Not part of the app.
 include(":spike:rootfs")
 
+// Spike R12: can the Kotlin Analysis API answer on ART? The compiler already
+// runs there (R2); this asks whether the API that reads code rather than
+// compiling it will load beside it, once relocated onto the compiler's own
+// shaded namespace. tools/analysisapi/FINDINGS.md.
+include(":spike:kotlinls")
+
 // Spike R9 -- executing a downloaded native binary, which M7 is designed
 // around and which docs/PLAN.md is currently inconsistent about. Not part of
 // the app.
