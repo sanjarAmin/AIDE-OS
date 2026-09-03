@@ -239,8 +239,12 @@ presents as "no JDK staged" rather than as a missing file.
 - **Heap.** `org.gradle.jvmargs` is set by the test fixture, not the engine.
   What a Gradle build may use on a phone is R3's question, and answering it
   inside this engine would settle it by accident.
-- **Multi-module projects** are untried. Everything built so far is one module,
-  and an Android Studio project is almost never one module — so M9's acceptance
-  test is weaker than it reads.
+- ~~**Multi-module projects** are untried.~~ **Closed.** An application module
+  depending on a library module builds on the device in 62 s. It worked
+  unchanged, which is the useful part of the result: nothing in the engine
+  assumes a single module. `findApk` is the line that could have been wrong —
+  it searches rather than computes — so the test asserts the APK came from the
+  *application* module, since a library produces none and "the newest output"
+  across a multi-module tree is how that goes wrong quietly.
 - **Cancellation.** Collecting the flow can be cancelled, but the Gradle process
   is not yet killed when it is.

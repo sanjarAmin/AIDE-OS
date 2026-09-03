@@ -205,6 +205,115 @@ class GradleBuildSystemTest {
     }
 
     /**
+     * **A project with more than one module**, which is what a real one is.
+     *
+     * M9's acceptance test says "an unmodified Android Studio project builds",
+     * and until now everything built here has been a single module — a shape
+     * Android Studio does not produce and almost nobody keeps. Two things only
+     * appear at two modules: an application that depends on a library, and an
+     * APK that is not under the root project's own build directory.
+     *
+     * That second one is the reason this is worth a test rather than an
+     * assumption. `findApk` searches rather than computes, and a search that
+     * started at the wrong root, or took the newest file across modules, would
+     * pass every single-module test and hand back the library's output here.
+     */
+    @Test
+    fun it_builds_a_project_with_a_library_module() {
+        val root = writeMultiModuleProject()
+        val multi = project.copy(name = "multidemo", rootDir = root, applicationId = "demo.multi")
+
+        val result = runBlocking {
+            engine.build(BuildRequest(project = multi, outputDir = File(support, "out-multi")))
+                .awaitResult()
+        }
+        Log.i(TAG, "multi-module result=$result")
+        assertTrue("the build failed: $result", result is BuildResult.Success)
+
+        val apk = (result as BuildResult.Success).apk
+        // The application module's APK, not the library's -- a library produces
+        // no APK at all, so taking "the newest output" carelessly across a
+        // multi-module tree is how this would go wrong.
+        assertTrue("the APK did not come from the application module: $apk", "/app/" in apk.path)
+
+        val info = context.packageManager
+            .getPackageArchiveInfo(apk.absolutePath, PackageManager.GET_ACTIVITIES)
+        assertTrue("the platform's package parser rejected it", info != null)
+        assertEquals("demo.multi", info!!.packageName)
+        Log.i(TAG, "multi-module APK is ${apk.length()} bytes in ${result.durationMillis} ms")
+    }
+
+    /** An application module and a library module it actually depends on. */
+    private fun writeMultiModuleProject(): File {
+        val root = File(context.filesDir, "gradle-multi").apply { deleteRecursively(); mkdirs() }
+        File(root, "settings.gradle.kts").writeText(
+            """
+            pluginManagement { repositories { google(); mavenCentral() } }
+            dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+            rootProject.name = "multidemo"
+            include(":app")
+            include(":lib")
+            """.trimIndent(),
+        )
+        File(root, "build.gradle.kts").writeText(
+            """
+            plugins {
+                id("com.android.application") version "9.3.2" apply false
+                id("com.android.library") version "9.3.2" apply false
+            }
+            """.trimIndent(),
+        )
+
+        File(root, "lib/src/main/java/demo/lib").mkdirs()
+        File(root, "lib/build.gradle.kts").writeText(
+            """
+            plugins { id("com.android.library") }
+            android {
+                namespace = "demo.lib"
+                compileSdk { version = release(36) }
+                defaultConfig { minSdk = 26 }
+            }
+            """.trimIndent(),
+        )
+        File(root, "lib/src/main/AndroidManifest.xml").writeText(
+            """<?xml version="1.0" encoding="utf-8"?><manifest />""",
+        )
+        File(root, "lib/src/main/java/demo/lib/Greeting.java").writeText(
+            "package demo.lib;\npublic class Greeting { public static String text() { return \"lib\"; } }\n",
+        )
+
+        File(root, "app/src/main/java/demo/multi").mkdirs()
+        File(root, "app/build.gradle.kts").writeText(
+            """
+            plugins { id("com.android.application") }
+            android {
+                namespace = "demo.multi"
+                compileSdk { version = release(36) }
+                defaultConfig { applicationId = "demo.multi"; minSdk = 26; versionCode = 1 }
+            }
+            dependencies { implementation(project(":lib")) }
+            """.trimIndent(),
+        )
+        File(root, "app/src/main/AndroidManifest.xml").writeText(
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+                <application android:label="multidemo" />
+            </manifest>
+            """.trimIndent(),
+        )
+        // Calls into the library, so a build that did not actually wire the
+        // modules together fails to compile rather than quietly producing an
+        // APK with nothing of the library in it.
+        File(root, "app/src/main/java/demo/multi/Hello.java").writeText(
+            "package demo.multi;\nimport demo.lib.Greeting;\n" +
+                "public class Hello { public static String greet() { return Greeting.text(); } }\n",
+        )
+        File(root, "gradle.properties").writeText("org.gradle.jvmargs=-Xmx1g\n")
+        return root
+    }
+
+    /**
      * A project Gradle cannot build is refused before anything starts, with a
      * sentence rather than an exit code.
      */
