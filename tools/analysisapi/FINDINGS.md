@@ -5,6 +5,9 @@ Java and C/C++ and returns nothing for a `.kt` file, and the compiler archive we
 already ship has the K2 front end but **zero** Analysis API classes. This is the
 toolchain that closes it, and what it cost to establish that the route works.
 
+**Status: it loads, links and resolves on a device; a session will not build.**
+The blocker is §9, and the useful half of that finding is where it *is not*.
+
 **Status: it loads and resolves on a device.** Spike `:spike:kotlinls` runs the
 whole arrangement on the `aideos_test` emulator: the archives load, the
 relocated references resolve, and the descriptors read back correct. What has
@@ -214,15 +217,83 @@ beside it is ordinary JVM bytecode the compiler reads as its `kotlin-home`, and
 fails with `Entry not found`, which names neither the zip nor the jar. Anything
 loading this component must reach inside it first.
 
-## 8. What is still unknown
+## 8. A session will not build, and it is not Android's fault
+
+`AnalysisProbe` — real code compiled against the relocated jars, shipped dexed
+beside them, so the API's Kotlin DSLs are driven as code rather than by
+reflection — gets as far as `buildStandaloneAnalysisAPISession` and stops:
+
+```
+RuntimeException: Cannot resolve /META-INF/analysis-api/analysis-api-fir.xml
+  (dataLoader=resources data loader)
+    at …ide.plugins.XmlReader.readInclude:908
+    at …ide.plugins.PluginXmlPathResolver.resolvePath:105
+```
+
+**The single most useful fact: the same probe, on the same relocated jars,
+fails identically on a desktop JVM.** So this is not ART, not dex, not
+`PathClassLoader` and not the relocation's linking — all of which the loading
+tests already show working. The remaining work is aligning the IntelliJ
+platform, which is a different and much better-understood kind of problem than
+"does this run on Android".
+
+Ruled out, each at the cost of a run:
+
+- **Resource visibility.** The loader reads
+  `META-INF/analysis-api/analysis-api-fir.xml` with *and* without a leading
+  slash (`the_loader_can_read_the_descriptors_as_resources` asserts it). A
+  slash-tolerant classloader on the desktop changes nothing.
+- **The classloader arrangement**, which was a real bug and is fixed — §9.
+- **The relocation being incomplete**: the probe *compiles* against these jars
+  with the Kotlin compiler, which reads `@Metadata` to reconstruct their
+  declarations. A stale `d2` would have failed that compile, so §5's hardest
+  rewrite is independently confirmed.
+
+What is left is the platform. `kotlin-compiler-embeddable` shades a *trimmed*
+`intellij-core`, and its `PluginXmlPathResolver` resolves includes out of jar
+files through a `ZipFilePool` with the resource loader only as a fallback. The
+Analysis API expects a fuller platform than the compiler carries. The next thing
+to try is supplying the platform's plugin-descriptor machinery properly rather
+than relying on the compiler's copy of it.
+
+`AnalysisSessionTest.a_session_still_cannot_be_built` pins this, and is written
+to **fail when the blocker goes**, with the two real assertions in its message.
+
+## 9. Two archives, one classloader — chaining does not work
+
+The obvious arrangement is a chain, and it is wrong:
+
+```
+boot → kotlinc archive → analysis-api archive     ✗
+boot → [kotlinc : analysis-api : probe]           ✓
+```
+
+Chained, the API's classes load fine and then service registration fails with a
+`ClassNotFoundException` for
+`PluginStructureProvider$PluginDesignation` — **a class plainly present in the
+dex**, which reads as a corrupt archive.
+
+The cause is that IntelliJ resolves plugin classes through
+`MockComponentManager.loadClass`, which uses `Class.forName` and therefore *its
+own* loader. That code lives in the compiler archive, which is the **parent**,
+and a parent cannot see into a child. Nothing about the error says so.
+
+Flat and parented to the boot loader is the arrangement, for the reason
+`../kotlinc/FINDINGS.md` already gives about not parenting to the app's loader:
+the app ships its own kotlin-stdlib and d8 synthesises helpers independently for
+each.
+
+Setting the thread context classloader was tried first and is *not* the fix —
+`Class.forName` in this path does not consult it — though it is set anyway,
+since other IntelliJ paths do.
+
+## 10. What is still unknown
 
 Honest limits of what has been established. None of this is evidence yet.
 
-- **No session has been opened and no query answered.** Classes loading is not
-  the API working: `StandaloneAnalysisAPISessionBuilder` builds a session out of
-  a project model, a virtual file system and a module structure, and none of
-  that has been attempted here. This is the next thing to try and the point at
-  which the two remaining platform classes in §3 might start to matter.
+- **No query has been answered**, because no session builds — §8. The two
+  platform classes §3 lists have still not been reached, so whether they matter
+  is unknown.
 - **Latency is still the milestone's real question.** M3 holds Java completion
   to 200 ms and meets it at 76 ms. Nothing measured so far predicts what the
   Analysis API costs to *answer*, only what it costs to load — which was 0.4 s

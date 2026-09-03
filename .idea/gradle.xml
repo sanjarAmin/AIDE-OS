@@ -33,6 +33,7 @@
             <option value="$PROJECT_DIR$/spike/deps" />
             <option value="$PROJECT_DIR$/spike/git" />
             <option value="$PROJECT_DIR$/spike/javals" />
+            <option value="$PROJECT_DIR$/spike/kotlinls" />
             <option value="$PROJECT_DIR$/spike/nativeexec" />
             <option value="$PROJECT_DIR$/spike/rootfs" />
             <option value="$PROJECT_DIR$/terminal" />

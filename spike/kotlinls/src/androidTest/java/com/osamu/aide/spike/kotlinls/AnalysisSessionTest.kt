@@ -1,0 +1,204 @@
+package com.osamu.aide.spike.kotlinls
+
+import android.util.Log
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import dalvik.system.PathClassLoader
+import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import java.io.File
+
+/**
+ * Spike R12, the question that matters: does the Analysis API **answer**?
+ *
+ * `AnalysisApiLoadTest` shows the classes load and their relocated references
+ * resolve. That is not the same as the API working — a session is built out of
+ * a project model, a virtual file system and a module structure, and none of
+ * that is exercised by loading a class.
+ *
+ * The query is deliberately one that parsing cannot fake. Reading a function's
+ * *name* needs only a parser; reading its **return type** needs the front end
+ * to run, and telling `String` from `kotlin.String` needs it to resolve against
+ * the standard library rather than guess from the source text.
+ *
+ * The work happens in `AnalysisProbe`, compiled against the relocated jars and
+ * shipped dexed beside them, because the API is Kotlin DSLs and lambdas that
+ * reflection cannot drive readably. This reflects over one method: `String` in,
+ * `String` out. See `tools/analysisapi/probe/AnalysisProbe.kt`.
+ */
+@RunWith(AndroidJUnit4::class)
+class AnalysisSessionTest {
+
+    private lateinit var probe: Class<*>
+    private lateinit var sourceDir: File
+
+    @Before
+    fun setUp() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val staging = context.getExternalFilesDir(null)
+
+        val kotlinc = File(staging, KOTLINC_ARCHIVE)
+        val analysisApi = File(staging, ANALYSIS_API_ARCHIVE)
+        val probeJar = File(staging, PROBE_ARCHIVE)
+        assumeTrue("no $KOTLINC_ARCHIVE staged", kotlinc.isFile)
+        assumeTrue("no $ANALYSIS_API_ARCHIVE staged", analysisApi.isFile)
+        assumeTrue("no $PROBE_ARCHIVE staged", probeJar.isFile)
+
+        val local = File(context.filesDir, "kotlinls").apply { mkdirs() }
+        val compilerJar = unpack(kotlinc, File(local, "kotlinc.jar"), "kotlinc.jar")
+        val analysisLocal = readOnlyCopy(analysisApi, File(local, ANALYSIS_API_ARCHIVE))
+        val probeLocal = readOnlyCopy(probeJar, File(local, PROBE_ARCHIVE))
+
+        // **One loader, not a chain, and this is the finding.** The obvious
+        // arrangement -- the Analysis API parented to the compiler -- fails:
+        // IntelliJ's `MockComponentManager.loadClass` resolves plugin classes
+        // with `Class.forName`, which uses *its own* loader, and the compiler's
+        // loader is the parent and cannot see a child. The error is a
+        // `ClassNotFoundException` naming a class that is plainly in the dex.
+        //
+        // Flat, parented to the boot loader for the reason
+        // `tools/kotlinc/FINDINGS.md` gives: parenting to the app's loader
+        // hands the archive the app's own kotlin-stdlib synthetics.
+        val loader = PathClassLoader(
+            listOf(compilerJar, analysisLocal, probeLocal)
+                .joinToString(":") { it.absolutePath },
+            null,
+        )
+        probe = loader.loadClass("com.osamu.aide.analysisapi.probe.AnalysisProbe")
+
+        sourceDir = File(context.cacheDir, "probe-src-${System.nanoTime()}").apply { mkdirs() }
+        File(sourceDir, "Greeting.kt").writeText(
+            """
+            package probe
+
+            fun greet(name: String): String = "hello " + name
+
+            fun count(items: List<Int>): Int = items.size
+            """.trimIndent(),
+        )
+    }
+
+    private fun readOnlyCopy(source: File, target: File): File {
+        if (!target.isFile || target.length() != source.length()) {
+            target.delete()
+            source.copyTo(target, overwrite = true)
+        }
+        // A dex file the app can write to will not load at all; see
+        // AnalysisApiLoadTest for the exception this avoids.
+        target.setWritable(false, false)
+        return target
+    }
+
+    private fun unpack(archive: File, target: File, entry: String): File {
+        if (!target.isFile) {
+            java.util.zip.ZipFile(archive).use { zip ->
+                val found = zip.getEntry(entry) ?: error("no $entry in ${archive.name}")
+                zip.getInputStream(found).use { input ->
+                    target.outputStream().use { input.copyTo(it) }
+                }
+            }
+        }
+        target.setWritable(false, false)
+        return target
+    }
+
+    private fun describe(): String {
+        val method = probe.getMethod("describeFunctions", String::class.java, String::class.java)
+        val started = System.nanoTime()
+        val result = method.invoke(null, sourceDir.absolutePath, null) as String
+        val millis = (System.nanoTime() - started) / 1_000_000
+        Log.i(TAG, "describeFunctions took $millis ms")
+        Log.i(TAG, "result: $result")
+        return result
+    }
+
+    /**
+     * What the loader can see, which rules out the obvious explanation.
+     *
+     * The descriptors read back through the classloader **in both forms**, with
+     * and without a leading slash. That is why the finding below does not blame
+     * resource visibility, and why a slash-tolerant loader — tried on the
+     * desktop — changes nothing.
+     */
+    @Test
+    fun the_loader_can_read_the_descriptors_as_resources() {
+        val result = probe.getMethod("probeResources").invoke(null) as String
+        Log.i(TAG, "resources: $result")
+
+        assertTrue(
+            "the descriptors are not readable through the loader at all: $result",
+            "analysis-api-fir.xml[cl=true" in result,
+        )
+    }
+
+    /**
+     * The probe runs, and reaches the API's own code.
+     *
+     * Separate from the failure below because it is a different claim: the
+     * toolchain is sound as far as *execution*, which is what stops the next
+     * assertion being vacuous. A probe that never started would also "fail to
+     * build a session".
+     */
+    @Test
+    fun the_probe_runs_inside_the_analysis_api_archive() {
+        val result = describe()
+
+        assertTrue("the probe did not run at all", result.isNotBlank())
+        assertTrue(
+            "the probe failed before reaching the Analysis API: $result",
+            result.startsWith("OK ") || "analysis-api" in result,
+        )
+    }
+
+    /**
+     * The boundary, pinned. **Delete this test when it starts failing.**
+     *
+     * Asserting that something does *not* work is not a thing to do lightly.
+     * It earns its place because the alternative is a spike whose tests are all
+     * green while the feature it exists to prove does not work — and this repo
+     * has been bitten by exactly that (`engine/gradle`'s acceptance test skipped
+     * silently for a week).
+     *
+     * The session cannot be built: the Analysis API's plugin descriptors do not
+     * resolve through the IntelliJ platform bundled in the Kotlin compiler.
+     *
+     * ```
+     * RuntimeException: Cannot resolve /META-INF/analysis-api/analysis-api-fir.xml
+     *   (dataLoader=resources data loader)
+     *     at …ide.plugins.XmlReader.readInclude
+     *     at …ide.plugins.PluginXmlPathResolver.resolvePath
+     * ```
+     *
+     * **This is not an Android problem.** The same probe against the same
+     * relocated jars fails identically on a desktop JVM, which is the single
+     * most useful fact here: it means the remaining work is aligning the
+     * IntelliJ platform, not fighting ART. `tools/analysisapi/FINDINGS.md` §9.
+     */
+    @Test
+    fun a_session_still_cannot_be_built() {
+        val result = describe()
+
+        assertTrue(
+            "A session was built — R12's blocker is gone. Delete this test and " +
+                "assert the real thing instead: greet should resolve to " +
+                "greet(kotlin.String):kotlin.String, and count's parameter to " +
+                "kotlin.collections.List<kotlin.Int>. Result: $result",
+            result.startsWith("ERR "),
+        )
+        assertTrue(
+            "The session fails somewhere new, so FINDINGS.md §9 is out of " +
+                "date and should be corrected rather than trusted: $result",
+            "Cannot resolve" in result && "analysis-api" in result,
+        )
+    }
+
+    private companion object {
+        const val TAG = "AnalysisSessionTest"
+        const val KOTLINC_ARCHIVE = "kotlin-compiler-2.2.10.zip"
+        const val ANALYSIS_API_ARCHIVE = "analysis-api-2.2.10.zip"
+        const val PROBE_ARCHIVE = "analysis-probe.jar"
+    }
+}
