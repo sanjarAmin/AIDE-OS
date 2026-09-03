@@ -1,0 +1,42 @@
+# The Kotlin Analysis API jar set, for Kotlin code intelligence on device.
+#
+# These are what `:lsp:kotlin` needs and what `kotlin-compiler-embeddable`
+# does NOT contain: the shipped compiler carries the K2 front end (4259 FIR
+# classes) and zero Analysis API classes. See FINDINGS.md.
+#
+# **Not on Maven Central.** JetBrains publishes these only to their own
+# repository (KT-56203 has been open about that for years), so every row here
+# names `jetbrains` as its source and fetch-jars.sh knows the two hosts apart.
+#
+# **The POMs are wrong and must not be resolved.** Each `-for-ide` artifact
+# declares dependencies -- analysis-api-standalone-base, analysis-api-fir-
+# standalone-base, analysis-api-standalone -- that return 404 from the same
+# repository, because they are shadowed *into* the -for-ide jar. A normal
+# Maven or Gradle resolution therefore fails. Fetch the jars directly, by
+# name, and ignore what they claim to depend on.
+#
+# The version is pinned to 2.2.10 to match kotlin-compiler-embeddable in
+# ../kotlinc/jars.lock. The Analysis API binds to compiler internals; the two
+# move together and a mismatched pair is not a supported combination.
+#
+# Format: <sha256>  <bytes>  <file>  <coordinate>  <source>
+#
+# `source` is `jetbrains` for the IntelliJ dependencies repository and
+# `central` for Maven Central.
+
+b3fd644c8737dec92d4d1b555d3aee32ac3f328231b218d98ca937f5d699f5b5  209569  analysis-api-standalone-for-ide.jar  org.jetbrains.kotlin:analysis-api-standalone-for-ide:2.2.10  jetbrains
+61082cf8cf9c395c47c3ce7c937cabb212a8ef96221d99f21a6ed2edc1356530  920324  analysis-api-for-ide.jar  org.jetbrains.kotlin:analysis-api-for-ide:2.2.10  jetbrains
+6b75767b1025f5e8936c6c683f7a82f898b16ad073db256f8aae07b3e088c21f  437091  analysis-api-impl-base-for-ide.jar  org.jetbrains.kotlin:analysis-api-impl-base-for-ide:2.2.10  jetbrains
+cfd412ca653ce6fef8d5322c3e0e58b26f0c58dc3f72fc088d68b2e844c67860  228853  analysis-api-platform-interface-for-ide.jar  org.jetbrains.kotlin:analysis-api-platform-interface-for-ide:2.2.10  jetbrains
+39bcb7887e8d6dd4f4c841e0502be1f79be3d9c173ed7199d492c9dcede91480  1550615  low-level-api-fir-for-ide.jar  org.jetbrains.kotlin:low-level-api-fir-for-ide:2.2.10  jetbrains
+1b48b8f4497548c7c1e230a1d24f00b3ad785733b183415665da3de83e2decd8  777293  symbol-light-classes-for-ide.jar  org.jetbrains.kotlin:symbol-light-classes-for-ide:2.2.10  jetbrains
+5beefcdfd0bd9907a61157f1e9c577c2511ad1c5e8ed01f15e76687606bc2c63  3787276  analysis-api-k2-for-ide.jar  org.jetbrains.kotlin:analysis-api-k2-for-ide:2.2.10  jetbrains
+
+# Caffeine is the one dependency the relocated platform does not already
+# carry. **Its version is our choice, not JetBrains'** -- no -for-ide POM
+# declares it, because these artifacts expect a running IntelliJ platform to
+# provide it. 3.1.8 is the last 3.x built for Java 11, which is what the
+# platform of this era uses. If a later Analysis API needs a newer one,
+# nothing here will say so; the symptom would be a NoSuchMethodError inside
+# the cache.
+7dd15f9df1be238ffaa367ce6f556737a88031de4294dad18eef57c474ddf1d3  889211  caffeine.jar  com.github.ben-manes.caffeine:caffeine:3.1.8  central
