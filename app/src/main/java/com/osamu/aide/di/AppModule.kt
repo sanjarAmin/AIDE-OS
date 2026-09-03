@@ -28,6 +28,8 @@ import com.osamu.aide.ui.workspace.AssistantViewModel
 import com.osamu.aide.ui.workspace.KotlinCompilerSource
 import com.osamu.aide.ui.workspace.GitViewModel
 import com.osamu.aide.ui.workspace.LanguageServices
+import com.osamu.aide.build.BuildRunner
+import com.osamu.aide.build.RemoteBuildRunner
 import com.osamu.aide.ui.workspace.ProjectBuilder
 import com.osamu.aide.ui.workspace.TerminalViewModel
 import com.osamu.aide.ui.workspace.ProjectDependencies
@@ -120,6 +122,16 @@ val appModule = module {
         )
     }
 
+    /**
+     * The builder the UI holds runs in the build process, not this one.
+     *
+     * `ProjectBuilder` stays a singleton here because it is also what answers
+     * the cheap toolchain questions -- which platform is missing, which
+     * download to offer -- and the build service resolves the same definition
+     * in its own process, where it is the thing that actually compiles.
+     */
+    single<BuildRunner> { RemoteBuildRunner(get()) }
+
     // One per app, so the warm compiler behind it survives tab switches and
     // rotations. Rebuilding it per screen would undo the whole point.
     single {
@@ -135,7 +147,7 @@ val appModule = module {
     viewModel { ProjectsViewModel(get(), get(), get(), get(), get()) }
     viewModel { GitViewModel(get(), get(), get()) }
     viewModel { TerminalViewModel(get()) }
-    viewModel { WorkspaceViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    viewModel { WorkspaceViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
 }
 
 /**

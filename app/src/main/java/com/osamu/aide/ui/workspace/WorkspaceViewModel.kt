@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.osamu.aide.core.common.AppResult
+import com.osamu.aide.build.BuildRunner
 import com.osamu.aide.core.common.DispatcherProvider
 import com.osamu.aide.core.fs.FileNode
 import com.osamu.aide.core.fs.Project
@@ -186,6 +187,11 @@ class WorkspaceViewModel(
     private val projects: ProjectRepository,
     private val documents: DocumentStore,
     private val builder: ProjectBuilder,
+    /**
+     * Runs the build, in the build process. [builder] still answers the cheap
+     * toolchain questions above it, which are wanted synchronously and here.
+     */
+    private val runner: BuildRunner,
     private val toolchain: ToolchainManager,
     private val installer: ApkInstaller,
     private val languageServices: LanguageServices,
@@ -625,7 +631,7 @@ class WorkspaceViewModel(
             _state.update {
                 it.copy(isBuildPanelOpen = true, build = BuildUiState(isRunning = true))
             }
-            builder.build(project).collect(::onBuildEvent)
+            runner.build(project).collect(::onBuildEvent)
         } finally {
             _state.update {
                 it.copy(

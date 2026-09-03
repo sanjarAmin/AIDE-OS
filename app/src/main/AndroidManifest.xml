@@ -53,6 +53,17 @@
                     android:host="oauth2callback" />
             </intent-filter>
         </activity>
+
+        <!--
+            Builds run here, not in the UI process. The Kotlin compiler's heap
+            is the reason (risk R3): held in the app's process it competes with
+            the editor and every open buffer, and an out-of-memory kill takes
+            the user's unsaved work with a build they could have retried.
+        -->
+        <service
+            android:name=".build.BuildService"
+            android:process=":build"
+            android:exported="false" />
     </application>
 
 </manifest>

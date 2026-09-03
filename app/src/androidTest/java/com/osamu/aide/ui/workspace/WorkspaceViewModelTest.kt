@@ -2,6 +2,7 @@ package com.osamu.aide.ui.workspace
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.osamu.aide.build.BuildRunner
 import com.osamu.aide.core.common.AppResult
 import com.osamu.aide.core.common.DefaultDispatcherProvider
 import com.osamu.aide.core.fs.BuildEngine
@@ -78,32 +79,37 @@ class WorkspaceViewModelTest {
             DependencyResolver(File(context.cacheDir, "maven"), dispatchers),
         )
         stagePlatformJar()
+        val projectBuilder = ProjectBuilder(
+            toolchain = toolchain,
+            platforms = AndroidPlatformProvider(context, dispatchers),
+            runner = NativeToolRunner(NativeToolchain.from(context), dispatchers),
+            dependencies = projectDependencies,
+            // Points at a directory with no toolchain in it, so
+            // compiler() returns null -- which is what a device without
+            // the 54 MB download has, and the case this test is about.
+            kotlin = KotlinCompilerSource(
+                KotlinToolchainProvider(context),
+                File(context.cacheDir, "kotlin-host-test"),
+            ),
+            // Likewise resolves to null: this context's files directory
+            // holds no 551 MB clang, which is what almost every device
+            // looks like.
+            native = NativeToolchainProvider(context, dispatchers),
+            // Also absent: no JDK, no Gradle. Which is what a device that
+            // has never opened a Gradle project looks like.
+            gradle = GradleToolchainProvider(context, dispatchers),
+            dispatchers = dispatchers,
+            outputRoot = File(context.cacheDir, "builds-test"),
+        )
+
         viewModel = WorkspaceViewModel(
             dispatchers = dispatchers,
             projects = repository,
             documents = DocumentStore(dispatchers),
-            builder = ProjectBuilder(
-                toolchain = toolchain,
-                platforms = AndroidPlatformProvider(context, dispatchers),
-                runner = NativeToolRunner(NativeToolchain.from(context), dispatchers),
-                dependencies = projectDependencies,
-                // Points at a directory with no toolchain in it, so
-                // compiler() returns null -- which is what a device without
-                // the 54 MB download has, and the case this test is about.
-                kotlin = KotlinCompilerSource(
-                    KotlinToolchainProvider(context),
-                    File(context.cacheDir, "kotlin-host-test"),
-                ),
-                // Likewise resolves to null: this context's files directory
-                // holds no 551 MB clang, which is what almost every device
-                // looks like.
-                native = NativeToolchainProvider(context, dispatchers),
-                // Also absent: no JDK, no Gradle. Which is what a device that
-                // has never opened a Gradle project looks like.
-                gradle = GradleToolchainProvider(context, dispatchers),
-                dispatchers = dispatchers,
-                outputRoot = File(context.cacheDir, "builds-test"),
-            ),
+            builder = projectBuilder,
+            // The same builder, in this process: these tests are about a
+            // device with no toolchains, not about where a build runs.
+            runner = BuildRunner { projectBuilder.build(it) },
             toolchain = toolchain,
             installer = ApkInstaller(context, dispatchers),
             languageServices = LanguageServices(
