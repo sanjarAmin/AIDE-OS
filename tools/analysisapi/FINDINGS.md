@@ -684,16 +684,20 @@ adb shell am instrument -w -r com.osamu.aide.lsp.kotlin.test/androidx.test.runne
 and check the status codes rather than the summary: `INSTRUMENTATION_STATUS_CODE: 0`
 is a pass and `-3` is an assumption skip, and both roll up into `OK`.
 
-**It is packaged but not published.** `build-component.sh` produces
+**It is packaged and published.** `build-component.sh` produces
 `kotlin-analysis-<version>.zip` holding `analysis-api.jar` and
 `analysis-backend.jar` -- two archives in one component because neither works
 alone, the same reason the compiler component ships its stdlib.
-`ToolchainComponent.KOTLIN_ANALYSIS_API` pins its sha1 and size.
-**The release asset itself has not been uploaded**, so on a real device
-`kotlinAnalysisArchives()` returns null and Kotlin routes to nothing. That is
-the designed silence -- a device below API 30 can never load these, and most
-projects never need them -- but it means the feature is one upload away from
-reaching anyone, and until then only the instrumented tests exercise it.
+`ToolchainComponent.KOTLIN_ANALYSIS_API` pins its sha1 and size, and the
+archive is on this repo's releases as `kotlin-analysis-2.2.10`, verified by
+downloading from the pinned URL and checking the bytes back against the pin.
+
+A device still needs the **Kotlin compiler component** as well: the Analysis API
+is built against that compiler's shaded IntelliJ and cannot load without it, and
+its `kotlin-stdlib.jar` is the library module the session resolves against.
+Without both, `kotlinAnalysisArchives()` returns null and Kotlin routes to
+nothing -- which is the designed silence, since a device below API 30 can never
+load these and most projects never need them.
 
 ## 18. Driving the app found two bugs no test did
 
@@ -1026,14 +1030,13 @@ Honest limits of what has been established. None of this is evidence yet.
   what builds the session -- so it lands before the first answer rather than
   before the first keystroke. §18 on why that distinction was nearly recorded
   backwards.
-- **The component exists; the release asset does not.** §17. Everything on this
-  side is done -- packaging, checksum, component, installer path, routing -- and
-  the archive has not been uploaded to the release URL it pins. Until it is, no
-  device installs this by itself: the instrumented tests stage it, and driving
-  the app meant placing the four jars into `files/toolchains/` as root -- which
-  needs `chown` to the app's uid **and** `chcon` to the parent's *full* label,
-  because `restorecon` restores `app_data_file:s0` without the per-app category
-  set. §7 is the older half of that trap.
+- **Nothing has installed the component through the app.** The release asset is
+  published and the pinned URL serves the pinned bytes, so the download path
+  should work -- but every run so far has staged the archives by hand, and
+  "should" is not evidence. Hand-staging into `files/toolchains/` as root needs
+  `chown` to the app's uid **and** `chcon` to the parent's *full* label, because
+  `restorecon` restores `app_data_file:s0` without the per-app category set;
+  §7 is the older half of that trap.
 - **Only one file, in one project, has been driven by hand.** §18 is what that
   found. Nothing has opened a second Kotlin file, switched between them, or
   changed projects while a session was warm -- and `LanguageServices` closes and
