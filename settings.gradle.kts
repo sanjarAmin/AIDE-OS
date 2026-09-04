@@ -79,6 +79,12 @@ include(":lsp:java")
 // this process. It arrives with M7, which is the milestone that needs it.
 include(":lsp:native")
 
+// Kotlin intelligence, which is neither of the shapes above: the Analysis API
+// runs in this process like javac, but in its own dex archive behind a
+// classloader nothing here can name. Spike R12 established it answers, and what
+// it costs; tools/analysisapi/FINDINGS.md is the account.
+include(":lsp:kotlin")
+
 // Spike R3 -- a Java language-intelligence core on ART. Not part of the app.
 include(":spike:javals")
 
