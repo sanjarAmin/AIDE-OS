@@ -12,6 +12,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -103,12 +104,25 @@ class KotlinLanguageServiceTest {
         )
     }
 
+    /**
+     * Extracts [entry], **re-extracting when the archive has moved on.**
+     *
+     * The first version returned early if the target existed at all, and that
+     * is how a whole sweep came to run against a backend three commits old:
+     * this directory is internal storage, which an `install -r` does not clear,
+     * so a freshly built component was silently ignored and every test failed
+     * with `NoSuchMethodException` for a method that was plainly in the source.
+     *
+     * Size is the check, for the same reason `KotlinArchives.readOnlyCopy`
+     * uses it: these are large, they come from a checksum-verified archive, and
+     * the only case worth catching is a stale or half-written copy.
+     */
     private fun extract(archive: File, entry: String, target: File) {
-        if (target.isFile) return
         java.util.zip.ZipFile(archive).use { zip ->
             val found = zip.getEntry(entry) ?: error("no $entry in ${archive.name}")
+            if (target.isFile && target.length() == found.size) return
             zip.getInputStream(found).use { input ->
-                target.outputStream().use { input.copyTo(it) }
+                target.outputStream().use { output -> input.copyTo(output) }
             }
         }
     }
@@ -488,6 +502,124 @@ class KotlinLanguageServiceTest {
     }
 
     /**
+     * Go-to-definition lands on the **name**, in the file being edited.
+     *
+     * `helper` is declared in the buffer, so the answer has to be the file the
+     * caret is in — the dangling file the analysis actually holds has a
+     * made-up name and no path on disk, and returning that would send the
+     * editor somewhere that does not exist.
+     *
+     * The span is the identifier, not the declaration: jumping to a function
+     * should put the cursor on its name, and selecting its whole body would be
+     * correct and useless. `SourceLocation` says so, so it is asserted.
+     */
+    @Test
+    fun definition_finds_a_function_declared_in_the_same_buffer() = runBlocking {
+        val text = """
+            package sample
+
+            fun helper(): Int = 1
+
+            fun caller() {
+                helper()
+            }
+        """.trimIndent()
+
+        val at = service.definition(source, text, text.lastIndexOf("helper") + 2)
+
+        assertNotNull("no definition for a function declared just above", at)
+        assertEquals("the file being edited", source.name, at!!.file.name)
+        assertEquals("the line `helper` is declared on", 3, at.line)
+        assertEquals("the column its name starts at", 5, at.column)
+        assertEquals("the span covers the name only", 11, at.endColumn)
+    }
+
+    /**
+     * A declaration in **another file of the project** resolves too.
+     *
+     * `onDisk` is in `Sample.kt` and appears nowhere in the buffer, so this
+     * only passes if the session read the source root — and the path has to
+     * come back project-relative, because an absolute `/data/user/0/...` is not
+     * something the editor can match against an open tab.
+     */
+    @Test
+    fun definition_crosses_into_another_file() = runBlocking {
+        val text = """
+            package sample
+
+            fun caller() {
+                onDisk()
+            }
+        """.trimIndent()
+
+        val at = service.definition(source, text, text.indexOf("onDisk") + 2)
+
+        assertNotNull("no definition for a function in a sibling file", at)
+        assertEquals("Sample.kt", at!!.file.name)
+        assertFalse("the path should be project-relative", at.file.isAbsolute)
+    }
+
+    /**
+     * **A convention call has no name reference, and must still resolve.**
+     *
+     * `a + b` binds to `Int.plus` through an operator convention: there is no
+     * `plus` token anywhere to ask about, so an implementation that only
+     * consults name references silently answers nothing here — on exactly the
+     * syntax that looks like magic and most needs explaining. The fallback is
+     * `resolveToCall`, and this is the test that would catch its absence.
+     *
+     * Asserted only as "something resolved": `Int.plus` is a *library* symbol
+     * with no source PSI, so this deliberately uses operands declared in the
+     * buffer, and what comes back is whatever the call binds to rather than a
+     * position anyone can predict.
+     */
+    @Test
+    fun definition_resolves_an_operator_convention_with_no_name_reference() = runBlocking {
+        val text = """
+            package sample
+
+            class Money(val amount: Int) {
+                operator fun plus(other: Money) = Money(amount + other.amount)
+            }
+
+            fun caller(a: Money, b: Money) {
+                a + b
+            }
+        """.trimIndent()
+
+        val at = service.definition(source, text, text.lastIndexOf("a + b") + 2)
+
+        assertNotNull("the `+` convention did not resolve to its operator fun", at)
+        assertEquals("declared in this buffer", source.name, at!!.file.name)
+        assertEquals("the line `operator fun plus` is on", 4, at.line)
+    }
+
+    /**
+     * A caret with nothing to go to answers null rather than guessing.
+     *
+     * A keyword is the cheap case; the one that matters is a **library**
+     * symbol. `String` has no source PSI anywhere on the device, so there is
+     * nowhere to jump, and a service that returned its own best guess would
+     * send the user somewhere wrong.
+     */
+    @Test
+    fun definition_is_null_where_there_is_nothing_to_go_to() = runBlocking<Unit> {
+        val text = """
+            package sample
+
+            fun caller() {
+                val local: String = "x"
+            }
+        """.trimIndent()
+
+        assertNull("a keyword is not a declaration", service.definition(source, text, text.indexOf("val") + 1))
+        assertNull(
+            "String is a library symbol with no source to jump to",
+            service.definition(source, text, text.indexOf("String") + 2),
+        )
+    }
+
+    /**
      * A malformed buffer is an ordinary answer, not a crash.
      *
      * `LanguageService` says every method may return nothing and that nothing
@@ -504,6 +636,7 @@ class KotlinLanguageServiceTest {
         service.diagnostics(source, text)
         service.complete(source, text, text.length)
         service.signatureAt(source, text, text.length)
+        service.definition(source, text, text.length)
     }
 
     private companion object {

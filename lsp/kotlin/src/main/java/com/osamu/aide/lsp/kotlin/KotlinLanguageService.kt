@@ -82,6 +82,8 @@ class KotlinLanguageService(
         backend.getMethod("complete", String::class.java, Int::class.javaPrimitiveType)
     private val signatureMethod: Method =
         backend.getMethod("signatureAt", String::class.java, Int::class.javaPrimitiveType)
+    private val definitionMethod: Method =
+        backend.getMethod("definitionAt", String::class.java, Int::class.javaPrimitiveType)
     private val closeMethod: Method = backend.getMethod("close")
 
     private val stdlib: File = prepared.stdlib
@@ -160,13 +162,39 @@ class KotlinLanguageService(
             }
 
     /**
-     * Not implemented, and null rather than an approximation.
+     * Where the thing under the caret is declared.
      *
-     * The Analysis API can answer this -- a resolved symbol carries its source
-     * PSI -- but mapping that back to a file and offset the editor can open is
-     * work this has not done, and a wrong jump is worse than no jump.
+     * **Null is the common answer and not a failure.** A caret on a keyword or
+     * on whitespace has nothing to go to, and neither does one on a symbol
+     * declared in a **library**: the stdlib, `android.jar` and every jar have
+     * no source PSI, so there is nowhere to jump. Navigating into those would
+     * need decompilation or source jars, and neither exists here.
+     *
+     * An empty path from the backend means the declaration is in the buffer
+     * being edited -- the dangling file has no path on disk, and answering with
+     * its made-up name would send the editor to a file that does not exist.
      */
-    override suspend fun definition(file: File, text: String, offset: Int): SourceLocation? = null
+    override suspend fun definition(file: File, text: String, offset: Int): SourceLocation? =
+        query {
+            if (!ensureOpen()) {
+                null
+            } else {
+                val fields = (definitionMethod.invoke(null, text, offset) as String)
+                    .takeIf { it.isNotBlank() && !it.startsWith("ERR ") }
+                    ?.split('\t')
+                if (fields == null || fields.size < 4) {
+                    null
+                } else {
+                    val target = fields[0].ifBlank { null }?.let(::File) ?: file
+                    SourceLocation(
+                        file = target.relativeToOrNull(projectRoot) ?: target,
+                        line = fields[1].toIntOrNull() ?: return@query null,
+                        column = fields[2].toIntOrNull() ?: return@query null,
+                        endColumn = fields[3].toIntOrNull() ?: return@query null,
+                    )
+                }
+            }
+        }
 
     override suspend fun signatureAt(file: File, text: String, offset: Int): String? =
         query {

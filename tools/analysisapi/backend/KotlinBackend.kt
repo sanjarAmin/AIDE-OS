@@ -17,13 +17,17 @@ import org.jetbrains.kotlin.analysis.project.structure.builder.buildKtLibraryMod
 import org.jetbrains.kotlin.analysis.project.structure.builder.buildKtSourceModule
 import org.jetbrains.kotlin.com.intellij.openapi.Disposable
 import org.jetbrains.kotlin.com.intellij.openapi.util.Disposer
+import org.jetbrains.kotlin.com.intellij.psi.PsiNameIdentifierOwner
 import org.jetbrains.kotlin.idea.references.mainReference
 import org.jetbrains.kotlin.analysis.api.types.KaType
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.platform.jvm.JvmPlatforms
 import org.jetbrains.kotlin.types.Variance
+import org.jetbrains.kotlin.analysis.api.resolution.singleFunctionCallOrNull
+import org.jetbrains.kotlin.analysis.api.resolution.symbol
 import org.jetbrains.kotlin.psi.KtDotQualifiedExpression
+import org.jetbrains.kotlin.psi.KtElement
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
 import org.jetbrains.kotlin.psi.KtPsiFactory
@@ -349,6 +353,96 @@ object KotlinBackend {
      */
     private fun KaSession.readable(type: KaType): String =
         type.render(KaTypeRendererForSource.WITH_SHORT_NAMES, Variance.INVARIANT)
+
+    /**
+     * Where the thing at [offset] is declared: `path<TAB>line<TAB>col<TAB>endCol`.
+     *
+     * **Resolved, never looked up by name.** An index answers "what is called
+     * `foo`"; navigation has to answer "which of the seven overloads of `foo`
+     * does *this* call site bind to", through this module's dependencies and
+     * content scopes. Only the analysis session knows that, and delegating it
+     * means there is no second notion of visibility to keep in step. The
+     * approach is CodeOnTheGo's ADR 0010, and so is the fallback below.
+     *
+     * Empty when there is nothing to go to, which is most of the time: a
+     * keyword, whitespace, or a symbol whose declaration is in a **library**.
+     * Library symbols have no source PSI at all -- the stdlib, `android.jar`,
+     * any jar -- so navigating into them would need decompilation or source
+     * jars, and neither exists here. That is a limit of the approach rather
+     * than a defect, and it is why this returns nothing rather than guessing.
+     *
+     * The path is absolute; the caller makes it project-relative, because only
+     * the caller knows the root.
+     */
+    @JvmStatic
+    fun definitionAt(text: String, offset: Int): String = guarded {
+        val file = bufferFile(text)
+        val element = file.findElementAt(offset)
+            ?: return@guarded ""
+
+        analyze(file) {
+            val symbol = resolveSymbolAt(element)
+                ?: return@analyze ""
+            val declaration = symbol.psi
+                ?: return@analyze ""
+
+            // The *name*, not the whole declaration: jumping to a function
+            // should land on its identifier, and selecting its entire body
+            // would be correct and useless. SourceLocation says so too.
+            val nameRange = (declaration as? PsiNameIdentifierOwner)
+                ?.nameIdentifier
+                ?.textRange
+                ?: declaration.textRange
+                ?: return@analyze ""
+
+            val containing = declaration.containingFile ?: return@analyze ""
+            val target = containing.virtualFile?.path
+                // A declaration in the buffer itself lives in the dangling
+                // file, which has no path on disk. Answering with its made-up
+                // name would send the editor to a file that does not exist, so
+                // the empty path means "the file you asked about" and the
+                // caller substitutes it.
+                ?: ""
+
+            val content = containing.text
+            val (line, column) = lineAndColumn(content, nameRange.startOffset)
+            val (_, endColumn) = lineAndColumn(content, nameRange.endOffset)
+            listOf(target, line.toString(), column.toString(), endColumn.toString())
+                .joinToString(FIELD)
+        }
+    }
+
+    /**
+     * The symbol at [element], through a name reference or through a call.
+     *
+     * **Two doors, because not every reference has a name.** `a + b`, `a[i]`,
+     * `by lazy`, destructuring and `for` loops all resolve to a declaration and
+     * none of them has a name reference to ask -- so a name-only implementation
+     * silently does nothing on exactly the syntax that looks most like magic
+     * and most needs explaining.
+     */
+    private fun KaSession.resolveSymbolAt(
+        element: org.jetbrains.kotlin.com.intellij.psi.PsiElement,
+    ): org.jetbrains.kotlin.analysis.api.symbols.KaSymbol? {
+        val named = element.parent as? KtNameReferenceExpression
+        named?.mainReference?.resolveToSymbol()?.let { return it }
+
+        val enclosing = generateSequence(element) { it.parent }
+            .filterIsInstance<KtElement>()
+            .take(PARENT_WALK_LIMIT)
+            .firstOrNull { it.resolveToCall()?.singleFunctionCallOrNull() != null }
+            ?: return null
+        return enclosing.resolveToCall()?.singleFunctionCallOrNull()?.symbol
+    }
+
+    /**
+     * How far to walk up looking for a call.
+     *
+     * A caret sits inside a leaf; the call it belongs to is a parent or two
+     * above. Walking to the file would find *some* enclosing call for almost
+     * any caret and jump somewhere the user was not pointing at.
+     */
+    private const val PARENT_WALK_LIMIT = 4
 
     /** A one-line signature for the declaration at [offset], or an empty string. */
     @JvmStatic

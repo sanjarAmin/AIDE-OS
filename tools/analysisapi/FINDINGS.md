@@ -1031,7 +1031,50 @@ inside a KDoc opened a comment that never closed, and the compiler reported it
 at the *end of the file* -- a hundred lines from the cause. Java's do not nest;
 Kotlin's do.
 
-## 22. What is still unknown
+## 22. Go-to-definition, and a stale artifact that failed a whole sweep
+
+`definition` was the last `LanguageService` method returning null. It resolves
+now, through the Analysis API and never the index: `mainReference.resolveToSymbol()`,
+symbol to PSI, then the **name identifier's** range rather than the
+declaration's, so a jump lands on the identifier instead of selecting a body.
+An index cannot answer this -- it stores no offsets, and it matches by name
+where navigation has to answer by *resolution*, which of seven overloads this
+call site binds to. CodeOnTheGo's ADR 0010 (§20) is the source.
+
+**The fallback is the part that would not have been guessed.** `a + b`, `a[i]`,
+`by lazy`, destructuring and `for` loops all bind to a declaration and none of
+them has a name reference to ask, so a name-only implementation answers nothing
+on exactly the syntax that looks like magic and most needs explaining. The
+second door is `resolveToCall()`, walking at most four parents up -- walking to
+the file would find *some* enclosing call for almost any caret and jump
+somewhere nobody pointed at.
+
+Two limits, both deliberate:
+
+- **Library symbols are unreachable.** `String`, `android.jar`, any jar: no
+  source PSI, so there is nowhere to go. Returning a guess would send the user
+  somewhere wrong, so it returns nothing. Navigating into those needs
+  decompilation or source jars, and neither exists here.
+- **A declaration in the buffer has no path on disk.** The dangling file's name
+  is made up, so the backend returns an empty path and the caller substitutes
+  the file being edited. Answering with `AideBuffer.kt` would open nothing.
+
+**And the sweep caught something the targeted runs could not.** All eighteen
+`:lsp:kotlin` tests failed at `setUp` with `NoSuchMethodException: definitionAt`
+-- a method plainly in the source. The test extracts the component's jars into
+*internal* storage, which `install -r` does not clear, and the first version of
+`extract` returned early whenever the target existed. So a freshly built
+component was silently ignored and the whole suite ran against a backend three
+commits old.
+
+It had passed every targeted run because those cleared the staging directory by
+hand first. **A cache that never invalidates looks exactly like a cache that
+works, until something else changes underneath it** -- and the something else
+here was the artifact under test. It compares sizes now, the way
+`KotlinArchives.readOnlyCopy` already did, and 18 tests pass with no manual
+clearing.
+
+## 23. What is still unknown
 
 Honest limits of what has been established. None of this is evidence yet.
 
