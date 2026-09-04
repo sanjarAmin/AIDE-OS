@@ -87,6 +87,7 @@ dependencies {
     implementation(project(":engine:gradle"))
     implementation(project(":lsp:java"))
     implementation(project(":lsp:native"))
+    implementation(project(":lsp:kotlin"))
     implementation(project(":toolchain:native"))
     implementation(project(":terminal"))
     implementation(project(":toolchain:manager"))

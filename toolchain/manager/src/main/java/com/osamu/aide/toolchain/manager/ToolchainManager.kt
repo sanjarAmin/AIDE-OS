@@ -49,4 +49,51 @@ class ToolchainManager(
         .takeIf { it.isFile }
 
     fun canBuild(): Boolean = androidJar() != null
+
+    /**
+     * The archives Kotlin intelligence needs, or null if either is missing.
+     *
+     * Two components, not one: the Analysis API is built against the Kotlin
+     * compiler's shaded IntelliJ and cannot load without it, and the compiler
+     * is a 56 MB download a Java-only project has no reason to have.
+     *
+     * Null rather than an exception, for the reason [androidJar] gives -- not
+     * having them is the state every install starts in, and it is also the
+     * permanent state of a device whose owner never opens a Kotlin file.
+     * Returns the three paths `KotlinArchives` takes, in its order.
+     */
+    fun kotlinAnalysisArchives(): KotlinAnalysisFiles? {
+        val files = KotlinAnalysisFiles(
+            compilerJar = storage.fileFor(ToolchainComponent.KOTLIN_COMPILER, "kotlinc.jar"),
+            stdlibJar = storage.fileFor(ToolchainComponent.KOTLIN_COMPILER, "kotlin-stdlib.jar"),
+            analysisApiJar = storage
+                .fileFor(ToolchainComponent.KOTLIN_ANALYSIS_API, "analysis-api.jar"),
+            backendJar = storage
+                .fileFor(ToolchainComponent.KOTLIN_ANALYSIS_API, "analysis-backend.jar"),
+        )
+        return files.takeIf { it.allPresent }
+    }
+
+    /**
+     * The four files Kotlin intelligence needs, from two components.
+     *
+     * Named here rather than returned as a tuple because the four are not
+     * interchangeable and three of them are jars of the same shape: swapping
+     * the API and the backend produces a `ClassNotFoundException` several
+     * layers down instead of a compile error.
+     *
+     * Deliberately not `:lsp:kotlin`'s own `KotlinArchives` -- that type also
+     * carries where to stage them, which is the caller's business, and this
+     * module has no reason to depend on a language service.
+     */
+    data class KotlinAnalysisFiles(
+        val compilerJar: File,
+        val stdlibJar: File,
+        val analysisApiJar: File,
+        val backendJar: File,
+    ) {
+        val allPresent: Boolean
+            get() = compilerJar.isFile && stdlibJar.isFile &&
+                analysisApiJar.isFile && backendJar.isFile
+    }
 }

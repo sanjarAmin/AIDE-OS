@@ -141,6 +141,47 @@ data class ToolchainComponent(
         )
 
         /**
+         * The Kotlin Analysis API, for Kotlin intelligence.
+         *
+         * Ours, like the compiler beside it: JetBrains publishes these jars
+         * only to their own repository, they are built against the *unshaded*
+         * IntelliJ namespace that `kotlin-compiler-embeddable` shades, and
+         * nothing upstream ships either one dexed. `tools/analysisapi/` fetches
+         * them from a pinned lock, relocates 9204 references onto the
+         * compiler's namespace, dexes the result and packages it here.
+         *
+         * **Two archives in one component, and neither works alone.**
+         * `analysis-api.jar` is the API; `analysis-backend.jar` is the code
+         * that drives it, compiled against the relocated jars because nothing
+         * in the app can name a type from behind that classloader. They load on
+         * one flat loader together. Shipping them apart would let a device hold
+         * one and not the other, which fails as a ClassNotFoundException for a
+         * class that is simply in the archive nobody downloaded.
+         *
+         * Requires [KOTLIN_COMPILER] to be installed as well -- the API is
+         * built against the compiler's shaded IntelliJ and cannot load without
+         * it. `KotlinArchives` takes both.
+         *
+         * No SDK licence: Apache-2.0, and none of Google's terms apply.
+         */
+        val KOTLIN_ANALYSIS_API = ToolchainComponent(
+            id = "kotlin-analysis-api",
+            displayName = "Kotlin Analysis API 2.2.10",
+            archiveUrl = "https://github.com/sanjarAmin/AIDE-OS/releases/download/" +
+                "kotlin-analysis-2.2.10/kotlin-analysis-2.2.10.zip",
+            archiveSha1 = "40216aac6d41374209303b07b6b8841e2d1015b2",
+            archiveBytes = 1_974_904L,
+            archive = ComponentArchive.ZipEntries(
+                mapOf(
+                    "analysis-api.jar" to "analysis-api.jar",
+                    "analysis-backend.jar" to "analysis-backend.jar",
+                ),
+            ),
+            installedBytes = 2_100_000L,
+            requiresSdkLicense = false,
+        )
+
+        /**
          * A JVM, for the Gradle build path.
          *
          * Ours, for the reason the Kotlin compiler and clang are: nothing

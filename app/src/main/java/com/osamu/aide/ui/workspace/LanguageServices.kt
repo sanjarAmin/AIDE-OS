@@ -9,6 +9,8 @@ import com.osamu.aide.lsp.api.CompletionKind
 import com.osamu.aide.lsp.api.LanguageService
 import com.osamu.aide.lsp.nativelsp.ClangdService
 import com.osamu.aide.lsp.java.JavaLanguageService
+import com.osamu.aide.lsp.kotlin.KotlinArchives
+import com.osamu.aide.lsp.kotlin.KotlinLanguageService
 import kotlinx.coroutines.runBlocking
 import java.io.File
 
@@ -40,6 +42,8 @@ class LanguageServices(
 
 
     private var nativeCurrent: Pair<File, ClangdService>? = null
+
+    private var kotlinCurrent: Pair<File, KotlinLanguageService>? = null
 
     /**
      * Null when there is nothing to analyse with.
@@ -109,7 +113,51 @@ class LanguageServices(
 
         val clangd = nativeFor(projectRoot)
         if (clangd != null && clangd.handles(file)) return clangd
+
+        val kotlin = kotlinFor(projectRoot)
+        if (kotlin != null && kotlin.handles(file)) return kotlin
         return null
+    }
+
+    /**
+     * The Kotlin service for [projectRoot], or null when it cannot run here.
+     *
+     * Null is the ordinary state, and there are two ways to reach it: the
+     * archives are dexed at API 30 and the app supports 26, and they are a
+     * separate download most projects never need. The same shape as [nativeFor]
+     * -- silence rather than an error, because a device that cannot do this is
+     * not a device with a problem.
+     *
+     * Not given a classpath, unlike the Java service. It resolves against the
+     * Kotlin standard library only; `android.jar` and the project's AARs are
+     * not wired in yet, and until they are a `classpath` parameter would
+     * promise something this does not do.
+     */
+    private fun kotlinFor(projectRoot: File): KotlinLanguageService? {
+        if (!KotlinArchives.isSupported) return null
+
+        kotlinCurrent?.let { (root, service) ->
+            if (root == projectRoot) return service
+            // Holds the front end's whole object graph and the open jars it
+            // resolves against; dropping the reference alone leaks both.
+            service.close()
+            kotlinCurrent = null
+        }
+
+        val files = toolchain.kotlinAnalysisArchives() ?: return null
+        val service = KotlinLanguageService(
+            archives = KotlinArchives(
+                compilerJar = files.compilerJar,
+                stdlibJar = files.stdlibJar,
+                analysisApiJar = files.analysisApiJar,
+                backendJar = files.backendJar,
+                workingDir = File(buildOutputRoot.parentFile, "kotlin-lsp"),
+            ),
+            projectRoot = projectRoot,
+            dispatchers = dispatchers,
+        )
+        kotlinCurrent = projectRoot to service
+        return service
     }
 
     /**
@@ -137,6 +185,8 @@ class LanguageServices(
     fun release() {
         current?.second?.close()
         current = null
+        kotlinCurrent?.second?.close()
+        kotlinCurrent = null
         nativeCurrent?.second?.close()
         nativeCurrent = null
     }

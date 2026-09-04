@@ -156,6 +156,32 @@ class LanguageServiceRoutingTest {
     @Test
     fun an_unclaimed_file_gets_no_service() {
         assertNull(services.serviceFor(File(project, "README.md"), project))
+    }
+
+    /**
+     * Kotlin routes to nothing until its archives are installed.
+     *
+     * **Not the same claim as the test above, and it used to be.**
+     * `build.gradle.kts` was listed there as a file nothing handles; now
+     * `:lsp:kotlin` handles `.kt` and `.kts`, and the only reason this returns
+     * null is that the Analysis API component is a separate download this
+     * device has not got. Kept as its own test so that when it starts failing,
+     * the reason is legible: the archives arrived, and Kotlin is being routed.
+     *
+     * The absence has to stay silent. A device below API 30 can never load
+     * them, and most projects never need them; an error there would be a
+     * feature reporting itself broken for working as designed.
+     */
+    @Test
+    fun kotlin_gets_no_service_while_its_archives_are_not_installed() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        assumeTrue(
+            "the Kotlin analysis archives are installed, so this no longer holds",
+            ToolchainManager(context, DefaultDispatcherProvider())
+                .kotlinAnalysisArchives() == null,
+        )
+
+        assertNull(services.serviceFor(File(project, "src/main/kotlin/Main.kt"), project))
         assertNull(services.serviceFor(File(project, "build.gradle.kts"), project))
     }
 }

@@ -618,6 +618,64 @@ not, and the only symptom is that completion is thin -- which looks like the
 extension gap above rather than a missing module. Build the session with the
 libraries even while only members work.
 
+## 17. The module, and the two shapes it is not
+
+`:lsp:kotlin` is the product form: `KotlinLanguageService` implements the same
+`LanguageService` the editor already talks to, and `LanguageServices.serviceFor`
+routes `.kt` and `.kts` to it. Seven instrumented tests drive it as the editor
+does -- placed diagnostics, prefix-filtered completion, an edit followed, a
+function's parameters in the label and not in the buffer, and an unparseable
+buffer answered rather than thrown at.
+
+It is a third shape, and neither of the other two:
+
+| | how it runs | how it is called |
+|---|---|---|
+| `:lsp:java` | warm javac, in this process | directly |
+| `:lsp:native` | clangd subprocess | LSP over stdio |
+| `:lsp:kotlin` | in this process, **behind a classloader** | reflection into the archive |
+
+The reflection is not a shortcut. Nothing in the app can name a type from the
+archive -- it is loaded by a `PathClassLoader` parented to boot -- so the code
+that drives the API is written as ordinary Kotlin in `backend/KotlinBackend.kt`,
+compiled against the *relocated* jars, dexed, and shipped as a third archive on
+the same loader. The app reflects over five methods.
+
+**The wire format is `List<String>`, tab-separated, and failure is a value.**
+Only types both sides already agree on can cross that boundary: `String`,
+`List`, `int`. A data class declared in the backend would be loaded by the
+archive's loader and be a *different class* from an identical one in the app, so
+the cast fails with a message naming the same type twice. The same reasoning
+rules out throwing: the app cannot catch what it cannot name.
+
+Three things the module has to get right that the spike did not have to:
+
+- **minSdk is 26, and the archives need 30.** Declaring 30 on the library looks
+  correct and breaks the build: a library minSdk above the app's fails the
+  manifest merge, and `tools:overrideLibrary` would trade a build error for a
+  runtime one. `KotlinArchives.isSupported` gates it instead, checked before a
+  service is ever constructed -- the rule CLAUDE.md already states for build
+  features.
+- **The session is resident and closing it is not optional.** ~1.8 s to build,
+  ~59 ms to query. `LanguageServices` keeps one per project and closes the old
+  one when the project changes, the same as it does for javac -- which holds
+  open handles on every jar it resolves against.
+- **Queries run on the `compiler` dispatcher, not `io`.** `DispatcherProvider`
+  separates them precisely so CPU-bound compiler work cannot starve the
+  editor's file reads and autosave. Analysis on `io` would do that on every
+  keystroke.
+
+**It is packaged but not published.** `build-component.sh` produces
+`kotlin-analysis-<version>.zip` holding `analysis-api.jar` and
+`analysis-backend.jar` -- two archives in one component because neither works
+alone, the same reason the compiler component ships its stdlib.
+`ToolchainComponent.KOTLIN_ANALYSIS_API` pins its sha1 and size.
+**The release asset itself has not been uploaded**, so on a real device
+`kotlinAnalysisArchives()` returns null and Kotlin routes to nothing. That is
+the designed silence -- a device below API 30 can never load these, and most
+projects never need them -- but it means the feature is one upload away from
+reaching anyone, and until then only the instrumented tests exercise it.
+
 ## 17. What is still unknown
 
 Honest limits of what has been established. None of this is evidence yet.
@@ -629,10 +687,14 @@ Honest limits of what has been established. None of this is evidence yet.
 - **Only kotlin-stdlib has been used as a library.** No android.jar, no AARs,
   no cross-module references. §16 shows a library is read on ART, which is the
   claim that was open; it does not show what a real dependency graph costs.
-- **The archive is not distributed.** It is staged by hand onto the device;
-  `:toolchain:manager` has no component for it. This is the same gap M4 had with
-  kotlinc, and it was closed the same way -- a GitHub release and a pinned
-  checksum. This is the most ordinary work left, and nothing blocks it.
+- **The component exists; the release asset does not.** §17. Everything on this
+  side is done -- packaging, checksum, component, installer path, routing -- and
+  the archive has not been uploaded to the release URL it pins. Until it is,
+  Kotlin intelligence is reachable only from the instrumented tests.
+- **Nothing has driven it from the editor.** The module is tested through
+  `LanguageService`; nobody has opened a `.kt` file in the running app and
+  watched completion appear. This project has found four UI bugs that way that
+  no test caught, and that was the git panel, which is simpler than this.
 - **The 1808 ms build is on an emulator, with a trivial module.** It will grow
   with the project, and it sits on the path to first completion after opening
   one. Whether it can be moved off that path -- built ahead of time, or in the
