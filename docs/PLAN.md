@@ -7,7 +7,7 @@
 
 ## Status
 
-*As of 2026-09-02.*
+*As of 2026-09-03.*
 
 | | Milestone | State |
 |---|---|---|
@@ -26,7 +26,7 @@
 | 🟢 | **M2** First APK ⭐ | **The thesis holds, and it is reachable.** A person can create a project, edit it, tap Build, and end up with the app installed — all on the device. |
 | 🟢 | **M3** Intelligence | Completion, diagnostics-as-you-type, go-to-definition, signature hints. **76 ms** warm completion on an AndroidX type against the 200 ms budget. |
 | 🟢 | **M4** Deps + Kotlin | A Kotlin project using `androidx.appcompat` builds on device: 41 artifacts resolved, kotlinc ahead of ECJ. Resolution reads Gradle Module Metadata, so AndroidX aligns the way Gradle aligns it. `engine/deps/FINDINGS.md` |
-| 🟡 | **M5** AI ⭐ | Feature-complete, and **multi-provider** since 2026-09-02: Gemini (default, with Google Sign-In), OpenAI, anything OpenAI-compatible, and Anthropic. Three assertions still parked until a live API key exists. `ai/core/FINDINGS.md` — **not yet updated for the provider work** |
+| 🟡 | **M5** AI ⭐ | Feature-complete, and **multi-provider** since 2026-09-02: Gemini (default, with Google Sign-In), OpenAI, anything OpenAI-compatible, and Anthropic. Three assertions still parked until a live API key exists — the milestone is **waiting on credentials, not on code**. `ai/core/FINDINGS.md` §§11–14 cover the provider work, including that `AiSession` now has two tool loops sharing nothing but tool execution |
 | 🟢 | **M6** Compose | A Compose app builds, installs, launches and **draws**, on device, with its libraries' manifests merged. Six fixes, none visible to a build-only test. `engine/deps/FINDINGS.md` |
 | 🟢 | **M7** C/C++ | A JNI project builds on device: clang compiles `src/main/cpp`, the library is packaged into the APK, and it loads and runs. **clangd answers too** — diagnostics, completion, go-to-definition and hover for C and C++, through the same interface the Java service implements. Verified on API 34 x86_64 and Android 16 arm64. `tools/clang/FINDINGS.md` |
 | 🟢 | **M9** Gradle path | `:engine:gradle` builds an Android project on the device with the project's own Gradle, on Termux's OpenJDK started by our launcher — accepted by the platform's package parser, and a **two-module** project builds too. Verified on x86_64 and on Android 16 arm64, which took disabling heap pointer tagging the emulator could never have shown. **Nothing is staged by hand any more**: the JDK, Gradle and build-tools install themselves, and the SDK root is composed from them. `engine/gradle/FINDINGS.md`, `tools/rootfs/FINDINGS.md` |
