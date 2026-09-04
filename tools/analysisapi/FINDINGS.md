@@ -816,6 +816,14 @@ deal of `kotlin.collections`**, and anything picked for that test has to be
 checked against the index rather than against intuition. `getOrPut` is the one
 used now -- a `MutableMap` extension with no `kotlin.text` counterpart.
 
+**Confirmed in the editor**, not only through `LanguageService`: typing `s.upp`
+on a `String` in a running project offers `uppercase()` and
+`uppercase(Locale)` -- exactly the two overloads the probe predicted as
+applicable, out of four. Incidentally the buffer at that moment contained an
+error on the line above (`val s: String = x`, `x` unresolved), and `s` still
+resolved to `String`. Error-tolerant resolution is not something these tests
+assert and it is what an editor lives on.
+
 **What the index does not cover.** Only the jars the build indexes, which today
 is kotlin-stdlib. A project's own AARs and any other Kotlin library contribute
 no extensions, and `android.jar` needs none because Java has no top-level
