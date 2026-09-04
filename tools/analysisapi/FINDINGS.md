@@ -667,6 +667,23 @@ Three things the module has to get right that the spike did not have to:
   editor's file reads and autosave. Analysis on `io` would do that on every
   keystroke.
 
+**A green `connectedDebugAndroidTest` does not cover this module.** Its tests
+`assumeTrue` on the archives being staged, and a full sweep installs the test
+APK -- which wipes the external directory they are staged in -- so they skip.
+Skipping reports as `OK (n tests)`, which is exactly how this project lost a
+week once before. Run them deliberately, after staging:
+
+```sh
+D=/sdcard/Android/data/com.osamu.aide.lsp.kotlin.test/files
+adb install -r -t lsp/kotlin/build/outputs/apk/androidTest/debug/kotlin-debug-androidTest.apk
+adb push kotlinc-archive.zip          $D/kotlin-compiler-2.2.10.zip
+adb push kotlin-analysis-2.2.10.zip   $D/kotlin-analysis-2.2.10.zip
+adb shell am instrument -w -r com.osamu.aide.lsp.kotlin.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+and check the status codes rather than the summary: `INSTRUMENTATION_STATUS_CODE: 0`
+is a pass and `-3` is an assumption skip, and both roll up into `OK`.
+
 **It is packaged but not published.** `build-component.sh` produces
 `kotlin-analysis-<version>.zip` holding `analysis-api.jar` and
 `analysis-backend.jar` -- two archives in one component because neither works
@@ -832,14 +849,92 @@ component ships -- both are pinned to the same Kotlin version, and an index
 naming callables a different stdlib lacks would offer completions that vanish
 when chosen.
 
-## 20. What is still unknown
+## 20. Someone else solved this, differently — CodeOnTheGo
+
+`appdevforall/CodeOnTheGo` is an actively maintained fork of AndroidIDE (the
+file headers and `com.itsaky.androidide` coordinates are still there), GPLv3
+like this repo, with commits through August 2026. It ships Kotlin intelligence
+built on the same Analysis API, and reading it is worth more than any amount of
+guessing about alternatives. Everything below was read from that tree, not
+inferred.
+
+**They do not relocate; they fork the compiler.** `:subprojects:kotlin-analysis-api`
+is a single downloaded jar,
+`analysis-api-standalone-embeddable-for-ide-2.3.255-SNAPSHOT.jar`, built from
+`github.com/appdevforall/kotlin-android` and pinned by sha256. `2.3.255` is not
+a Kotlin release: it is their own build. The word that matters is
+**embeddable** — §4 of this file exists because JetBrains publishes the
+Analysis API only in the `-for-ide` form, against the *unshaded* IntelliJ
+namespace, while `kotlin-compiler-embeddable` shades it. They closed that gap
+by producing the embeddable artifact JetBrains does not publish.
+
+| | this repo | CodeOnTheGo |
+|---|---|---|
+| namespace mismatch | ASM relocation, 9204 references, four rewrites (§5) | fork the compiler, build an embeddable jar |
+| shipping | dex archive, downloaded, own classloader | ordinary `api` dependency in the APK |
+| calling it | reflection over a backend inside the archive (§17) | direct calls, compiled against it |
+| ongoing cost | a relocator, and the carriers it must not miss | a Kotlin compiler fork, tracked against master |
+
+Neither is obviously right. Ours needs no fork and no build of Kotlin, and the
+relocation is the price; theirs needs no relocation and no classloader
+gymnastics, and a compiler fork is the price. **What is worth knowing is that
+the fork route exists**, because §4 reads as though relocation were the only
+way, and it is not.
+
+**Their symbol index reads `@kotlin.Metadata`, and that is strictly better than
+§19's.** `lsp/jvm-symbol-index` has three scanners: `JarSymbolScanner` (ASM over
+class files), `KotlinMetadataScanner` (the `@Metadata` annotation, decoded with
+`kotlin.metadata.jvm.KotlinClassMetadata`), and `CombinedJarScanner`. The
+comment on the first states §19's problem from the other side: *"For Kotlin
+class files, use KotlinMetadataScanner ... ASM cannot see Kotlin-specific
+semantics like extensions, suspend, or nullable types."*
+
+That annotation carries the protobuf the compiler wrote, so it yields what a
+facade's method table cannot: which callables are **extensions**, and their
+receivers, plus suspend, inline, operator, infix, visibility and nullability.
+And they run it **at runtime, per jar, streamed as a `Flow`** into a
+SQLite-backed index, so it covers a project's own AARs.
+
+§19's index is a build-time scan of the stdlib's facade classes for public
+static *names*, with no semantics and no coverage of anything the build did not
+see. That was enough to make extensions work, and it is the smaller idea. The
+upgrade path is now known and does not need designing: read `@Metadata`, which
+`kotlin-compiler-embeddable` can already decode, over the jars `:engine:deps`
+unpacks. §21 lists that as the open item it is.
+
+**Two of their architecture decisions are directly about traps this code can
+still fall into**, and both are documented as ADRs in `docs/adr/`:
+
+- **One live `KtFile` per open path** (ADR 0015). If a declaration provider can
+  answer with a *different* `KtFile` instance than the analysis is holding, FIR
+  sees every top-level declaration twice and reports the file as conflicting
+  with itself — "Redeclaration" and "Conflicting overloads" underlining correct
+  code end to end. They enforce one instance through the type system after a
+  runtime mechanism was silently dropped by a later refactor. **This backend
+  mints a fresh `KtFile` per query**, which is exactly the vulnerable shape; the
+  dangling file's context module appears to save it, and
+  `a_buffer_that_duplicates_a_file_on_disk_reports_no_redeclaration` pins that
+  rather than trusting it.
+- **Navigation resolves through the Analysis API, never the index** (ADR 0010).
+  The index stores names and no source offsets, so a hit narrows to a file at
+  best; and navigation must answer by *resolution* — which of seven overloads
+  this call site binds to — where an index answers by name. The recipe is
+  `reference.mainReference.resolveToSymbols()`, symbol to PSI declaration, then
+  file plus name-identifier range, with `resolveToCall()` as the fallback for
+  convention references (`a + b`, `a[i]`, `by lazy`, destructuring, `for`) that
+  have no name reference at all. `KotlinLanguageService.definition` returns null
+  today; that is how to fill it in, and the convention-reference fallback is the
+  part that would not have been guessed.
+
+## 21. What is still unknown
 
 Honest limits of what has been established. None of this is evidence yet.
 
 - **The name index covers kotlin-stdlib and nothing else.** §19. A project's
-  AARs and any other Kotlin dependency contribute no extension proposals, and
-  indexing those means running the same scan over jars `:engine:deps` unpacks,
-  at install time rather than build time.
+  AARs and any other Kotlin dependency contribute no extension proposals. §20
+  shows the upgrade that closes it and removes the build-time coupling at the
+  same time: decode `@kotlin.Metadata` rather than scanning facade method
+  tables, at runtime, over the jars `:engine:deps` unpacks.
 - **Kotlin completion is ~220 ms against a 200 ms budget** once the standard
   library is in the session, where Java is 76 ms. The cost is library
   resolution, not extensions (§19), and no attempt has been made to reduce it.

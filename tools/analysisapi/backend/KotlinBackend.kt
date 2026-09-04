@@ -222,8 +222,15 @@ object KotlinBackend {
                             KaExtensionApplicabilityResult.Applicable
                     }
             } else {
+                // No receiver: locals, the file's own declarations, and
+                // whatever the scopes will name -- plus the same index, which
+                // is the only way a star-imported top-level function like
+                // `println` is ever offered. Extensions are excluded here:
+                // without a receiver there is nothing for them to extend, and
+                // offering one produces code that does not compile.
                 file.scopeContext(reference).scopes.asSequence()
-                    .flatMap { it.scope.declarations }
+                    .flatMap { it.scope.declarations } +
+                    indexedTopLevel(file, prefix).filterNot { it.isExtension }
             }
 
             symbols
@@ -275,6 +282,20 @@ object KotlinBackend {
     private fun KaSession.indexedExtensions(
         file: KtFile,
         prefix: String,
+    ): Sequence<org.jetbrains.kotlin.analysis.api.symbols.KaCallableSymbol> =
+        indexedTopLevel(file, prefix).filter { it.isExtension }
+
+    /**
+     * Top-level callables from the index whose name starts with [prefix].
+     *
+     * Serves both halves of completion, because both hit the same wall: a
+     * member request needs the extensions, and a bare-identifier request needs
+     * `println` -- and neither is enumerable from any scope. Only the filtering
+     * afterwards differs.
+     */
+    private fun KaSession.indexedTopLevel(
+        file: KtFile,
+        prefix: String,
     ): Sequence<org.jetbrains.kotlin.analysis.api.symbols.KaCallableSymbol> {
         if (prefix.isEmpty() || topLevelNames.isEmpty()) return emptySequence()
 
@@ -295,7 +316,6 @@ object KotlinBackend {
             .flatMap { (packageName, name) ->
                 findTopLevelCallables(FqName(packageName), Name.identifier(name))
             }
-            .filter { it.isExtension }
     }
 
     /**

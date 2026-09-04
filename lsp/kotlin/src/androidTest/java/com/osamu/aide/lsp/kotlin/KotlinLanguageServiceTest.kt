@@ -392,6 +392,37 @@ class KotlinLanguageServiceTest {
     }
 
     /**
+     * A bare identifier offers `println`, which is the same wall again.
+     *
+     * `println` is a top-level function in `kotlin.io`, star-imported by
+     * default and enumerable from no scope — so before the index a user typing
+     * `prin` at statement level got nothing at all. Member completion is the
+     * half that gets talked about; this is the half people use more.
+     *
+     * Extensions are deliberately **not** offered here: with no receiver there
+     * is nothing for them to extend, and proposing one produces code that does
+     * not compile.
+     */
+    @Test
+    fun completion_without_a_receiver_offers_top_level_functions() = runBlocking {
+        val text = """
+            package sample
+
+            fun edit() {
+                prin
+            }
+        """.trimIndent()
+
+        val items = service.complete(source, text, text.indexOf("prin") + "prin".length)
+
+        assertTrue(
+            "println is missing, so star-imported top-level functions are still unreachable: " +
+                items.map { it.insert },
+            items.any { it.insert == "println" },
+        )
+    }
+
+    /**
      * What a completion with extensions costs, warm.
      *
      * The point of resolving the index by prefix *before* touching a symbol is
@@ -431,6 +462,35 @@ class KotlinLanguageServiceTest {
         val started = System.nanoTime()
         body()
         return (System.nanoTime() - started) / 1_000_000
+    }
+
+    /**
+     * Editing a file that is **also on disk** must not double its declarations.
+     *
+     * The buffer here is `Sample.kt`'s own content, which is what a user
+     * editing that file actually sends: the same `onDisk()` declared both in
+     * the source root the session indexed and in the dangling file being
+     * analysed. If the front end sees both, every declaration in the file comes
+     * back as "Redeclaration" / "Conflicting overloads" — a file underlined end
+     * to end, from code that is correct.
+     *
+     * A fresh `KtFile` is minted per query here, which is exactly the shape
+     * that is vulnerable to it, so this is pinned rather than assumed. The
+     * mechanism that saves it is the dangling file's context module: the
+     * analysis prefers the dangling copy over the module's own PSI for the same
+     * declarations. CodeOnTheGo — an actively maintained AndroidIDE fork — has
+     * an architecture decision record devoted to this failure and the invariant
+     * that prevents it, which is where the case came from.
+     */
+    @Test
+    fun a_buffer_that_duplicates_a_file_on_disk_reports_no_redeclaration() = runBlocking {
+        val found = service.diagnostics(source, source.readText())
+
+        assertEquals(
+            "the buffer's declarations were seen twice: ${found.map { it.message }}",
+            emptyList<Any>(),
+            found,
+        )
     }
 
     /**
