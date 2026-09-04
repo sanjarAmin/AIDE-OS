@@ -32,6 +32,15 @@ class AssistantViewModel(
     private val assistant: Assistant,
     private val builder: ProjectBuilder,
     private val projects: ProjectRepository,
+    /**
+     * The same instance the editor uses, so the assistant asks a session that
+     * is **already warm**.
+     *
+     * Building a second one would cost the ~4 s a session takes to open, per
+     * question, and hold a second copy of the front end's object graph on a
+     * phone. `LanguageServices` is a singleton for exactly this reason.
+     */
+    private val languages: LanguageServices,
     private val keys: ApiKeyStore? = null,
 ) : ViewModel() {
 
@@ -62,6 +71,12 @@ class AssistantViewModel(
                 runBuild = { target -> builder.build(target).toList().summarise(target.rootDir) },
                 project = { openProject },
                 lastBuild = lastBuild,
+            ) + kotlinTools(
+                // Resolved per call rather than captured: the service is null
+                // until its components are installed, and a session that
+                // decided that once at open would never notice them arriving.
+                serviceFor = { file -> languages.serviceFor(file, projectDir) },
+                project = { openProject },
             ),
             keys = keys,
         )
