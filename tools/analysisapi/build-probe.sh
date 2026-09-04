@@ -54,6 +54,9 @@ echo "compiling the probe..."
 "$JAVA" -Xmx4g -cp "$KOTLINC/kotlin-compiler-embeddable.jar:$KOTLINC/kotlin-stdlib.jar:$KOTLINC/kotlin-reflect.jar:$KOTLINC/kotlin-script-runtime.jar:$KOTLINC/kotlinx-coroutines-core-jvm.jar:$KOTLINC/annotations.jar" \
   org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
   -no-stdlib -nowarn -cp "$CP" -d "$work/classes" \
+  -opt-in=org.jetbrains.kotlin.analysis.api.KaExperimentalApi \
+  -opt-in=org.jetbrains.kotlin.analysis.api.KaIdeApi \
+  -opt-in=org.jetbrains.kotlin.analysis.api.KaNonPublicApi \
   "$HERE"/probe/*.kt
 
 classes="$(find "$work/classes" -name '*.class' | wc -l)"

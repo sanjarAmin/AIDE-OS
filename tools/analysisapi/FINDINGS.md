@@ -506,23 +506,76 @@ colon-joined string as a single filename, and the `NoSuchFileException` names
 every jar concatenated, which reads as a corrupted variable rather than a flag
 used wrongly.
 
-## 15. What is still unknown
+## 15. The buffer works, and it costs 59 ms
+
+§14 of the old numbering listed "nothing has been edited" as the case an editor
+lives in and the one nothing had tested. It works.
+
+A language service is never asked about a file on disk. It is asked about a
+buffer that changes on every keystroke and usually does not parse, and it cannot
+rebuild the session to answer -- that is the 1808 ms of §13. The Analysis API's
+mechanism for this is a **dangling file**: a `KtFile` built in memory whose
+`contextModule` points at a real module, resolved against that module's scope
+without belonging to it. It is what IntelliJ does for a modified editor buffer,
+and it works on ART unchanged.
+
+| | measured |
+|---|---|
+| first completion (session build included) | 2369 ms |
+| **warm completion from the buffer** | **59 ms** median of 4 (57, 57, 59, 60) |
+
+**59 ms against M3's 200 ms budget, where Java completion sits at 76 ms.**
+On-device Kotlin intelligence is not a performance question any more.
+
+What the tests establish, each chosen so a parser or a stale session could not
+produce the answer:
+
+- **The buffer resolves.** A local declared only in the buffer, and absent from
+  the source root, completes to `kotlin.String`'s members.
+- **The buffer beats the session.** Changing that local's type from `String` to
+  `Int` and asking again returns `inc`, `shl`, `dec` and **not** `uppercase`. A
+  session answering from its own snapshot would pass the first test and fail
+  this one, which is why both exist.
+- **Diagnostics come from the buffer**: `Initializer type mismatch: expected
+  'String', actual 'Int'` — an error a parser cannot find, before any build.
+- **Clean code reports nothing.** Without this, a service that reported an error
+  on every file would pass the test above and be worse than no diagnostics.
+
+Two things to know before writing `:lsp:kotlin` against this:
+
+- **`markGenerated = false` when creating the file.** `KtPsiFactory`'s default
+  marks the file generated, which excludes it from resolution -- and the result
+  is an *empty scope*, not an error. Another silent wrong answer.
+- **`KaType.scope` is the declared member scope, so extensions are missing.**
+  `String` completes to eight members. An IDE offers hundreds, because most of
+  what a Kotlin user reaches for -- `uppercase`, `map`, `filter` -- is an
+  extension in `kotlin.text` or `kotlin.collections`, not a member. Collecting
+  those means walking the file's imported and package scopes and filtering by
+  applicable receiver type, and it is not done here.
+  `EditingSessionTest.extensions_are_still_missing_from_completion` pins the gap
+  and is written to fail when it closes.
+
+## 16. What is still unknown
 
 Honest limits of what has been established. None of this is evidence yet.
 
-- **One module, one file, 42 trivial declarations.** §13's numbers are a real
-  device answering real resolution queries, but nothing here has resolved
-  against a *library* — no android.jar, no AARs, no cross-module references.
-  That is where a front end usually gets expensive, and it is unmeasured.
-- **Nothing has been edited.** Every measurement is a cold read of an unchanging
-  file. Incremental re-analysis after a keystroke is the case an editor actually
-  lives in, and the Analysis API's invalidation behaviour on ART is untested.
+- **Extensions are not collected**, so completion is real but badly incomplete.
+  §15. This is the largest single piece of work between here and a usable
+  `:lsp:kotlin`.
+- **Nothing has resolved against a library.** One source module, no android.jar,
+  no AARs, no cross-module references. That is where a front end usually gets
+  expensive, and none of §13's or §15's numbers cover it.
+- **The archive is not distributed.** It is staged by hand onto the device;
+  `:toolchain:manager` has no component for it. This is the same gap M4 had with
+  kotlinc, and it was closed the same way -- a GitHub release and a pinned
+  checksum.
 - **The 1808 ms build is on an emulator, with a trivial module.** It will grow
-  with the project, and it is on the path to first completion after opening a
-  project. Whether it can be moved off that path — built ahead of time, or in
-  the background — is a design question nobody has asked yet.
+  with the project, and it sits on the path to first completion after opening
+  one. Whether it can be moved off that path -- built ahead of time, or in the
+  background -- is a design question nobody has asked yet.
 - **The two platform classes §3 lists still have not been reached**, so whether
-  they matter is still unknown. Sessions build and queries resolve without them.
+  they matter is still unknown. Sessions build, queries resolve, buffers
+  complete, all without them.
 - **`kotlinx-collections-immutable` was invisible until the relocation worked.**
   Before it, `jdeps` reported every reference as unresolved and this one was
   lost among 298; afterwards it stood out as the only non-optional gap besides
