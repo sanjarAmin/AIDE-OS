@@ -42,7 +42,8 @@ python3 - "$OUT" <<'PY'
 import pathlib, re, sys
 OUT = pathlib.Path(sys.argv[1])
 RELOC = b"org/jetbrains/kotlin/"
-SHADED = [b"com/intellij/", b"com/google/common/", b"io/opentelemetry/", b"org/picocontainer/"]
+SHADED = [b"com/intellij/", b"com/google/common/", b"io/opentelemetry/",
+          b"org/picocontainer/", b"kotlinx/collections/immutable/"]
 import zipfile
 ok = bad = 0
 offenders = set()

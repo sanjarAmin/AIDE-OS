@@ -12,7 +12,7 @@ import org.junit.runner.RunWith
 import java.io.File
 
 /**
- * Spike R12, the question that matters: does the Analysis API **answer**?
+ * Spike R12, the question that matters: does the Analysis API **answer**? It does.
  *
  * `AnalysisApiLoadTest` shows the classes load and their relocated references
  * resolve. That is not the same as the API working — a session is built out of
@@ -21,7 +21,7 @@ import java.io.File
  *
  * The query is deliberately one that parsing cannot fake. Reading a function's
  * *name* needs only a parser; reading its **return type** needs the front end
- * to run, and telling `String` from `kotlin.String` needs it to resolve against
+ * to run, and telling `String` from `kotlin/String` needs it to resolve against
  * the standard library rather than guess from the source text.
  *
  * The work happens in `AnalysisProbe`, compiled against the relocated jars and
@@ -137,61 +137,73 @@ class AnalysisSessionTest {
     /**
      * The probe runs, and reaches the API's own code.
      *
-     * Separate from the failure below because it is a different claim: the
-     * toolchain is sound as far as *execution*, which is what stops the next
-     * assertion being vacuous. A probe that never started would also "fail to
-     * build a session".
+     * Kept separate from the resolution assertions because it is a weaker,
+     * different claim — the toolchain is sound as far as *execution*. It was
+     * what distinguished "the probe never started" from "the session would not
+     * build" while that was still the open question.
      */
     @Test
     fun the_probe_runs_inside_the_analysis_api_archive() {
         val result = describe()
 
         assertTrue("the probe did not run at all", result.isNotBlank())
+        // Reaching the API means failing *inside* it, not before it. Matching
+        // on a single package name was too narrow: the Caffeine failure below
+        // happens within `StandaloneAnalysisAPISessionBuilder.build`, so the
+        // probe plainly got there, and a substring test said otherwise.
         assertTrue(
             "the probe failed before reaching the Analysis API: $result",
-            result.startsWith("OK ") || "analysis-api" in result,
+            result.startsWith("OK ") ||
+                "org.jetbrains.kotlin.analysis" in result ||
+                "caffeine" in result,
         )
     }
 
     /**
-     * The boundary, pinned. **Delete this test when it starts failing.**
+     * The ART boundary, pinned. **Delete this when it starts failing.**
      *
-     * Asserting that something does *not* work is not a thing to do lightly.
-     * It earns its place because the alternative is a spike whose tests are all
-     * green while the feature it exists to prove does not work — and this repo
-     * has been bitten by exactly that (`engine/gradle`'s acceptance test skipped
-     * silently for a week).
-     *
-     * The session cannot be built: the Analysis API's plugin descriptors do not
-     * resolve through the IntelliJ platform bundled in the Kotlin compiler.
+     * **On a desktop JVM this same probe, on these same archives, works:**
      *
      * ```
-     * RuntimeException: Cannot resolve /META-INF/analysis-api/analysis-api-fir.xml
-     *   (dataLoader=resources data loader)
-     *     at …ide.plugins.XmlReader.readInclude
-     *     at …ide.plugins.PluginXmlPathResolver.resolvePath
+     * OK greet(kotlin/String):kotlin/String
+     *    count(kotlin/collections/List<kotlin/Int>):kotlin/Int
      * ```
      *
-     * **This is not an Android problem.** The same probe against the same
-     * relocated jars fails identically on a desktop JVM, which is the single
-     * most useful fact here: it means the remaining work is aligning the
-     * IntelliJ platform, not fighting ART. `tools/analysisapi/FINDINGS.md` §9.
+     * A session opens and resolves `String` to `kotlin/String` and `List<Int>`
+     * to `kotlin/collections/List<kotlin/Int>` — neither of which appears in
+     * the source text, so that is the front end running, not a parser.
+     *
+     * On ART it stops in **Caffeine**, which the Analysis API caches with and
+     * which the compiler does not bundle. Both versions fail here, for
+     * unrelated reasons, and neither is about our relocation:
+     *
+     * - **3.x** logs through `System.getLogger`, the Java 9 `System.Logger`
+     *   API Android has never had — fatal in Caffeine's static initialiser.
+     * - **2.x** reaches `Thread.threadLocalRandomProbe` through `Unsafe`, a
+     *   JDK-internal field Android's `Thread` does not declare. Thrown from a
+     *   static initialiser in `StripedBuffer`, so there is no fallback path.
+     *
+     * Both are shimmable exactly as `tools/kotlinc/build-kotlinc-dex.py`
+     * already shims four compiler classes that "cannot be rescued by
+     * renaming". That is the next piece of work, and it is bounded.
+     *
+     * `tools/analysisapi/FINDINGS.md` §11.
      */
     @Test
-    fun a_session_still_cannot_be_built() {
+    fun a_session_still_stops_at_caffeine_on_art() {
         val result = describe()
 
         assertTrue(
-            "A session was built — R12's blocker is gone. Delete this test and " +
-                "assert the real thing instead: greet should resolve to " +
-                "greet(kotlin.String):kotlin.String, and count's parameter to " +
-                "kotlin.collections.List<kotlin.Int>. Result: $result",
+            "A session built on ART — R12's last blocker is gone. Delete this " +
+                "test and assert the real thing, which the desktop already " +
+                "produces: greet(kotlin/String):kotlin/String and " +
+                "count(kotlin/collections/List<kotlin/Int>):kotlin/Int. Got: $result",
             result.startsWith("ERR "),
         )
         assertTrue(
-            "The session fails somewhere new, so FINDINGS.md §9 is out of " +
-                "date and should be corrected rather than trusted: $result",
-            "Cannot resolve" in result && "analysis-api" in result,
+            "It no longer stops in Caffeine, so FINDINGS.md §11 is out of date " +
+                "and should be corrected rather than trusted: $result",
+            "caffeine" in result,
         )
     }
 

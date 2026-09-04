@@ -56,6 +56,23 @@ public final class Relocate {
         "com/google/common/",
         "io/opentelemetry/",
         "org/picocontainer/",
+        // **The one that was missed, and the way it presented is the lesson.**
+        // `jdeps` reports these classes as unresolved exactly like a genuinely
+        // absent library, so the first response was to add
+        // kotlinx-collections-immutable as a dependency -- which made the error
+        // go away and put a *second, unrelocated* copy on the classpath.
+        //
+        // Nothing failed for a long time after that. The compiler's own FIR
+        // signatures take the shaded type, so the mismatch only surfaced deep
+        // inside analysis as
+        //   NoSuchMethodError: FirSupertypeResolverVisitor.<init>(…,
+        //     kotlinx.collections.immutable.PersistentList, …)
+        // against a compiler whose constructor is identical but for that one
+        // parameter being org.jetbrains.kotlin.kotlinx.collections.immutable.
+        //
+        // A library that is shaded here and added there does not fail to link.
+        // It fails to *match*, later, somewhere else.
+        "kotlinx/collections/immutable/",
     };
 
     private static final String PREFIX = "org/jetbrains/kotlin/";

@@ -5,8 +5,9 @@ Java and C/C++ and returns nothing for a `.kt` file, and the compiler archive we
 already ship has the K2 front end but **zero** Analysis API classes. This is the
 toolchain that closes it, and what it cost to establish that the route works.
 
-**Status: it loads, links and resolves on a device; a session will not build.**
-The blocker is §9, and the useful half of that finding is where it *is not*.
+**Status: it works on a desktop JVM — a session opens and answers. On ART it
+stops in Caffeine.** §§10-11 are the two findings that got it working and the
+one thing still in the way.
 
 **Status: it loads and resolves on a device.** Spike `:spike:kotlinls` runs the
 whole arrangement on the `aideos_test` emulator: the archives load, the
@@ -217,7 +218,12 @@ beside it is ordinary JVM bytecode the compiler reads as its `kotlin-home`, and
 fails with `Entry not found`, which names neither the zip nor the jar. Anything
 loading this component must reach inside it first.
 
-## 8. A session will not build, and it is not Android's fault
+## 8. ~~A session will not build~~ — solved by §10, kept for the diagnosis
+
+**This finding's conclusion is superseded.** A session does build; §10 has the
+three fixes. What is kept is the reasoning, because the *elimination* it
+records is what made §10 findable — and because "it fails identically on a
+desktop JVM" turned out to be the most useful single fact in the whole spike.
 
 `AnalysisProbe` — real code compiled against the relocated jars, shipped dexed
 beside them, so the API's Kotlin DSLs are driven as code rather than by
@@ -230,8 +236,8 @@ RuntimeException: Cannot resolve /META-INF/analysis-api/analysis-api-fir.xml
     at …ide.plugins.PluginXmlPathResolver.resolvePath:105
 ```
 
-**The single most useful fact: the same probe, on the same relocated jars,
-fails identically on a desktop JVM.** So this is not ART, not dex, not
+**The single most useful fact was: the same probe, on the same relocated jars,
+failed identically on a desktop JVM.** So it was not ART, not dex, not
 `PathClassLoader` and not the relocation's linking — all of which the loading
 tests already show working. The remaining work is aligning the IntelliJ
 platform, which is a different and much better-understood kind of problem than
@@ -287,13 +293,110 @@ Setting the thread context classloader was tried first and is *not* the fix —
 `Class.forName` in this path does not consult it — though it is set anyway,
 since other IntelliJ paths do.
 
-## 10. What is still unknown
+## 10. It answers — and three things had to be right first
+
+On a desktop JVM, against the relocated archive, `AnalysisProbe` opens a
+standalone session and answers:
+
+```
+OK greet(kotlin/String):kotlin/String
+   count(kotlin/collections/List<kotlin/Int>):kotlin/Int
+```
+
+`String` renders as `kotlin/String` and `List<Int>` as
+`kotlin/collections/List<kotlin/Int>`; neither appears in the source text, so
+that is resolution, not parsing. Three fixes, in the order they were needed.
+
+### The descriptors have to be flattened
+
+`xi:include` resolution in the shaded IntelliJ resolves `analysis-api-fir.xml →
+impl-base → compiler.xml → platform-interface` and then **silently stops**.
+Logging every resource lookup shows `low-level-api-fir.xml` and
+`symbol-light-classes.xml` are *never requested* — the two that live in a
+different jar from the file including them. It does not ask and get refused; it
+does not ask.
+
+And the error names the wrong file:
+
+```
+Cannot resolve /META-INF/analysis-api/analysis-api-fir.xml
+```
+
+which is the file being *read*, not the include that failed — so it sends you to
+inspect something that loaded perfectly. `flatten-descriptors.py` substitutes
+every include for its content at build time, and the question stops existing.
+
+### kotlinx-serialization is genuinely missing
+
+The shaded platform reads plugin XML through
+`com.intellij.util.xml.dom.XmlElement`, which needs `KSerializer`, and no copy
+is bundled. The compiler never takes that path itself, which is why its archive
+has always been fine without it.
+
+### kotlinx-collections-immutable was never a missing dependency
+
+The one that cost most, and the trap is worth stating in full. `jdeps` reports
+its classes unresolved **exactly as it does for a genuinely absent library**, so
+it was added as a dependency. The error went away.
+
+What that actually did was put a second, *unshaded* copy beside the one the
+compiler already shades. Nothing failed to link. It surfaced much later, from
+inside analysis, as:
+
+```
+NoSuchMethodError: FirSupertypeResolverVisitor.<init>(FirSession,
+  SupertypeComputationSession, ScopeSession,
+  kotlinx.collections.immutable.PersistentList, …)
+```
+
+against a compiler whose constructor is identical **but for that one parameter**
+being `org.jetbrains.kotlin.kotlinx.collections.immutable.PersistentList`. It
+belongs in `Relocate.java`'s `SHADED` list, and adding it there took the
+relocated reference count from 8877 to 9204.
+
+The general rule this produces: **a library the compiler shades and we also
+supply does not fail to link — it fails to *match*, later, somewhere else.**
+Before adding any dependency `jdeps` reports missing, check whether the compiler
+already shades it.
+
+---
+
+## 11. Caffeine is where it stops on ART, and both versions fail
+
+Everything above works on ART too — the archives load, the session gets as far
+as `StandaloneAnalysisAPISessionBuilder.registerProjectServices` — and then
+Caffeine, which the Analysis API caches with and the compiler does not bundle.
+**Both versions fail on Android, for unrelated reasons, and neither is about the
+relocation:**
+
+| Version | Fails on | Why Android lacks it |
+|---|---|---|
+| 3.1.8 | `System.getLogger` in `Caffeine.<clinit>` | the Java 9 `System.Logger` API; Android has never had it |
+| 2.9.3 | `Thread.threadLocalRandomProbe` via `Unsafe`, in `StripedBuffer` | a JDK-internal field Android's `Thread` does not declare |
+
+Both are thrown from static initialisers, so neither has a fallback path, and
+2.9.3's arrives wrapped twice — `IllegalStateException` whose message is only a
+class name, over `InvocationTargetException`, over the real
+`NoSuchFieldException`. The top frame says `LocalCacheFactory` and nothing about
+`Thread`.
+
+`caffeine.jar` is pinned at **2.9.3** because it gets further: 3.x dies before
+the session starts, 2.9.3 dies inside it.
+
+**This is shimmable, and the repo already has the pattern.**
+`../kotlinc/build-kotlinc-dex.py` replaces four compiler classes outright with
+sources under `--shim`, for exactly this class of problem — "classes that cannot
+be rescued by renaming". `StripedBuffer` is the one on the failing path. That is
+the next piece of work and it is bounded.
+
+## 12. What is still unknown
 
 Honest limits of what has been established. None of this is evidence yet.
 
-- **No query has been answered**, because no session builds — §8. The two
-  platform classes §3 lists have still not been reached, so whether they matter
-  is unknown.
+- **No query has been answered *on ART*** — §11. The desktop answers, so what
+  remains is Android-specific and named.
+- **The two platform classes §3 lists have still not been reached**, so whether
+  they matter is unknown.
 - **Latency is still the milestone's real question.** M3 holds Java completion
   to 200 ms and meets it at 76 ms. Nothing measured so far predicts what the
   Analysis API costs to *answer*, only what it costs to load — which was 0.4 s

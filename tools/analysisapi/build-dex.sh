@@ -24,6 +24,7 @@ JARS="${ANALYSIS_API_JARS:-$HOME/aide-os-spikes/analysisapi}"
 SDK="${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}"
 OUT="${1:-$JARS/analysis-api-2.2.10.zip}"
 KOTLINC="${KOTLINC_JARS:-$HOME/aide-os-spikes/kotlinc/jars}"
+COMPILER="$KOTLINC/kotlin-compiler-embeddable.jar"
 JAVA="${JAVA_HOME:-/opt/android-studio/jbr}/bin/java"
 
 # Matches ../kotlinc: aapt2's libbase and the compiler archive land on the same
@@ -52,16 +53,17 @@ echo "dexing (min-api $MIN_API)..."
   --lib "$ANDROID_JAR" \
   "${classpath[@]}" \
   --output "$work/dex" \
-  "$RELOCATED"/*.jar "$JARS/caffeine.jar" "$JARS/kotlinx-collections-immutable.jar"
+  "$RELOCATED"/*.jar "$JARS/caffeine.jar" "$JARS/kotlinx-serialization-core.jar"
 
 stage="$work/stage"; mkdir -p "$stage"
 cp "$work"/dex/*.dex "$stage"/
 
-# The descriptors, taken from the *relocated* jars so the class names in them
-# match the dex beside them.
-for jar in "$RELOCATED"/*.jar; do
-  (cd "$stage" && unzip -qo "$jar" 'META-INF/analysis-api/*' 2>/dev/null || true)
-done
+# The descriptors, **flattened**. Each one's xi:includes are substituted for
+# their content at build time, because the IntelliJ platform shaded into the
+# compiler resolves some of them and silently gives up on the ones that live in
+# a different jar -- reporting the file it was *reading* rather than the include
+# it could not find. flatten-descriptors.py has the detail.
+python3 "$HERE/flatten-descriptors.py" "$stage" "$RELOCATED"/*.jar "$COMPILER"
 
 descriptors="$(find "$stage/META-INF/analysis-api" -name '*.xml' 2>/dev/null | wc -l)"
 if [ "$descriptors" -eq 0 ]; then

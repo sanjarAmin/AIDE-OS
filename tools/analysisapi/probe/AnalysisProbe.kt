@@ -106,10 +106,19 @@ object AnalysisProbe {
         // String: the caller cannot catch a type it cannot load. The first few
         // frames come too -- without them a failure inside the API is a bare
         // class name with nothing to say where it came from.
-        val where = failure.stackTrace.take(6).joinToString(" | ") {
+        val where = failure.stackTrace.take(4).joinToString(" | ") {
             "${it.className}.${it.methodName}:${it.lineNumber}"
         }
-        "ERR ${failure::class.java.name}: ${failure.message} @ $where"
+        // **The cause chain, not just the top.** IntelliJ and Caffeine both
+        // catch a specific failure and rethrow something vaguer -- Caffeine
+        // turns a ReflectiveOperationException into an IllegalStateException
+        // whose message is only a class name -- so the top frame regularly
+        // says nothing about what actually went wrong.
+        val causes = generateSequence(failure.cause) { it.cause }
+            .take(4)
+            .joinToString(" <- ") { "${it::class.java.name}: ${it.message}" }
+        "ERR ${failure::class.java.name}: ${failure.message} @ $where" +
+            if (causes.isEmpty()) "" else " CAUSES: $causes"
     }
 
     /**

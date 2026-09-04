@@ -35,14 +35,30 @@ cfd412ca653ce6fef8d5322c3e0e58b26f0c58dc3f72fc088d68b2e844c67860  228853  analys
 # Caffeine is the one dependency the relocated platform does not already
 # carry. **Its version is our choice, not JetBrains'** -- no -for-ide POM
 # declares it, because these artifacts expect a running IntelliJ platform to
-# provide it. 3.1.8 is the last 3.x built for Java 11, which is what the
-# platform of this era uses. If a later Analysis API needs a newer one,
-# nothing here will say so; the symptom would be a NoSuchMethodError inside
-# the cache.
-7dd15f9df1be238ffaa367ce6f556737a88031de4294dad18eef57c474ddf1d3  889211  caffeine.jar  com.github.ben-manes.caffeine:caffeine:3.1.8  central
+# provide it.
+#
+# **It must be 2.x, and this is an Android constraint rather than a taste.**
+# Caffeine 3.x logs through `System.getLogger`, the Java 9 System.Logger API,
+# which Android has never had -- so 3.1.8 works perfectly on a desktop JVM and
+# dies on a device in Caffeine's static initialiser:
+#   NoSuchMethodError: No static method getLogger(Ljava/lang/String;)
+#     Ljava/lang/System$Logger; in class Ljava/lang/System;
+# 2.9.3 is the last 2.x and uses java.util.logging, which Android does have.
+# The Analysis API only touches Cache, CacheLoader, LoadingCache, RemovalCause
+# and stats, all of which 2.x has.
+1e0a7bbef1dd791653143f3f05d0e489934bf5481e58a87c9e619cd46b68729b  912143  caffeine.jar  com.github.ben-manes.caffeine:caffeine:2.9.3  central
 
-# kotlinx-collections-immutable was invisible until the relocation in
-# relocate.sh had been applied: before it, jdeps reported every reference as
-# unresolved and this one was lost among 298 others. It is a real dependency of
-# the Analysis API and, like caffeine, the platform is expected to supply it.
-72e9a9b0003ec5254b638186f7ca1675b08006bdde4c9c4c589970342ccd2e77  246751  kotlinx-collections-immutable.jar  org.jetbrains.kotlinx:kotlinx-collections-immutable-jvm:0.3.8  central
+# **kotlinx-collections-immutable is deliberately NOT here.** It was added once,
+# because jdeps reported its classes unresolved exactly as it does for a missing
+# library -- and adding it put a second, unshaded copy beside the one the
+# compiler already shades. Nothing failed at link time. It surfaced much later,
+# inside analysis, as a NoSuchMethodError on a FIR constructor identical but for
+# that one parameter's package. It belongs in Relocate.java's SHADED list, and
+# that is where it now is.
+
+# kotlinx-serialization, by contrast, is genuinely absent: the IntelliJ platform
+# shaded into the compiler reads plugin XML through
+# com.intellij.util.xml.dom.XmlElement, which needs KSerializer, and no copy is
+# bundled. The compiler never hits that path itself, so the compiler archive has
+# been fine without it.
+f0adde45864144475385cf4aa7e0b7feb27f61fcf9472665ed98cc971b06b1eb  390987  kotlinx-serialization-core.jar  org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:1.7.3  central
