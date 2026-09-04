@@ -122,6 +122,86 @@ object AnalysisProbe {
     }
 
     /**
+     * Times queries against **one** session, separating three different costs.
+     *
+     * This exists because the obvious measurement is misleading in both
+     * directions. `describeFunctions` builds a whole session per call, so its
+     * ~2.2 s is almost entirely construction -- a cost a language service pays
+     * once at startup and then never again, the same way `:lsp:java` holds a
+     * resident javac. But timing a query *repeatedly* is misleading the other
+     * way: the Analysis API caches a resolved symbol, so the second ask about
+     * the same declaration is free and measures the cache, not the front end.
+     *
+     * So three numbers, and the middle one is the answer:
+     *
+     *  - `build`  -- constructing the session. Paid once.
+     *  - `first`  -- resolving each declaration for the **first** time, one
+     *                sample per declaration, which is what a completion or a
+     *                hover on a symbol nobody has touched yet actually costs.
+     *  - `cached` -- asking again about a declaration already resolved.
+     *
+     * Returns `OK build=..ms first=..ms(median of n) cached=..ms`.
+     */
+    @JvmStatic
+    fun timeQueries(sourceDir: String, cachedIterations: Int): String = try {
+        val previous = Thread.currentThread().contextClassLoader
+        Thread.currentThread().contextClassLoader = AnalysisProbe::class.java.classLoader
+        val disposable = Disposer.newDisposable("aide-analysis-probe-timing")
+        try {
+            val buildStarted = System.nanoTime()
+            val session = buildStandaloneAnalysisAPISession(disposable) {
+                buildKtModuleProvider {
+                    platform = JvmPlatforms.defaultJvmPlatform
+                    addModule(
+                        buildKtSourceModule {
+                            moduleName = "probe"
+                            platform = JvmPlatforms.defaultJvmPlatform
+                            addSourceRoot(Paths.get(sourceDir))
+                        },
+                    )
+                }
+            }
+            val buildMillis = (System.nanoTime() - buildStarted) / 1_000_000
+
+            val declarations = session.modulesWithFiles.values.flatten()
+                .filterIsInstance<KtFile>()
+                .flatMap { it.declarations.filterIsInstance<KtNamedFunction>() }
+            if (declarations.isEmpty()) "ERR no functions under $sourceDir" else {
+
+            // One sample per declaration: each is resolved for the first time
+            // here, so none of these is a cache hit.
+            val firstTouch = declarations.map { declaration ->
+                val started = System.nanoTime()
+                analyze(declaration) {
+                    (declaration.symbol as? KaNamedFunctionSymbol)?.returnType?.toString()
+                }
+                (System.nanoTime() - started) / 1_000_000
+            }.sorted()
+
+            // The same declaration again, now that it is resolved.
+            val target = declarations.first()
+            val cached = (0 until cachedIterations).map {
+                val started = System.nanoTime()
+                analyze(target) {
+                    (target.symbol as? KaNamedFunctionSymbol)?.returnType?.toString()
+                }
+                (System.nanoTime() - started) / 1_000_000
+            }.sorted()
+
+            "OK build=${buildMillis}ms " +
+                "first=${firstTouch[firstTouch.size / 2]}ms(median of ${firstTouch.size}," +
+                "min=${firstTouch.first()},max=${firstTouch.last()}) " +
+                "cached=${cached[cached.size / 2]}ms"
+            }
+        } finally {
+            Disposer.dispose(disposable)
+            Thread.currentThread().contextClassLoader = previous
+        }
+    } catch (failure: Throwable) {
+        "ERR ${failure::class.java.name}: ${failure.message}"
+    }
+
+    /**
      * What the loader can and cannot see, for when a descriptor will not resolve.
      *
      * IntelliJ reads the plugin descriptors through a "resources data loader",
