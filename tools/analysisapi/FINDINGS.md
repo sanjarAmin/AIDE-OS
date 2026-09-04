@@ -720,10 +720,25 @@ assertion was `"Int" in subSequence.label`, which `kotlin/Int` satisfies. **A
 substring assertion passes on a superstring.** It now asserts the whole label,
 `subSequence(Int, Int)`.
 
-One thing that is not a bug but will read as one: **the first completion after
-opening a file returns nothing**, because the session is still being built. The
-popup appears on the next keystroke. With `android.jar` in the session that
-build is several seconds on an emulator, not the 1.8 s of section 13.
+**A third thing looked like a bug and was not, and the way it was nearly
+recorded is the lesson.** Driving with `adb shell input text 'this.setC'`
+produced no completion popup; a second keystroke did. The obvious reading --
+"the first completion after opening a file is lost while the session builds" --
+is wrong, and it was written down before it was checked. Typing the same text
+**one character at a time** pops the list at `this.set`, immediately. The
+session is already warm by then: diagnostics run when the file opens and that
+is what builds it.
+
+`input text` commits a whole string as one IME edit, which is not a keystroke
+and does not trigger the editor's completion the way typing does. **The
+instrument was the finding.** Nothing about the product was wrong, and a
+plausible mechanism written from one observation would have sent the next person
+looking for a race that does not exist.
+
+Two renderings worth noting from the same session, because they are evidence
+the front end is doing real work: `setActionBar(Toolbar?)` carries the `?`, and
+`setContentView(View!)` carries the `!`. Nullable, platform, and neither guessed
+from the source text.
 
 ## 17. What is still unknown
 
