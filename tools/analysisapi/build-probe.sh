@@ -29,6 +29,10 @@ SDK="${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}"
 JAVA="${JAVA_HOME:-/opt/android-studio/jbr}/bin/java"
 OUT="${1:-$JARS/analysis-probe.jar}"
 
+# The probe and the product backend build together and ship in one archive:
+# they need the same classpath, the same opt-ins and the same --min-api, and a
+# second script would be the same script with one path changed.
+
 MIN_API=30   # the same floor as the archive it rides beside
 
 RELOCATED="$JARS/relocated"
@@ -57,7 +61,7 @@ echo "compiling the probe..."
   -opt-in=org.jetbrains.kotlin.analysis.api.KaExperimentalApi \
   -opt-in=org.jetbrains.kotlin.analysis.api.KaIdeApi \
   -opt-in=org.jetbrains.kotlin.analysis.api.KaNonPublicApi \
-  "$HERE"/probe/*.kt
+  "$HERE"/probe/*.kt "$HERE"/backend/*.kt
 
 classes="$(find "$work/classes" -name '*.class' | wc -l)"
 [ "$classes" -gt 0 ] || { echo "the probe compiled to nothing" >&2; exit 1; }
