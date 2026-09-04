@@ -667,22 +667,30 @@ Three things the module has to get right that the spike did not have to:
   editor's file reads and autosave. Analysis on `io` would do that on every
   keystroke.
 
-**A green `connectedDebugAndroidTest` does not cover this module.** Its tests
-`assumeTrue` on the archives being staged, and a full sweep installs the test
-APK -- which wipes the external directory they are staged in -- so they skip.
-Skipping reports as `OK (n tests)`, which is exactly how this project lost a
-week once before. Run them deliberately, after staging:
+**A sweep covers this module now, and the reason it did not is worth keeping.**
+The tests `assumeTrue` on the archives being on the device, and a skip rolls up
+into `OK (n tests)` -- exactly how this project lost a week once before. So
+`:lsp:kotlin:connectedDebugAndroidTest` now `dependsOn` a
+`stageKotlinAnalysisArchives` task that pushes them. Verified by deleting the
+archives from the device and running the Gradle task the sweep runs:
+`tests="18" failures="0" errors="0" skipped="0"`.
 
-```sh
-D=/sdcard/Android/data/com.osamu.aide.lsp.kotlin.test/files
-adb install -r -t lsp/kotlin/build/outputs/apk/androidTest/debug/kotlin-debug-androidTest.apk
-adb push kotlinc-archive.zip          $D/kotlin-compiler-2.2.10.zip
-adb push kotlin-analysis-2.2.10.zip   $D/kotlin-analysis-2.2.10.zip
-adb shell am instrument -w -r com.osamu.aide.lsp.kotlin.test/androidx.test.runner.AndroidJUnitRunner
-```
+**The belief that blocked this for a while was wrong.** The archives were
+thought to be wiped by the sweep's install, which would have meant no
+before-the-test hook could work. `install -r` leaves
+`/sdcard/Android/data/<pkg>/files` untouched -- checked directly, rather than
+reasoned about -- so a plain `dependsOn` is enough. The sweep failure that
+started this hunt was §22's stale extract, not missing archives at all.
 
-and check the status codes rather than the summary: `INSTRUMENTATION_STATUS_CODE: 0`
-is a pass and `-3` is an assumption skip, and both roll up into `OK`.
+When the archives are absent the task warns with the command that builds them
+rather than failing: a fresh clone must still be able to run every other
+module's tests. The tests then skip, and the warning is the only thing standing
+between that and a hollow green.
+
+Reading the results by hand, `INSTRUMENTATION_STATUS_CODE: 0` is a pass and
+`-3` is an assumption skip; both roll up into `OK`. The XML report under
+`build/outputs/androidTest-results/` counts them separately and is the honest
+place to look.
 
 **It is packaged and published.** `build-component.sh` produces
 `kotlin-analysis-<version>.zip` holding `analysis-api.jar` and
