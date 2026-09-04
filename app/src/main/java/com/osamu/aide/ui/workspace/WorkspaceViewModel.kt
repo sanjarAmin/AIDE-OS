@@ -219,6 +219,21 @@ class WorkspaceViewModel(
     private var descriptorJob: Job? = null
     private var buildJob: Job? = null
     private var installJob: Job? = null
+
+    /** So a dismissed Kotlin prompt is not re-offered on the next tab. */
+    private var kotlinInstallOffered = false
+
+    /**
+     * Whether the download in flight was asked for by completion, not by Build.
+     *
+     * The install flow was written for the platform, where finishing the
+     * download and starting the build is exactly right -- the user tapped
+     * Build and the download was the toll. Kotlin intelligence borrows the same
+     * flow and wants the opposite: somebody who opened a file and accepted a
+     * download for *completion* did not ask to compile anything, and starting a
+     * build for them is a surprise, not a convenience.
+     */
+    private var installForIntelligence = false
     private var analysisJob: Job? = null
     private var signatureJob: Job? = null
 
@@ -230,6 +245,9 @@ class WorkspaceViewModel(
     private var platformProgress: InstallProgress? = null
 
     fun open(projectDir: File) {
+        // A new project is a new chance to offer; the old answer was about the
+        // old project.
+        kotlinInstallOffered = false
         if (rootNode?.file == projectDir) return
         val root = FileNode(projectDir, isDirectory = true, depth = 0)
         rootNode = root
@@ -314,6 +332,10 @@ class WorkspaceViewModel(
 
     /** Opens [file] in a tab, or brings its tab to the front if it is open. */
     fun openDocument(file: File) {
+        // On opening, not on selecting: a tab switch back to a file already
+        // open is not the moment to ask for a download.
+        offerKotlinIntelligence(file)
+
         if (_state.value.openFiles.any { it.file == file }) {
             selectDocument(file)
             return
@@ -753,6 +775,41 @@ class WorkspaceViewModel(
     }
 
     /** Shows what has to be downloaded before this device can build anything. */
+    /**
+     * Offers the Kotlin components the first time a Kotlin file is opened.
+     *
+     * **Without this there is no path to them at all.** The component is
+     * defined, pinned and published, `LanguageServices` routes `.kt` to it and
+     * `ToolchainManager` looks it up -- and nothing ever downloaded it, so on a
+     * device that had not been staged by hand the lookup returned null forever
+     * and Kotlin silently had no intelligence. Wiring a component up to the
+     * point of *use* without wiring it to an *install* leaves a feature that
+     * works everywhere except on a user's phone.
+     *
+     * Offered on opening rather than on a build, unlike clang and the platform,
+     * because that is when it is needed: the answer to "why are there no
+     * completions in this file" has to arrive while the file is on screen.
+     *
+     * Once per project. A dismissed prompt stays dismissed -- somebody who does
+     * not want a 56 MB download for a file they are reading should not be asked
+     * again on the next tab.
+     */
+    private fun offerKotlinIntelligence(file: File) {
+        if (file.extension != "kt" && file.extension != "kts") return
+        if (kotlinInstallOffered || _state.value.platform != null) return
+        val component = toolchain.missingKotlinAnalysisComponent() ?: return
+
+        kotlinInstallOffered = true
+        val megabytes = component.archiveBytes / (1024 * 1024)
+        offerComponentInstall(
+            component = component,
+            rationale = "Completion and errors for Kotlin need " +
+                "${component.displayName}, which is about $megabytes MB to " +
+                "download. Editing works without it.",
+            forIntelligence = true,
+        )
+    }
+
     fun offerPlatformInstall() = offerComponentInstall(
         component = ToolchainComponent.ANDROID_PLATFORM,
         rationale = "Building needs android.jar, which cannot be shipped inside " +
@@ -769,7 +826,17 @@ class WorkspaceViewModel(
      * rather than assumed. Asking someone to accept Google's terms in order to
      * compile Apache-licensed LLVM would be wrong on its own.
      */
-    fun offerComponentInstall(component: ToolchainComponent, rationale: String) {
+    fun offerComponentInstall(
+        component: ToolchainComponent,
+        rationale: String,
+        // Passed rather than inferred. The first version set a field before
+        // calling this and had this method reset it from state -- which
+        // clobbered the value that had just been set, so a download accepted
+        // for completion still kicked off a build. A caller's intent is not
+        // recoverable from the state it is about to change.
+        forIntelligence: Boolean = false,
+    ) {
+        installForIntelligence = forIntelligence
         if (_state.value.platform != null) return
         viewModelScope.launch {
             val text = if (component.requiresSdkLicense) {
@@ -814,9 +881,29 @@ class WorkspaceViewModel(
                     platformProgress = null
                     _state.update { it.copy(platform = null) }
                     _events.send(WorkspaceEvent.Notice("${platform.component.displayName} installed."))
-                    // What the user asked for was a build; the download was the
-                    // toll. Starting it saves them tapping Build again.
-                    build()
+
+                    if (installForIntelligence) {
+                        // **Kotlin needs two components, so one install is
+                        // rarely the end.** The compiler is the prerequisite
+                        // and the Analysis API follows it; offering only the
+                        // first and stopping leaves a user who accepted a 53 MB
+                        // download still without completion, and nothing to say
+                        // why. Clearing the guard lets the next one be offered.
+                        kotlinInstallOffered = false
+                        installForIntelligence = false
+                        _state.value.activeFile?.let { active ->
+                            offerKotlinIntelligence(active)
+                            // Nothing re-analyses on its own: the service is
+                            // resolved per request, so the file on screen keeps
+                            // its old (empty) diagnostics until something asks
+                            // again.
+                            analyse(active, pendingText[active] ?: return@let)
+                        }
+                    } else {
+                        // What the user asked for was a build; the download was
+                        // the toll. Starting it saves them tapping Build again.
+                        build()
+                    }
                 }
             }
         }

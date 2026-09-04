@@ -743,6 +743,28 @@ assertion was `"Int" in subSequence.label`, which `kotlin/Int` satisfies. **A
 substring assertion passes on a superstring.** It now asserts the whole label,
 `subSequence(Int, Int)`.
 
+**Installing the components through the app found two more, and the first was
+that there was no way to install them at all.** The component was defined,
+pinned, published, looked up by `ToolchainManager` and routed to by
+`LanguageServices` -- and nothing ever called `install` on it, so on any device
+that had not been staged by hand the lookup returned null forever and Kotlin
+silently had no intelligence. **Wiring a component up to the point of use
+without wiring it to an install leaves a feature that works everywhere except on
+a user's phone**, and every test passed throughout because every test stages the
+archives itself.
+
+The second is subtler and was self-inflicted twice over. Kotlin needs *two*
+components, so one install is rarely the end -- offering the compiler and
+stopping leaves somebody who accepted a 53 MB download still without completion
+and nothing to say why. The guard that stops a dismissed prompt reappearing on
+the next tab also stopped the *second* component ever being offered, so the
+chain has to clear it on a successful install. And the install flow was written
+for the platform, where finishing the download and starting the build is exactly
+right; borrowed for completion it starts a build nobody asked for. The first fix
+for that set a field and then let `offerComponentInstall` reset it from state --
+clobbering the value just set, so the build still ran. **A caller's intent is not
+recoverable from the state it is about to change**; it has to be passed.
+
 **A third thing looked like a bug and was not, and the way it was nearly
 recorded is the lesson.** Driving with `adb shell input text 'this.setC'`
 produced no completion popup; a second keystroke did. The obvious reading --
@@ -1030,13 +1052,15 @@ Honest limits of what has been established. None of this is evidence yet.
   what builds the session -- so it lands before the first answer rather than
   before the first keystroke. §18 on why that distinction was nearly recorded
   backwards.
-- **Nothing has installed the component through the app.** The release asset is
-  published and the pinned URL serves the pinned bytes, so the download path
-  should work -- but every run so far has staged the archives by hand, and
-  "should" is not evidence. Hand-staging into `files/toolchains/` as root needs
-  `chown` to the app's uid **and** `chcon` to the parent's *full* label, because
-  `restorecon` restores `app_data_file:s0` without the per-app category set;
-  §7 is the older half of that trap.
+- ~~Nothing has installed the component through the app.~~ Done: on a device
+  with no components at all, opening a Kotlin file offered the compiler, then
+  the Analysis API, and completion answered `uppercase()` and
+  `uppercase(Locale)` out of archives the app downloaded and checksum-verified
+  itself. §18 records the two bugs that surfaced on the way. Hand-staging is
+  still how the tests are set up, and doing it as root needs `chown` to the
+  app's uid **and** `chcon` to the parent's *full* label, because `restorecon`
+  restores `app_data_file:s0` without the per-app category set; §7 is the older
+  half of that trap.
 - **Only one file, in one project, has been driven by hand.** §18 is what that
   found. Nothing has opened a second Kotlin file, switched between them, or
   changed projects while a session was warm -- and `LanguageServices` closes and

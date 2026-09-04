@@ -75,6 +75,26 @@ class ToolchainManager(
     }
 
     /**
+     * The component Kotlin intelligence is still waiting on, or null if none.
+     *
+     * **Two components, and the compiler comes first**: the Analysis API is
+     * built against that compiler's shaded IntelliJ and cannot load without it,
+     * and its `kotlin-stdlib.jar` is the library module the session resolves
+     * against. Offering the smaller one to somebody who has neither would
+     * download 2 MB and change nothing.
+     *
+     * Null when both are installed, which is also what a caller reads as "stop
+     * asking".
+     */
+    fun missingKotlinAnalysisComponent(): ToolchainComponent? = when {
+        !storage.fileFor(ToolchainComponent.KOTLIN_COMPILER, "kotlinc.jar").isFile ->
+            ToolchainComponent.KOTLIN_COMPILER
+        !storage.fileFor(ToolchainComponent.KOTLIN_ANALYSIS_API, "analysis-api.jar").isFile ->
+            ToolchainComponent.KOTLIN_ANALYSIS_API
+        else -> null
+    }
+
+    /**
      * The four files Kotlin intelligence needs, from two components.
      *
      * Named here rather than returned as a tuple because the four are not
