@@ -44,7 +44,21 @@ FIXED = {3: 4, 4: 4, 5: 8, 6: 8, 7: 2, 8: 2, 9: 4, 10: 4, 11: 4,
 # every index after it.
 WIDE = {5, 6}
 
-ACC_PUBLIC, ACC_STATIC, ACC_SYNTHETIC = 0x0001, 0x0008, 0x1000
+ACC_PUBLIC, ACC_PRIVATE, ACC_STATIC, ACC_SYNTHETIC = 0x0001, 0x0002, 0x0008, 0x1000
+
+# **`@InlineOnly` functions are private JVM methods, and they are not private.**
+# `println`, `print`, `let`, `also`, `require` -- a great deal of what a Kotlin
+# user types -- are declared `@kotlin.internal.InlineOnly`, which the compiler
+# lowers to ACC_PRIVATE so nothing can call them from Java. Filtering on
+# ACC_PUBLIC alone therefore drops them, and the symptom is a completion list
+# with no `println` in it. The annotation survives into the class file as a
+# RuntimeInvisibleAnnotations attribute, so it can be recovered here.
+#
+# This is the clearest argument for reading `@kotlin.Metadata` instead, which
+# records the *Kotlin* declaration rather than its JVM lowering and would need
+# no special case at all. FINDINGS.md section 20.
+INLINE_ONLY = "Lkotlin/internal/InlineOnly;"
+ANNOTATIONS = ("RuntimeInvisibleAnnotations", "RuntimeVisibleAnnotations")
 
 # A Kotlin file facade, or one of a multifile facade's parts.
 FACADE = re.compile(r"(?:^|/)[A-Za-z0-9_]+Kt(?:__[A-Za-z0-9_]+)?\.class$")
@@ -83,6 +97,29 @@ def skip_attributes(data, offset):
     return offset
 
 
+def read_attributes(data, offset, pool, wanted_index):
+    """Skip a member's attributes, reporting whether [wanted_index] is annotated.
+
+    The check is deliberately crude: an annotation attribute is scanned for the
+    constant pool index of the annotation's type, rather than decoding the
+    element-value pairs. `@InlineOnly` has no arguments, so there is nothing to
+    decode, and a full element_value parser is a lot of format for one bit.
+    """
+    count = struct.unpack_from(">H", data, offset)[0]
+    offset += 2
+    annotated = False
+    for _ in range(count):
+        name_index = struct.unpack_from(">H", data, offset)[0]
+        length = struct.unpack_from(">I", data, offset + 2)[0]
+        body = data[offset + 6:offset + 6 + length]
+        if wanted_index is not None and pool[name_index] in ANNOTATIONS:
+            target = struct.pack(">H", wanted_index)
+            if target in body:
+                annotated = True
+        offset += 6 + length
+    return offset, annotated
+
+
 def skip_members(data, offset):
     count = struct.unpack_from(">H", data, offset)[0]
     offset += 2
@@ -92,8 +129,12 @@ def skip_members(data, offset):
 
 
 def method_names(data):
-    """Public static method names, which is what a top-level function becomes."""
+    """Top-level function names: public statics, plus `@InlineOnly` privates."""
     pool, offset = read_pool(data, 8)
+    inline_only = next(
+        (i for i, entry in enumerate(pool) if entry == INLINE_ONLY),
+        None,
+    )
     offset += 6                                   # access, this, super
     interfaces = struct.unpack_from(">H", data, offset)[0]
     offset += 2 + 2 * interfaces
@@ -104,10 +145,12 @@ def method_names(data):
     names = []
     for _ in range(count):
         access, name_index = struct.unpack_from(">HH", data, offset)
-        offset = skip_attributes(data, offset + 6)
-        if not (access & ACC_PUBLIC) or not (access & ACC_STATIC):
+        offset, annotated = read_attributes(data, offset + 6, pool, inline_only)
+        if not (access & ACC_STATIC) or (access & ACC_SYNTHETIC):
             continue
-        if access & ACC_SYNTHETIC:
+        # Public, or private-because-inline-only. Anything else genuinely is a
+        # helper the user cannot call.
+        if not (access & ACC_PUBLIC) and not (access & ACC_PRIVATE and annotated):
             continue
         name = pool[name_index]
         # `$` catches synthetic and internal-name-mangled members; `-` catches

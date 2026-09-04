@@ -833,6 +833,30 @@ deal of `kotlin.collections`**, and anything picked for that test has to be
 checked against the index rather than against intuition. `getOrPut` is the one
 used now -- a `MutableMap` extension with no `kotlin.text` counterpart.
 
+**`@InlineOnly` functions are private JVM methods, and filtering on
+`ACC_PUBLIC` silently drops them.** The index first came out at 869 names and
+did not contain `println`. It is not missing from the jar: `kotlin.io.ConsoleKt`
+declares it, as
+
+```
+private static final void println(java.lang.Object);
+```
+
+because `println` -- along with `print`, `let`, `also`, `require` and a great
+deal of what a Kotlin user actually types -- is declared
+`@kotlin.internal.InlineOnly`, which the compiler lowers to `ACC_PRIVATE` so
+that nothing can call it from Java. It is not private in Kotlin at all.
+
+The annotation survives into the class file as a `RuntimeInvisibleAnnotations`
+attribute on the method, so the scan can recover them: accept a static method if
+it is public, **or** private and annotated `Lkotlin/internal/InlineOnly;`. That
+took the index from 869 names to **1275**.
+
+This was found by writing a test for `println` and checking the index before
+running it. It is also the sharpest argument for §20's alternative: reading
+`@kotlin.Metadata` records the *Kotlin* declaration rather than its JVM
+lowering, and would need no special case for this at all.
+
 **Confirmed in the editor**, not only through `LanguageService`: typing `s.upp`
 on a `String` in a running project offers `uppercase()` and
 `uppercase(Locale)` -- exactly the two overloads the probe predicted as
