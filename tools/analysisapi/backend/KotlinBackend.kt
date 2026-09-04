@@ -70,7 +70,7 @@ object KotlinBackend {
     private var key: String? = null
 
     /**
-     * Package -> top-level callable names, from `top-level-callables.index`.
+     * Package -> its top-level callables, read from the library jars.
      *
      * **The API can resolve one of these by name and cannot list them.** Three
      * routes were tried against a binary library and all return nothing: the
@@ -79,10 +79,10 @@ object KotlinBackend {
      * `findTopLevelCallables(FqName, Name)` resolves out of the same jar
      * perfectly well, and extension applicability filters correctly on the
      * result. So the gap is names, and only names -- which is a question about
-     * our own jars rather than about the API. `tools/analysisapi/
-     * build-name-index.py` reads them at build time. FINDINGS.md section 19.
+     * the jars rather than about the API. [MetadataIndex] answers it from
+     * `@kotlin.Metadata`. FINDINGS.md sections 19 and 20.
      */
-    private var topLevelNames: Map<String, List<String>> = emptyMap()
+    private var topLevelNames: Map<String, List<MetadataIndex.Callable>> = emptyMap()
 
     /**
      * Builds the session, or reuses the one already built for these roots.
@@ -92,8 +92,8 @@ object KotlinBackend {
      * pay it. Returns `OK` or `ERR <message>`.
      */
     @JvmStatic
-    fun open(sourceRoots: String, libraryJars: String, nameIndexPath: String): String = guarded {
-        val wanted = "$sourceRoots|$libraryJars|$nameIndexPath"
+    fun open(sourceRoots: String, libraryJars: String): String = guarded {
+        val wanted = "$sourceRoots|$libraryJars"
         if (session != null && key == wanted) return@guarded "OK"
         close()
 
@@ -131,30 +131,14 @@ object KotlinBackend {
         session = built
         disposable = owner
         key = wanted
-        topLevelNames = readNameIndex(nameIndexPath)
-        "OK"
-    }
-
-    /**
-     * `package<TAB>name name name` per line, both sorted, as the build emits.
-     *
-     * A missing or unreadable index is not fatal: it costs extensions and
-     * leaves members working, which is the state this had before the index
-     * existed. Failing the whole session over it would trade a partial feature
-     * for none.
-     */
-    private fun readNameIndex(path: String): Map<String, List<String>> {
-        val file = java.io.File(path)
-        if (path.isBlank() || !file.isFile) return emptyMap()
-        return runCatching {
-            file.readLines().mapNotNull { line ->
-                val tab = line.indexOf('\t')
-                if (tab <= 0) return@mapNotNull null
-                line.substring(0, tab) to line.substring(tab + 1).split(' ').filter {
-                    it.isNotBlank()
-                }
-            }.toMap()
+        // Scanned here rather than shipped: the jars that matter include the
+        // project's own dependencies, which no build of ours can know. A jar
+        // with no Kotlin in it is skipped whole, so android.jar costs one
+        // directory read rather than forty thousand class parses.
+        topLevelNames = runCatching {
+            MetadataIndex.scan(jars.map { java.io.File(it) })
         }.getOrDefault(emptyMap())
+        "OK"
     }
 
     /**
@@ -230,7 +214,7 @@ object KotlinBackend {
                 // offering one produces code that does not compile.
                 file.scopeContext(reference).scopes.asSequence()
                     .flatMap { it.scope.declarations } +
-                    indexedTopLevel(file, prefix).filterNot { it.isExtension }
+                    indexedTopLevel(file, prefix, wantExtensions = false)
             }
 
             symbols
@@ -283,19 +267,25 @@ object KotlinBackend {
         file: KtFile,
         prefix: String,
     ): Sequence<org.jetbrains.kotlin.analysis.api.symbols.KaCallableSymbol> =
-        indexedTopLevel(file, prefix).filter { it.isExtension }
+        // **Filtered before resolution, not after.** The index records whether
+        // each callable is an extension, so a member request never resolves the
+        // non-extensions and a bare-identifier request never resolves the
+        // extensions. Half the candidates, and none of the wrong ones.
+        indexedTopLevel(file, prefix, wantExtensions = true)
 
     /**
      * Top-level callables from the index whose name starts with [prefix].
      *
      * Serves both halves of completion, because both hit the same wall: a
      * member request needs the extensions, and a bare-identifier request needs
-     * `println` -- and neither is enumerable from any scope. Only the filtering
-     * afterwards differs.
+     * `println` -- and neither is enumerable from any scope. [wantExtensions]
+     * picks the half, from the index rather than from resolved symbols, so the
+     * unwanted half is never resolved at all.
      */
     private fun KaSession.indexedTopLevel(
         file: KtFile,
         prefix: String,
+        wantExtensions: Boolean,
     ): Sequence<org.jetbrains.kotlin.analysis.api.symbols.KaCallableSymbol> {
         if (prefix.isEmpty() || topLevelNames.isEmpty()) return emptySequence()
 
@@ -309,9 +299,10 @@ object KotlinBackend {
         return visible.asSequence()
             .flatMap { packageName ->
                 topLevelNames[packageName].orEmpty().asSequence()
-                    .filter { it.startsWith(prefix) }
-                    .map { packageName to it }
+                    .filter { it.name.startsWith(prefix) && it.isExtension == wantExtensions }
+                    .map { packageName to it.name }
             }
+            .distinct()
             .take(CANDIDATE_LIMIT)
             .flatMap { (packageName, name) ->
                 findTopLevelCallables(FqName(packageName), Name.identifier(name))

@@ -28,7 +28,6 @@ OUT="${1:-$JARS/kotlin-analysis-$VERSION.zip}"
 
 API="$JARS/analysis-api-$VERSION.zip"
 BACKEND="$JARS/analysis-probe.jar"
-STDLIB_SOURCE="${KOTLINC_ARCHIVE:-$JARS/kotlinc-archive.zip}"
 [ -f "$API" ] || { echo "no $API -- run build-dex.sh" >&2; exit 1; }
 
 # **Built here rather than assumed.** Packaging a stale backend has happened
@@ -44,28 +43,12 @@ work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 cp "$API" "$work/analysis-api.jar"
 cp "$BACKEND" "$work/analysis-backend.jar"
 
-# **The name index, because the API will not build one.** Completion can
-# resolve a top-level callable by name and cannot list them; the names come
-# from the standard library jar, read here. See build-name-index.py and
-# FINDINGS.md section 19.
-#
-# Built from the *compiler component's* stdlib, which is the one the session
-# resolves against at runtime. The two components are pinned to the same
-# Kotlin version, and this is where that coupling bites if it is ever broken:
-# an index naming callables a different stdlib does not have would offer
-# completions that vanish when chosen.
-[ -f "$STDLIB_SOURCE" ] || { echo "no $STDLIB_SOURCE for the name index" >&2; exit 1; }
-unzip -o -q "$STDLIB_SOURCE" kotlin-stdlib.jar -d "$work/stdlib"
-"$HERE/build-name-index.py" "$work/stdlib/kotlin-stdlib.jar" > "$work/top-level-callables.index"
-rm -rf "$work/stdlib"
-[ -s "$work/top-level-callables.index" ] || { echo "the name index came out empty" >&2; exit 1; }
-
 # -X and a fixed timestamp: the same inputs have to produce the same bytes, or
 # the sha1 below is a checksum of the moment it was built rather than of the
 # archive. tools/kotlinc does the same and for the same reason.
 find "$work" -exec touch -t 198001010000.00 {} +
 rm -f "$OUT"
-( cd "$work" && zip -q -X -r "$OUT" analysis-api.jar analysis-backend.jar top-level-callables.index )
+( cd "$work" && zip -q -X -r "$OUT" analysis-api.jar analysis-backend.jar )
 
 echo "wrote $OUT"
 echo "  archiveSha1  = \"$(sha1sum "$OUT" | cut -d' ' -f1)\""

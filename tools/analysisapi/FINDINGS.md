@@ -789,14 +789,11 @@ is plainly in the jar and `findClass` returns null for it. That is correct, not
 broken -- a file facade is a JVM implementation detail, and in the Kotlin view
 `uppercase` is a top-level callable of the package, a member of nothing.
 
-**The index.** `build-name-index.py` reads the facade classes -- `<File>Kt`, and
-the `Kt__`-suffixed parts a multifile facade splits into -- and takes their
-public static method names: 869 names across 38 packages for kotlin-stdlib. It
-parses the class files directly rather than shelling out to `javap` several
-hundred times; the parse needed is the constant pool and the method table's
-name indices. Built at build time and shipped in the component, for the reason
-`jars.lock` exists: it is derived from a pinned artifact, so it should be
-produced once and verified, not recomputed on every phone.
+**The index**, in its first form, read the facade classes -- `<File>Kt` and the
+`Kt__`-suffixed parts a multifile facade splits into -- for their public static
+method names, at build time, shipped in the component. That worked and is gone;
+§21 replaced it with a metadata scan, for reasons the two paragraphs below turn
+out to be the argument for.
 
 **Prefix first, and that ordering is the design.** §16 measured the other order
 -- enumerate what is visible, then ask what applies -- at four times the latency
@@ -834,7 +831,8 @@ checked against the index rather than against intuition. `getOrPut` is the one
 used now -- a `MutableMap` extension with no `kotlin.text` counterpart.
 
 **`@InlineOnly` functions are private JVM methods, and filtering on
-`ACC_PUBLIC` silently drops them.** The index first came out at 869 names and
+`ACC_PUBLIC` silently drops them.** (Retained because it is *why* the bytecode
+route was abandoned, not because the code still does this.) The index first came out at 869 names and
 did not contain `println`. It is not missing from the jar: `kotlin.io.ConsoleKt`
 declares it, as
 
@@ -950,15 +948,71 @@ still fall into**, and both are documented as ADRs in `docs/adr/`:
   today; that is how to fill it in, and the convention-reference fallback is the
   part that would not have been guessed.
 
-## 21. What is still unknown
+## 21. Reading `@kotlin.Metadata` instead, which is what CodeOnTheGo does
+
+§19 built a name index by reading class files' method tables. §20 recorded that
+CodeOnTheGo reads `@kotlin.Metadata` instead. That is now what this does, and
+the switch removed more than it added.
+
+**Bytecode is the lowering of Kotlin, not Kotlin, and the two disagree exactly
+where completion cares.** Two failures made the case:
+
+- `println`, `print`, `let`, `also`, `require` are `@kotlin.internal.InlineOnly`,
+  which the compiler emits **private** so Java cannot call them. Filtering on
+  `ACC_PUBLIC` dropped a third of the standard library with no sign that it had
+  -- 869 names where the metadata gives 1275 -- and the fix was a special case
+  for one annotation, which is the shape of a rule that will need another.
+- **Nothing in a descriptor says a method is an extension.** An extension is a
+  static method whose first parameter happens to be a receiver, which is
+  indistinguishable from an ordinary two-argument function. The old index could
+  only record names, so every candidate had to be resolved before it could be
+  told apart.
+
+`@kotlin.Metadata` carries the protobuf the compiler wrote, so it answers both
+without a special case: the *Kotlin* declarations, and `hasReceiverType()` for
+each. `kotlin-compiler-embeddable` already ships the reader
+(`JvmProtoBufUtil.readPackageDataFrom`) and a shaded ASM to lift the annotation
+out of the class file, so it cost no new dependency and nothing new to pin.
+
+**What the switch deleted**: `build-name-index.py`, the
+`top-level-callables.index` entry in the component, the parameter that carried
+its path through `KotlinArchives`, `ToolchainManager`, `ToolchainComponent` and
+`open()`, the `ACC_PUBLIC` special case, and the version coupling between a
+prebuilt index and the standard library it described. The component is two jars
+again.
+
+**What it bought**:
+
+- **The project's own dependencies are covered.** The scan runs over whatever
+  jars the session is given, which already includes the dependency classpath, so
+  an AAR's extensions are reachable without anything being rebuilt. That was the
+  top item in §22.
+- **Extension-ness is known before resolution.** A member request now resolves
+  only the extensions and a bare-identifier request only the non-extensions --
+  half the candidates, and none of the wrong ones. The old index knew names
+  alone, so both halves resolved everything and discarded most of it.
+
+**The cost is at `open()`, and it is real**: cold completion went from 3601 ms
+to 4098 ms, which is the stdlib scan. Warm is unchanged -- 234 ms against
+219 ms, inside the noise of the 220 ms that having a library in the session
+costs at all. `android.jar` is skipped whole on the absence of a
+`.kotlin_module` entry under `META-INF`, so 43 MB of Java costs one directory
+read rather than forty thousand class parses; without that gate the scan would
+dominate session build.
+
+**Kotlin block comments nest.** Writing the glob for that `.kotlin_module` check
+inside a KDoc opened a comment that never closed, and the compiler reported it
+at the *end of the file* -- a hundred lines from the cause. Java's do not nest;
+Kotlin's do.
+
+## 22. What is still unknown
 
 Honest limits of what has been established. None of this is evidence yet.
 
-- **The name index covers kotlin-stdlib and nothing else.** §19. A project's
-  AARs and any other Kotlin dependency contribute no extension proposals. §20
-  shows the upgrade that closes it and removes the build-time coupling at the
-  same time: decode `@kotlin.Metadata` rather than scanning facade method
-  tables, at runtime, over the jars `:engine:deps` unpacks.
+- **The metadata scan has only been run against kotlin-stdlib.** §21 covers a
+  project's AARs by construction -- the scan takes whatever jars the session is
+  given -- but no test has opened a session with an AAR on the classpath, so
+  "by construction" is the claim and not yet the evidence.
 - **Kotlin completion is ~220 ms against a 200 ms budget** once the standard
   library is in the session, where Java is 76 ms. The cost is library
   resolution, not extensions (§19), and no attempt has been made to reduce it.

@@ -60,11 +60,6 @@ class KotlinLanguageServiceTest {
         if (componentZip.isFile) {
             extract(componentZip, "analysis-api.jar", File(unpacked, "analysis-api.jar"))
             extract(componentZip, "analysis-backend.jar", File(unpacked, "analysis-backend.jar"))
-            extract(
-                componentZip,
-                "top-level-callables.index",
-                File(unpacked, "top-level-callables.index"),
-            )
         }
 
         archives = KotlinArchives(
@@ -72,7 +67,6 @@ class KotlinLanguageServiceTest {
             stdlibJar = File(unpacked, "kotlin-stdlib.jar"),
             analysisApiJar = File(unpacked, "analysis-api.jar"),
             backendJar = File(unpacked, "analysis-backend.jar"),
-            nameIndex = File(unpacked, "top-level-callables.index"),
             workingDir = File(context.filesDir, "kotlin-lsp"),
         )
         // **Not `assumeTrue` on a message alone.** This suite is worthless if

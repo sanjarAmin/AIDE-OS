@@ -70,8 +70,6 @@ class ToolchainManager(
                 .fileFor(ToolchainComponent.KOTLIN_ANALYSIS_API, "analysis-api.jar"),
             backendJar = storage
                 .fileFor(ToolchainComponent.KOTLIN_ANALYSIS_API, "analysis-backend.jar"),
-            nameIndex = storage
-                .fileFor(ToolchainComponent.KOTLIN_ANALYSIS_API, "top-level-callables.index"),
         )
         return files.takeIf { it.allPresent }
     }
@@ -93,10 +91,9 @@ class ToolchainManager(
         val stdlibJar: File,
         val analysisApiJar: File,
         val backendJar: File,
-        val nameIndex: File,
     ) {
         val allPresent: Boolean
             get() = compilerJar.isFile && stdlibJar.isFile &&
-                analysisApiJar.isFile && backendJar.isFile && nameIndex.isFile
+                analysisApiJar.isFile && backendJar.isFile
     }
 }

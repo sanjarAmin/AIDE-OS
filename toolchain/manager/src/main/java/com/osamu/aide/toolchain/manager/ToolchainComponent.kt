@@ -169,16 +169,12 @@ data class ToolchainComponent(
             displayName = "Kotlin Analysis API 2.2.10",
             archiveUrl = "https://github.com/sanjarAmin/AIDE-OS/releases/download/" +
                 "kotlin-analysis-2.2.10/kotlin-analysis-2.2.10.zip",
-            archiveSha1 = "dbbec71777ac6e5aa1fc72d8917d992077eb2112",
-            archiveBytes = 1_989_710L,
+            archiveSha1 = "47f6187be057f9e340094fd2f40d3c2c59a76272",
+            archiveBytes = 1_988_723L,
             archive = ComponentArchive.ZipEntries(
                 mapOf(
                     "analysis-api.jar" to "analysis-api.jar",
                     "analysis-backend.jar" to "analysis-backend.jar",
-                    // Not a jar: the top-level callable names completion needs,
-                    // because the Analysis API resolves them by name and will
-                    // not enumerate them. tools/analysisapi/FINDINGS.md §19.
-                    "top-level-callables.index" to "top-level-callables.index",
                 ),
             ),
             installedBytes = 2_100_000L,

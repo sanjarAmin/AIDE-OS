@@ -75,7 +75,7 @@ class KotlinLanguageService(
     private val backend: Class<*> = load()
 
     private val openMethod: Method =
-        backend.getMethod("open", String::class.java, String::class.java, String::class.java)
+        backend.getMethod("open", String::class.java, String::class.java)
     private val diagnosticsMethod: Method =
         backend.getMethod("diagnostics", String::class.java)
     private val completeMethod: Method =
@@ -209,7 +209,6 @@ class KotlinLanguageService(
                 null,
                 roots.joinToString(File.pathSeparator) { it.absolutePath },
                 libraries,
-                prepared.nameIndex.absolutePath,
             ) as String
         }.getOrElse { "ERR ${it.cause?.message ?: it.message}" }
 

@@ -32,15 +32,6 @@ data class KotlinArchives(
     val analysisApiJar: File,
     /** `analysis-backend.jar`: our code, compiled against the relocated jars. */
     val backendJar: File,
-    /**
-     * `top-level-callables.index`: the names the Analysis API will not list.
-     *
-     * Not a jar and not on any classloader -- a text file the backend reads.
-     * Completion can resolve a top-level callable by name and cannot enumerate
-     * them, so without this there are no extension proposals at all.
-     * `tools/analysisapi/FINDINGS.md` section 19.
-     */
-    val nameIndex: File,
     /** App-private storage for the read-only copies [prepare] makes. */
     val workingDir: File,
 ) {
@@ -48,7 +39,7 @@ data class KotlinArchives(
     /** All four present. Not the same as loadable -- see [prepare]. */
     val isComplete: Boolean
         get() = compilerJar.isFile && stdlibJar.isFile &&
-            analysisApiJar.isFile && backendJar.isFile && nameIndex.isFile
+            analysisApiJar.isFile && backendJar.isFile
 
     /**
      * Stages the jars read-only and returns what to load.
@@ -73,15 +64,11 @@ data class KotlinArchives(
         // The stdlib is read as class files, not loaded as dex, so it does not
         // need the read-only treatment -- but it is copied for the same reason
         // the others are: the session holds it open for its whole life.
-        return Prepared(
-            dexPath = dexPath,
-            stdlib = readOnlyCopy(stdlibJar),
-            nameIndex = readOnlyCopy(nameIndex),
-        )
+        return Prepared(dexPath = dexPath, stdlib = readOnlyCopy(stdlibJar))
     }
 
-    /** The three paths [prepare] produces. Different jobs, see above. */
-    data class Prepared(val dexPath: String, val stdlib: File, val nameIndex: File)
+    /** The classloader path, and the library root. Different jobs, see above. */
+    data class Prepared(val dexPath: String, val stdlib: File)
 
     private fun readOnlyCopy(source: File): File {
         val target = File(workingDir, source.name)
