@@ -555,20 +555,84 @@ Two things to know before writing `:lsp:kotlin` against this:
   `EditingSessionTest.extensions_are_still_missing_from_completion` pins the gap
   and is written to fail when it closes.
 
-## 16. What is still unknown
+## 16. Extensions need an index, and enumerate-then-filter is the wrong shape
+
+§15 pinned extensions as the largest gap between the probe and a usable
+`:lsp:kotlin`. This is how far it got, because the obvious approach does not
+work and the reason is worth more than the attempt.
+
+**The obvious approach.** Ask the scopes at the cursor for their callables,
+keep the extensions, and ask the API whether each applies to the receiver.
+Applicability is genuinely the API's to answer -- "is this extension callable
+here" involves type parameters, smart casts and the receiver's own generic
+arguments -- and `createExtensionCandidateChecker` is what IntelliJ's own
+completion uses. That part is right.
+
+**Where it fails: the star-importing scope will not enumerate.** Asked for every
+callable it has, `DefaultStarImportingScope` returns 104, of which 76 are
+extensions -- and those 76 are overloads of exactly **two names**, `plus` and
+`toString`. The default star imports cover `kotlin.text`, `kotlin.collections`,
+`kotlin.io` and five more packages holding thousands of callables. The scope is
+not filtering them out; it never offers them. It answers for names it has
+already been told about, and a completion request after `s.` has no names yet.
+
+So `String` completes to eight members plus nothing, and `uppercase` -- which
+almost anyone typing `s.` is reaching for -- is not in the answer.
+
+**Adding the standard library helps, and is not the fix.** The session was
+built with no library module at all, which is its own trap (below). Adding
+kotlin-stdlib.jar as a `KtLibraryModule` moves the star scope from 30 callables
+to 104 and from 4 extension symbols to 76 -- so **the library is read, on ART,
+from a plain-bytecode jar** -- and changes the completion result not at all,
+because those 76 are still two names.
+
+It does change the cost:
+
+| session | star scope | warm completion |
+|---|---|---|
+| no library module | n=30, ext=4 | **59 ms** |
+| kotlin-stdlib.jar as a library | n=104, ext=76 | **229 ms** |
+
+**Four times the latency for nothing**, spent running applicability checks over
+76 overloads that were never going to be useful. That is the finding that
+matters for the design: enumerate-then-filter costs in proportion to what the
+scope happens to yield, which is unrelated to what the user is asking for. A
+real implementation has to go the other way -- take the prefix the user has
+typed, get candidate **names** from an index, and only then resolve and check
+those. That is what IntelliJ's stub index is for.
+
+**What was ruled out.** `KotlinDeclarationProvider` has exactly the right
+method, `getTopLevelCallableNamesInPackage`, and it is obtainable
+(`createDeclarationProvider(project, scope, module)`). It is PSI-oriented: it
+finds `KtNamedFunction`s in Kotlin *source*, so it answers for the project's own
+files and not for declarations that exist only as class files in a jar. The
+standard library's extensions are exactly the second kind. Finding the binary
+equivalent is the open piece of work, and it is research rather than plumbing --
+which is why this stops here with the wall described rather than half-climbed.
+
+**The library trap, separately, because it is silent.** A session with no
+library module still resolves `String` to `kotlin.String` and answers its
+members, because those are *builtins* carried by the front end itself. Nothing
+errors, nothing is empty, and the standard library appears to be present. It is
+not, and the only symptom is that completion is thin -- which looks like the
+extension gap above rather than a missing module. Build the session with the
+libraries even while only members work.
+
+## 17. What is still unknown
 
 Honest limits of what has been established. None of this is evidence yet.
 
-- **Extensions are not collected**, so completion is real but badly incomplete.
-  §15. This is the largest single piece of work between here and a usable
-  `:lsp:kotlin`.
-- **Nothing has resolved against a library.** One source module, no android.jar,
-  no AARs, no cross-module references. That is where a front end usually gets
-  expensive, and none of §13's or §15's numbers cover it.
+- **Extension completion needs a name index over binary libraries**, and the
+  provider that has the right shape is source-only. §16. This is the largest
+  single piece of work between here and a usable `:lsp:kotlin`, and it is the
+  one piece that is not yet plumbing.
+- **Only kotlin-stdlib has been used as a library.** No android.jar, no AARs,
+  no cross-module references. §16 shows a library is read on ART, which is the
+  claim that was open; it does not show what a real dependency graph costs.
 - **The archive is not distributed.** It is staged by hand onto the device;
   `:toolchain:manager` has no component for it. This is the same gap M4 had with
   kotlinc, and it was closed the same way -- a GitHub release and a pinned
-  checksum.
+  checksum. This is the most ordinary work left, and nothing blocks it.
 - **The 1808 ms build is on an emulator, with a trivial module.** It will grow
   with the project, and it sits on the path to first completion after opening
   one. Whether it can be moved off that path -- built ahead of time, or in the

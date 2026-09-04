@@ -33,6 +33,15 @@ class EditingSessionTest {
     private lateinit var probe: Class<*>
     private lateinit var sourceDir: File
 
+    /**
+     * The standard library, as a **library module** for the session.
+     *
+     * Not the same jar the archive runs on. `kotlinc.jar` holds dex; this is
+     * the plain-bytecode `kotlin-stdlib.jar` beside it in the same component,
+     * and the Analysis API reads it as a binary root the way a desktop would.
+     */
+    private lateinit var stdlib: File
+
     @Before
     fun setUp() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -47,6 +56,7 @@ class EditingSessionTest {
 
         val local = File(context.filesDir, "kotlinls").apply { mkdirs() }
         val compilerJar = unpack(kotlinc, File(local, "kotlinc.jar"), "kotlinc.jar")
+        stdlib = unpack(kotlinc, File(local, "kotlin-stdlib.jar"), "kotlin-stdlib.jar")
         val analysisLocal = readOnlyCopy(analysisApi, File(local, ANALYSIS_API_ARCHIVE))
         val probeLocal = readOnlyCopy(probeJar, File(local, PROBE_ARCHIVE))
 
@@ -95,10 +105,11 @@ class EditingSessionTest {
     private fun complete(text: String, offset: Int): String {
         val method = probe.getMethod(
             "completeInMemory",
-            String::class.java, String::class.java, Int::class.javaPrimitiveType,
+            String::class.java, String::class.java, String::class.java, Int::class.javaPrimitiveType,
         )
         val started = System.nanoTime()
-        val result = method.invoke(null, sourceDir.absolutePath, text, offset) as String
+        val result =
+            method.invoke(null, sourceDir.absolutePath, stdlib.absolutePath, text, offset) as String
         Log.i(TAG, "complete took ${(System.nanoTime() - started) / 1_000_000} ms")
         Log.i(TAG, "complete: ${result.take(400)}")
         return result
@@ -172,10 +183,11 @@ class EditingSessionTest {
     private fun timed(text: String, offset: Int): Long {
         val method = probe.getMethod(
             "completeInMemory",
-            String::class.java, String::class.java, Int::class.javaPrimitiveType,
+            String::class.java, String::class.java, String::class.java, Int::class.javaPrimitiveType,
         )
         val started = System.nanoTime()
-        val result = method.invoke(null, sourceDir.absolutePath, text, offset) as String
+        val result =
+            method.invoke(null, sourceDir.absolutePath, stdlib.absolutePath, text, offset) as String
         check(result.startsWith("OK ")) { "completion failed: $result" }
         return (System.nanoTime() - started) / 1_000_000
     }
@@ -227,8 +239,10 @@ class EditingSessionTest {
                 val wrong: String = 1
             }
         """.trimIndent()
-        val method = probe.getMethod("diagnoseInMemory", String::class.java, String::class.java)
-        val result = method.invoke(null, sourceDir.absolutePath, text) as String
+        val method = probe.getMethod(
+            "diagnoseInMemory", String::class.java, String::class.java, String::class.java,
+        )
+        val result = method.invoke(null, sourceDir.absolutePath, stdlib.absolutePath, text) as String
         Log.i(TAG, "diagnostics: ${result.take(400)}")
 
         assertTrue("diagnostics failed: $result", result.startsWith("OK "))
@@ -248,12 +262,29 @@ class EditingSessionTest {
 
             fun fine(): String = "ok"
         """.trimIndent()
-        val method = probe.getMethod("diagnoseInMemory", String::class.java, String::class.java)
-        val result = method.invoke(null, sourceDir.absolutePath, text) as String
+        val method = probe.getMethod(
+            "diagnoseInMemory", String::class.java, String::class.java, String::class.java,
+        )
+        val result = method.invoke(null, sourceDir.absolutePath, stdlib.absolutePath, text) as String
         Log.i(TAG, "clean: ${result.take(400)}")
 
         assertTrue("diagnostics failed: $result", result.startsWith("OK "))
         assertTrue("clean code produced diagnostics: $result", result.startsWith("OK 0 "))
+    }
+
+    /** A diagnostic, printed to logcat; asserts only that it ran. */
+    @Test
+    fun zz_scope_report() {
+        val method = probe.getMethod(
+            "scopeReport",
+            String::class.java, String::class.java, String::class.java, Int::class.javaPrimitiveType,
+        )
+        val result = method.invoke(
+            null, sourceDir.absolutePath, stdlib.absolutePath,
+            STRING_RECEIVER, cursorIn(STRING_RECEIVER),
+        ) as String
+        Log.i(TAG, "scopes: $result")
+        assertTrue(result.isNotBlank())
     }
 
     private companion object {
