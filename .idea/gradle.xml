@@ -26,6 +26,7 @@
             <option value="$PROJECT_DIR$/lsp" />
             <option value="$PROJECT_DIR$/lsp/api" />
             <option value="$PROJECT_DIR$/lsp/java" />
+            <option value="$PROJECT_DIR$/lsp/kotlin" />
             <option value="$PROJECT_DIR$/lsp/native" />
             <option value="$PROJECT_DIR$/spike" />
             <option value="$PROJECT_DIR$/spike/ai" />

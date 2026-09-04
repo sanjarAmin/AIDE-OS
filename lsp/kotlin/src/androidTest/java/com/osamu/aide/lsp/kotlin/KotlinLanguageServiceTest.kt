@@ -185,7 +185,11 @@ class KotlinLanguageServiceTest {
         val length = items.firstOrNull { it.insert == "length" }
         assertNotNull("String.length is missing: ${items.map { it.insert }}", length)
         assertEquals("length is a property, not a method", CompletionKind.FIELD, length!!.kind)
-        assertEquals("the detail should be the resolved type", "kotlin/Int", length.detail)
+        // `Int`, not `kotlin/Int`: the detail is shown to a person, and
+        // KaType.toString() is a debug rendering that reaches the UI. Driving
+        // the app is what found that — completion offered
+        // `setContentView(android/view/View!)`.
+        assertEquals("the detail should read as source, not as descriptors", "Int", length.detail)
     }
 
     /**
@@ -255,7 +259,7 @@ class KotlinLanguageServiceTest {
         assertEquals(CompletionKind.METHOD, subSequence!!.kind)
         assertTrue(
             "the label should carry the parameters: ${subSequence.label}",
-            subSequence.label.startsWith("subSequence(") && "Int" in subSequence.label,
+            subSequence.label == "subSequence(Int, Int)",
         )
     }
 

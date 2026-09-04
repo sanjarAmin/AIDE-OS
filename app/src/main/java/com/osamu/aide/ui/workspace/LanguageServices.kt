@@ -114,7 +114,7 @@ class LanguageServices(
         val clangd = nativeFor(projectRoot)
         if (clangd != null && clangd.handles(file)) return clangd
 
-        val kotlin = kotlinFor(projectRoot)
+        val kotlin = kotlinFor(projectRoot, classpath)
         if (kotlin != null && kotlin.handles(file)) return kotlin
         return null
     }
@@ -128,16 +128,25 @@ class LanguageServices(
      * -- silence rather than an error, because a device that cannot do this is
      * not a device with a problem.
      *
-     * Not given a classpath, unlike the Java service. It resolves against the
-     * Kotlin standard library only; `android.jar` and the project's AARs are
-     * not wired in yet, and until they are a `classpath` parameter would
-     * promise something this does not do.
+     * **Null without `android.jar`, for the reason [forProject] gives.** A
+     * Kotlin session that cannot see the platform resolves `Activity` and
+     * `onCreate` to nothing and reports every line of a correct template as an
+     * error. Driving the app showed exactly that -- fifteen problems on a
+     * freshly created project -- and silence is the better failure.
      */
-    private fun kotlinFor(projectRoot: File): KotlinLanguageService? {
+    private fun kotlinFor(
+        projectRoot: File,
+        classpath: List<File>,
+    ): KotlinLanguageService? {
         if (!KotlinArchives.isSupported) return null
 
         kotlinCurrent?.let { (root, service) ->
-            if (root == projectRoot) return service
+            // A changed classpath needs a new service, the same as javac: the
+            // session holds a resolved view of its libraries and cannot be
+            // added to.
+            if (root == projectRoot && service.classpath == kotlinClasspath(classpath)) {
+                return service
+            }
             // Holds the front end's whole object graph and the open jars it
             // resolves against; dropping the reference alone leaks both.
             service.close()
@@ -145,6 +154,8 @@ class LanguageServices(
         }
 
         val files = toolchain.kotlinAnalysisArchives() ?: return null
+        val resolved = kotlinClasspath(classpath)
+        if (resolved.isEmpty()) return null
         val service = KotlinLanguageService(
             archives = KotlinArchives(
                 compilerJar = files.compilerJar,
@@ -155,9 +166,21 @@ class LanguageServices(
             ),
             projectRoot = projectRoot,
             dispatchers = dispatchers,
+            classpath = resolved,
         )
         kotlinCurrent = projectRoot to service
         return service
+    }
+
+    /**
+     * The platform first, then the project's dependencies.
+     *
+     * Empty when the platform is not installed, which the caller reads as "no
+     * Kotlin service" rather than "a service with nothing to resolve against".
+     */
+    private fun kotlinClasspath(classpath: List<File>): List<File> {
+        val platform = toolchain.androidJar() ?: return emptyList()
+        return listOf(platform) + classpath
     }
 
     /**

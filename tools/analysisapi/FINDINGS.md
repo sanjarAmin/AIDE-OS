@@ -676,6 +676,55 @@ the designed silence -- a device below API 30 can never load these, and most
 projects never need them -- but it means the feature is one upload away from
 reaching anyone, and until then only the instrumented tests exercise it.
 
+## 18. Driving the app found two bugs no test did
+
+Both were invisible to seven passing instrumented tests, and both are the kind
+this project keeps meeting: **the code worked and the answer was wrong.**
+
+**Fifteen errors on a correct project.** Opening the Kotlin template covered it
+in red -- every import, `Activity()`, `onCreate`, `setContentView` -- with
+`Unresolved reference 'Activity'` in the Problems pane. Nothing had failed. The
+session simply had no `android.jar`, so the front end was right that nothing
+resolved, and the module's plumbing was right to report it: placed, relative,
+tappable diagnostics. Only the answer was useless.
+
+`LanguageServices.forProject` already documents this exact trap for javac --
+"a file of red squiggles blaming the user for the toolchain not being installed.
+Silence is the better failure" -- and the Kotlin path was written without the
+guard. It now takes the platform and the project's dependency jars as library
+modules, and returns **null** when the platform is not installed.
+
+The tests could not have caught it. They build a session over a hand-written
+fixture that only uses `kotlin.String` and `kotlin.Int`, where builtins are
+enough. Nothing in that fixture needs a library, so nothing noticed there was
+none. **A fixture that avoids the dependency also avoids the bug.**
+
+The fix incidentally settles an unknown: `android.jar` resolves on ART. Opening
+the same file afterwards is clean, and completion answers out of it.
+
+**`KaType.toString()` reached the user.** The completion list offered
+`setContentView(android/view/View!)` and `setContentView(kotlin/Int)` --
+internal names, slashes and all, because `toString()` on a `KaType` is a debug
+rendering. The API has the right thing:
+
+```kotlin
+type.render(KaTypeRendererForSource.WITH_SHORT_NAMES, Variance.INVARIANT)
+```
+
+which gives `setContentView(View!)` and `setContentView(Int)`. The `!` stays --
+it marks a platform type, which is real information about nullability, and
+IntelliJ shows it too.
+
+No test caught this either, and the reason is worth more than the fix: the
+assertion was `"Int" in subSequence.label`, which `kotlin/Int` satisfies. **A
+substring assertion passes on a superstring.** It now asserts the whole label,
+`subSequence(Int, Int)`.
+
+One thing that is not a bug but will read as one: **the first completion after
+opening a file returns nothing**, because the session is still being built. The
+popup appears on the next keystroke. With `android.jar` in the session that
+build is several seconds on an emulator, not the 1.8 s of section 13.
+
 ## 17. What is still unknown
 
 Honest limits of what has been established. None of this is evidence yet.
@@ -684,17 +733,21 @@ Honest limits of what has been established. None of this is evidence yet.
   provider that has the right shape is source-only. §16. This is the largest
   single piece of work between here and a usable `:lsp:kotlin`, and it is the
   one piece that is not yet plumbing.
-- **Only kotlin-stdlib has been used as a library.** No android.jar, no AARs,
-  no cross-module references. §16 shows a library is read on ART, which is the
-  claim that was open; it does not show what a real dependency graph costs.
+- **AARs and cross-module references are still untried.** `android.jar` works
+  (§18) and so does kotlin-stdlib; a real dependency graph, with AARs unpacked
+  by `:engine:deps`, is wired through `LanguageServices` but has never been
+  exercised.
+- **Session build time with `android.jar` is unmeasured.** §13's 1808 ms is a
+  trivial module with no libraries. With the platform it is visibly several
+  seconds, and it sits in front of the first completion after opening a file.
 - **The component exists; the release asset does not.** §17. Everything on this
   side is done -- packaging, checksum, component, installer path, routing -- and
   the archive has not been uploaded to the release URL it pins. Until it is,
   Kotlin intelligence is reachable only from the instrumented tests.
-- **Nothing has driven it from the editor.** The module is tested through
-  `LanguageService`; nobody has opened a `.kt` file in the running app and
-  watched completion appear. This project has found four UI bugs that way that
-  no test caught, and that was the git panel, which is simpler than this.
+- **Only one file, in one project, has been driven by hand.** §18 is what that
+  found. Nothing has opened a second Kotlin file, switched between them, or
+  changed projects while a session was warm -- and `LanguageServices` closes and
+  rebuilds the service on both.
 - **The 1808 ms build is on an emulator, with a trivial module.** It will grow
   with the project, and it sits on the path to first completion after opening
   one. Whether it can be moved off that path -- built ahead of time, or in the

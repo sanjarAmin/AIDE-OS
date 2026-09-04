@@ -40,6 +40,21 @@ class KotlinLanguageService(
     private val archives: KotlinArchives,
     private val projectRoot: File,
     private val dispatchers: DispatcherProvider,
+    /**
+     * `android.jar` and the project's dependency jars, as library modules.
+     *
+     * **Not optional, and leaving it empty is not a smaller version of this
+     * feature.** A session that cannot see `android.jar` resolves `Activity`,
+     * `Bundle` and `onCreate` to nothing, and the front end is right to say so
+     * -- so a freshly created, perfectly correct project comes back with
+     * fifteen errors blaming the user for a toolchain they have not installed.
+     * That is what driving the app showed, and it is the same trap
+     * `LanguageServices.forProject` already documents for javac.
+     *
+     * A changed classpath needs a new service: the session holds a resolved
+     * view of these and there is no way to add to it.
+     */
+    val classpath: List<File> = emptyList(),
 ) : LanguageService {
 
     /**
@@ -141,20 +156,23 @@ class KotlinLanguageService(
     /**
      * Builds the session on first use, against the project's Kotlin sources.
      *
-     * The stdlib goes in as a library module even though only members resolve
-     * through it today: without one the session still answers for `String`,
-     * because those are builtins the front end carries, so its absence looks
-     * like success. FINDINGS.md section 16.
+     * The stdlib goes in beside [classpath] rather than instead of it: without
+     * a library module at all the session still answers for `String`, because
+     * those are builtins the front end carries, so its absence looks like
+     * success. FINDINGS.md section 16.
      */
     private fun ensureOpen() {
         if (opened) return
         val roots = listOf(File(projectRoot, "src/main/java"), File(projectRoot, "src/main/kotlin"))
             .filter { it.isDirectory }
             .ifEmpty { listOf(projectRoot) }
+        val libraries = (listOf(stdlib) + classpath)
+            .filter { it.isFile }
+            .joinToString(File.pathSeparator) { it.absolutePath }
         val result = openMethod.invoke(
             null,
             roots.joinToString(File.pathSeparator) { it.absolutePath },
-            stdlib.absolutePath,
+            libraries,
         ) as String
         check(result == "OK") { "the Kotlin backend would not open: $result" }
         opened = true

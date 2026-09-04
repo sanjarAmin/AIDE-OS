@@ -1,10 +1,12 @@
 package com.osamu.aide.analysisapi.backend
 
+import org.jetbrains.kotlin.analysis.api.KaSession
 import org.jetbrains.kotlin.analysis.api.analyze
 import org.jetbrains.kotlin.analysis.api.components.KaDiagnosticCheckerFilter
 import org.jetbrains.kotlin.analysis.api.components.KaExtensionApplicabilityResult
 import org.jetbrains.kotlin.analysis.api.projectStructure.KaSourceModule
 import org.jetbrains.kotlin.analysis.api.projectStructure.contextModule
+import org.jetbrains.kotlin.analysis.api.renderer.types.impl.KaTypeRendererForSource
 import org.jetbrains.kotlin.analysis.api.standalone.StandaloneAnalysisAPISession
 import org.jetbrains.kotlin.analysis.api.standalone.buildStandaloneAnalysisAPISession
 import org.jetbrains.kotlin.analysis.api.symbols.KaClassLikeSymbol
@@ -16,7 +18,9 @@ import org.jetbrains.kotlin.analysis.project.structure.builder.buildKtSourceModu
 import org.jetbrains.kotlin.com.intellij.openapi.Disposable
 import org.jetbrains.kotlin.com.intellij.openapi.util.Disposer
 import org.jetbrains.kotlin.idea.references.mainReference
+import org.jetbrains.kotlin.analysis.api.types.KaType
 import org.jetbrains.kotlin.platform.jvm.JvmPlatforms
+import org.jetbrains.kotlin.types.Variance
 import org.jetbrains.kotlin.psi.KtDotQualifiedExpression
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
@@ -191,12 +195,12 @@ object KotlinBackend {
                         is KaNamedFunctionSymbol ->
                             name + symbol.valueParameters.joinToString(
                                 prefix = "(", postfix = ")",
-                            ) { it.returnType.toString() }
+                            ) { readable(it.returnType) }
                         else -> name
                     }
                     val detail = when (symbol) {
-                        is KaNamedFunctionSymbol -> symbol.returnType.toString()
-                        is KaVariableSymbol -> symbol.returnType.toString()
+                        is KaNamedFunctionSymbol -> readable(symbol.returnType)
+                        is KaVariableSymbol -> readable(symbol.returnType)
                         else -> ""
                     }
                     listOf(label, kind, name, detail.replace('\t', ' ')).joinToString(FIELD)
@@ -205,6 +209,21 @@ object KotlinBackend {
                 .toList()
         }
     }
+
+    /**
+     * A type as a person reads it, not as the compiler spells it.
+     *
+     * **`KaType.toString()` is a debug rendering and it reaches the user.**
+     * It produces `android/view/View!` and `kotlin/collections/List<kotlin/Int>`
+     * -- internal names, slashes and all -- and driving the app is how that was
+     * noticed: the completion list offered `setContentView(android/view/View!)`
+     * where an IDE offers `setContentView(View!)`.
+     *
+     * The `!` stays. It marks a platform type, which is real information about
+     * whether null is possible, and IntelliJ shows it too.
+     */
+    private fun KaSession.readable(type: KaType): String =
+        type.render(KaTypeRendererForSource.WITH_SHORT_NAMES, Variance.INVARIANT)
 
     /** A one-line signature for the declaration at [offset], or an empty string. */
     @JvmStatic
@@ -216,9 +235,9 @@ object KotlinBackend {
             val symbol = reference.mainReference.resolveToSymbol() as? KaNamedFunctionSymbol
                 ?: return@analyze ""
             val parameters = symbol.valueParameters.joinToString(", ") {
-                "${it.name.asString()}: ${it.returnType}"
+                "${it.name.asString()}: ${readable(it.returnType)}"
             }
-            "${symbol.name.asString()}($parameters): ${symbol.returnType}"
+            "${symbol.name.asString()}($parameters): ${readable(symbol.returnType)}"
         }
     }
 

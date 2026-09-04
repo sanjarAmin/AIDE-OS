@@ -169,8 +169,8 @@ data class ToolchainComponent(
             displayName = "Kotlin Analysis API 2.2.10",
             archiveUrl = "https://github.com/sanjarAmin/AIDE-OS/releases/download/" +
                 "kotlin-analysis-2.2.10/kotlin-analysis-2.2.10.zip",
-            archiveSha1 = "40216aac6d41374209303b07b6b8841e2d1015b2",
-            archiveBytes = 1_974_904L,
+            archiveSha1 = "9ba860f89cee1874757896117495533d80a43035",
+            archiveBytes = 1_975_499L,
             archive = ComponentArchive.ZipEntries(
                 mapOf(
                     "analysis-api.jar" to "analysis-api.jar",
