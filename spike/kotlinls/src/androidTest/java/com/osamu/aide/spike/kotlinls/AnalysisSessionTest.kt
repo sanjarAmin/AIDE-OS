@@ -12,7 +12,8 @@ import org.junit.runner.RunWith
 import java.io.File
 
 /**
- * Spike R12, the question that matters: does the Analysis API **answer**? It does.
+ * Spike R12, the question that matters: does the Analysis API **answer** on ART?
+ * It does — with two shims, which `tools/analysisapi/FINDINGS.md` §12 explains.
  *
  * `AnalysisApiLoadTest` shows the classes load and their relocated references
  * resolve. That is not the same as the API working — a session is built out of
@@ -160,50 +161,96 @@ class AnalysisSessionTest {
     }
 
     /**
-     * The ART boundary, pinned. **Delete this when it starts failing.**
+     * A session opens and resolves a declaration to its type, **on ART**.
      *
-     * **On a desktop JVM this same probe, on these same archives, works:**
-     *
-     * ```
-     * OK greet(kotlin/String):kotlin/String
-     *    count(kotlin/collections/List<kotlin/Int>):kotlin/Int
-     * ```
-     *
-     * A session opens and resolves `String` to `kotlin/String` and `List<Int>`
-     * to `kotlin/collections/List<kotlin/Int>` — neither of which appears in
-     * the source text, so that is the front end running, not a parser.
-     *
-     * On ART it stops in **Caffeine**, which the Analysis API caches with and
-     * which the compiler does not bundle. Both versions fail here, for
-     * unrelated reasons, and neither is about our relocation:
-     *
-     * - **3.x** logs through `System.getLogger`, the Java 9 `System.Logger`
-     *   API Android has never had — fatal in Caffeine's static initialiser.
-     * - **2.x** reaches `Thread.threadLocalRandomProbe` through `Unsafe`, a
-     *   JDK-internal field Android's `Thread` does not declare. Thrown from a
-     *   static initialiser in `StripedBuffer`, so there is no fallback path.
-     *
-     * Both are shimmable exactly as `tools/kotlinc/build-kotlinc-dex.py`
-     * already shims four compiler classes that "cannot be rescued by
-     * renaming". That is the next piece of work, and it is bounded.
-     *
-     * `tools/analysisapi/FINDINGS.md` §11.
+     * `kotlin/String` is the whole point. The source says `String`; only a
+     * resolved front end says `kotlin/String`. A parser could produce the
+     * function's name; nothing but the K2 front end produces its type.
      */
     @Test
-    fun a_session_still_stops_at_caffeine_on_art() {
+    fun a_session_opens_and_resolves_a_declaration() {
         val result = describe()
 
+        assertTrue("the probe reported a failure: $result", result.startsWith("OK "))
         assertTrue(
-            "A session built on ART — R12's last blocker is gone. Delete this " +
-                "test and assert the real thing, which the desktop already " +
-                "produces: greet(kotlin/String):kotlin/String and " +
-                "count(kotlin/collections/List<kotlin/Int>):kotlin/Int. Got: $result",
-            result.startsWith("ERR "),
+            "greet was not resolved to its qualified types: $result",
+            "greet(kotlin/String):kotlin/String" in result,
         )
+    }
+
+    /**
+     * A generic signature resolves too.
+     *
+     * `List<Int>` separates resolution from string handling: the answer has to
+     * be `kotlin/collections/List<kotlin/Int>`, and that appears nowhere in the
+     * source text.
+     */
+    @Test
+    fun a_generic_parameter_resolves_to_its_qualified_form() {
+        val result = describe()
+
+        assertTrue("the probe reported a failure: $result", result.startsWith("OK "))
         assertTrue(
-            "It no longer stops in Caffeine, so FINDINGS.md §11 is out of date " +
-                "and should be corrected rather than trusted: $result",
-            "caffeine" in result,
+            "count's List<Int> parameter did not resolve: $result",
+            "kotlin/collections/List<kotlin/Int>" in result,
+        )
+        assertTrue("count's return type did not resolve: $result", "):kotlin/Int" in result)
+    }
+
+    /**
+     * What the three costs actually are, on a device.
+     *
+     * **The number M3's budget is about is not the one `describe()` reports.**
+     * Every call there builds a whole session and throws it away, so its ~2.2 s
+     * is construction — paid once by a resident service, the way `:lsp:java`
+     * holds a warm javac. What a user waits for is one query against a session
+     * that is already up.
+     *
+     * The probe separates first-touch resolution from a cache hit because
+     * measuring the same symbol twice measures the cache. See `timeQueries`.
+     *
+     * Asserted loosely and deliberately. The claim worth pinning is the
+     * *shape* — that a warm query is orders below session construction, so a
+     * resident session is the right design — not a millisecond count on one
+     * emulator, which would fail on other hardware for no reason anyone could
+     * act on. The measured numbers go to logcat and to FINDINGS; only the shape
+     * is a test.
+     */
+    @Test
+    fun a_query_against_a_live_session_costs_far_less_than_building_one() {
+        manyFunctions()
+        val method = probe.getMethod("timeQueries", String::class.java, Int::class.javaPrimitiveType)
+        val result = method.invoke(null, sourceDir.absolutePath, 20) as String
+        Log.i(TAG, "timings: $result")
+
+        assertTrue("the timing probe failed: $result", result.startsWith("OK "))
+        val build = Regex("build=(\\d+)ms").find(result)!!.groupValues[1].toLong()
+        val first = Regex("first=(\\d+)ms").find(result)!!.groupValues[1].toLong()
+
+        assertTrue("session construction was suspiciously cheap: $result", build > 100)
+        assertTrue(
+            "a first-touch query cost ${first}ms against a ${build}ms build — " +
+                "resolution is not cheap relative to construction: $result",
+            first < build / 4,
+        )
+    }
+
+    /**
+     * Enough declarations for a median to mean something.
+     *
+     * Each has a distinct name and a type that has to be resolved rather than
+     * copied from the source text, so first-touch resolution is sampled once
+     * per declaration instead of once overall.
+     */
+    private fun manyFunctions() {
+        File(sourceDir, "Many.kt").writeText(
+            buildString {
+                appendLine("package probe")
+                appendLine()
+                repeat(40) { index ->
+                    appendLine("fun pick$index(items: List<String>, at: Int): String = items[at]")
+                }
+            },
         )
     }
 
