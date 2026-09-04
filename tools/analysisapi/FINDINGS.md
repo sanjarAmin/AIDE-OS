@@ -1074,7 +1074,59 @@ here was the artifact under test. It compares sizes now, the way
 `KotlinArchives.readOnlyCopy` already did, and 18 tests pass with no manual
 clearing.
 
-## 23. What is still unknown
+## 23. `Process crashed` with no stack is usually not this code
+
+Twice a run of `:lsp:kotlin` died with
+
+```
+INSTRUMENTATION_RESULT: shortMsg=Process crashed.
+INSTRUMENTATION_CODE: 0
+```
+
+and nothing else -- no Java exception, no failure count, the log stopping after
+`STATUS_CODE: 1` for the first test. Both times the reflex was to look for a
+defect in the session or the archives. Both times it was somewhere else, and the
+two causes were **different**, which is the part worth remembering: the symptom
+carries no information at all.
+
+**The second one was Android's own MediaProvider.** `/data/tombstones` held
+three tombstones from one day, byte-identical:
+
+```
+Cmdline: com.android.providers.media.module
+signal 6 (SIGABRT)
+Abort message: 'Check failed: active_nodes_.find(node) != active_nodes_.end()'
+  mediaprovider::fuse::NodeTracker::CheckTracked
+```
+
+one of them at `10:36:14.443` -- the second the instrumentation log was written.
+That daemon is the FUSE server behind `/sdcard`, and these tests read their
+staged archives from `getExternalFilesDir(...)`, so when it aborts mid-read the
+file I/O dies and takes the test process with it. It happened after a 56 MB push
+at the end of a 26-minute sweep that had been hammering external storage.
+
+The correlation is to the second, the mechanism is direct, and the abort has
+recurred three times identically. What is *not* in hand is logcat from that
+moment -- it had rotated -- so this is strong circumstantial evidence rather
+than a captured causal chain, and it is written down as such.
+
+**The first one was the test package being uninstalled** by a sweep that had
+been killed mid-instrumentation; `am instrument` then said `Unable to find
+instrumentation info`, which is unambiguous once looked for. There was no
+tombstone at that time, which is what separates the two.
+
+So: **read `/data/tombstones` before theorising.** A tombstone means a *native*
+abort, names the process, and rules our Java code out immediately -- and its
+absence rules the platform out just as fast. `adb shell ls -la /data/tombstones`
+then `head -12` on the newest is thirty seconds and settles it. Assuming the
+second crash was a repeat of the first was wrong, and checking would have cost
+less than the assumption did.
+
+Mitigation, if it becomes frequent: stage somewhere that is not FUSE-backed. It
+has not been frequent enough to justify moving the staging, and a rerun has
+always worked.
+
+## 24. What is still unknown
 
 Honest limits of what has been established. None of this is evidence yet.
 

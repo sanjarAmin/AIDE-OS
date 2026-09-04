@@ -102,6 +102,17 @@ failed to load still produces a clean compile.
   check before believing a stall. `adb shell dumpsys power | grep mWakefulness`
   and `adb shell dumpsys window | grep isKeyguardShowing`.
 
+- **`Process crashed` from `am instrument` carries no information.** No Java
+  exception, no failure count, the log stopping after the first test starts.
+  Seen twice in one day from two unrelated causes: a sweep killed
+  mid-instrumentation had *uninstalled the test package*, and Android's own
+  `com.android.providers.media.module` aborted in its FUSE node tracker --
+  the daemon behind `/sdcard`, which any suite staging archives through
+  `getExternalFilesDir` is reading from. **Check `/data/tombstones` first**: a
+  tombstone means a native abort and names the process, so it rules our Java
+  code out in thirty seconds, and its absence rules the platform out just as
+  fast. `tools/analysisapi/FINDINGS.md` §23.
+
 - **`adb shell run-as` is not the app.** It runs in `runas_app`, which *may*
   `execve` out of app-private storage — so a hand probe through it will
   cheerfully do things the app is forbidden to do, and appear to disprove a
