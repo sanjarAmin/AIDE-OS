@@ -555,7 +555,11 @@ Two things to know before writing `:lsp:kotlin` against this:
   `EditingSessionTest.extensions_are_still_missing_from_completion` pins the gap
   and is written to fail when it closes.
 
-## 16. Extensions need an index, and enumerate-then-filter is the wrong shape
+## 16. ~~Extensions need an index~~ — solved by §20, kept for the diagnosis
+
+Superseded by §20, which builds the index this section says is needed. Kept
+because the diagnosis is why §20 looks the way it does, and because the cost
+measurement below is the reason it resolves by prefix first.
 
 §15 pinned extensions as the largest gap between the probe and a usable
 `:lsp:kotlin`. This is how far it got, because the obvious approach does not
@@ -601,14 +605,12 @@ real implementation has to go the other way -- take the prefix the user has
 typed, get candidate **names** from an index, and only then resolve and check
 those. That is what IntelliJ's stub index is for.
 
-**What was ruled out.** `KotlinDeclarationProvider` has exactly the right
-method, `getTopLevelCallableNamesInPackage`, and it is obtainable
-(`createDeclarationProvider(project, scope, module)`). It is PSI-oriented: it
+**What was ruled out**, and §20 confirmed each on a device:
+`KotlinDeclarationProvider` has exactly the right method,
+`getTopLevelCallableNamesInPackage`, and it is obtainable
+(`project.createDeclarationProvider(scope, module)`). It is PSI-oriented: it
 finds `KtNamedFunction`s in Kotlin *source*, so it answers for the project's own
-files and not for declarations that exist only as class files in a jar. The
-standard library's extensions are exactly the second kind. Finding the binary
-equivalent is the open piece of work, and it is research rather than plumbing --
-which is why this stops here with the wall described rather than half-climbed.
+files and returns **nothing** for a library module.
 
 **The library trap, separately, because it is silent.** A session with no
 library module still resolves `String` to `kotlin.String` and answers its
@@ -740,25 +742,117 @@ the front end is doing real work: `setActionBar(Toolbar?)` carries the `?`, and
 `setContentView(View!)` carries the `!`. Nullable, platform, and neither guessed
 from the source text.
 
-## 17. What is still unknown
+## 20. Extensions work: the API resolves by name, so we supply the names
+
+`String` completes to `uppercase`. §16's wall came down, and not by finding a
+better enumeration API -- there is not one -- but by noticing that enumeration
+was never the requirement.
+
+**Four routes, measured on a device, three closed.**
+
+| route | asked for | result |
+|---|---|---|
+| `DefaultStarImportingScope.callables { true }` | everything visible | 76 symbols, **two names** |
+| `findPackage("kotlin.text").packageScope` | everything in a package | `callables=0` |
+| `KotlinDeclarationProvider.getTopLevelCallableNamesInPackage` | names in a package | `KaLibraryModuleImpl=0`, and `KaSourceModuleImpl=1[onDisk]` |
+| **`findTopLevelCallables(FqName, Name)`** | **one named callable** | `kotlin.text.uppercase found=4 ext=4 applicableOnString=2` |
+
+The third row is the one that names the rule: the *same provider*, asked the
+*same question*, answers for a source module and not for a binary one. And the
+fourth shows the library is perfectly reachable -- resolution out of the jar
+works, and `createExtensionCandidateChecker` correctly finds two of the four
+`uppercase` overloads applicable to a `String`.
+
+**So the API can resolve anything it is named, and will list nothing.** The gap
+was never about reach. It was a missing index, and an index over a jar we ship
+is our own problem rather than the API's.
+
+`findClass` is worth recording as the near-miss: `kotlin/text/StringsKt.class`
+is plainly in the jar and `findClass` returns null for it. That is correct, not
+broken -- a file facade is a JVM implementation detail, and in the Kotlin view
+`uppercase` is a top-level callable of the package, a member of nothing.
+
+**The index.** `build-name-index.py` reads the facade classes -- `<File>Kt`, and
+the `Kt__`-suffixed parts a multifile facade splits into -- and takes their
+public static method names: 869 names across 38 packages for kotlin-stdlib. It
+parses the class files directly rather than shelling out to `javap` several
+hundred times; the parse needed is the constant pool and the method table's
+name indices. Built at build time and shipped in the component, for the reason
+`jars.lock` exists: it is derived from a pinned artifact, so it should be
+produced once and verified, not recomputed on every phone.
+
+**Prefix first, and that ordering is the design.** §16 measured the other order
+-- enumerate what is visible, then ask what applies -- at four times the latency
+for an answer that did not change, because the cost tracked what the scopes
+happened to yield rather than what was asked. Here the index is filtered by the
+typed prefix before a single symbol is resolved:
+
+| | warm completion |
+|---|---|
+| stdlib as a library, no index, enumerate-then-filter (§16) | 229 ms |
+| stdlib as a library, **with the index**, prefix-first | **219 ms** |
+
+**The index costs nothing measurable.** The 220 ms is the price of having the
+standard library in the session at all, which §16 had already measured before
+any of this existed -- not the price of extensions.
+
+That number is over M3's 200 ms budget, and honestly so: Java completion sits
+at 76 ms and Kotlin without libraries at 59 ms. The cost is library resolution,
+it is the same with or without extensions, and nothing here has tried to reduce
+it.
+
+**Nothing until a character is typed.** Right after `.` the prefix is empty and
+every top-level callable in every default-imported package would qualify --
+hundreds of resolutions for a list nobody can read. Members answer that
+keystroke; extensions arrive with the first letter. A deliberate trade, and
+`CANDIDATE_LIMIT` caps the rest.
+
+**A test premise that was wrong, and the shape of the mistake.** The negative
+test -- "an extension that does not apply must not be offered" -- first used
+`mapNotNull`, on the assumption that it is an `Iterable` extension. It is not:
+`kotlin.text` defines `CharSequence.mapNotNull`, so it *does* apply to a
+`String` and the checker was right to offer it. **`kotlin.text` shadows a great
+deal of `kotlin.collections`**, and anything picked for that test has to be
+checked against the index rather than against intuition. `getOrPut` is the one
+used now -- a `MutableMap` extension with no `kotlin.text` counterpart.
+
+**What the index does not cover.** Only the jars the build indexes, which today
+is kotlin-stdlib. A project's own AARs and any other Kotlin library contribute
+no extensions, and `android.jar` needs none because Java has no top-level
+functions. The index is also version-coupled to the stdlib the compiler
+component ships -- both are pinned to the same Kotlin version, and an index
+naming callables a different stdlib lacks would offer completions that vanish
+when chosen.
+
+## 21. What is still unknown
 
 Honest limits of what has been established. None of this is evidence yet.
 
-- **Extension completion needs a name index over binary libraries**, and the
-  provider that has the right shape is source-only. §16. This is the largest
-  single piece of work between here and a usable `:lsp:kotlin`, and it is the
-  one piece that is not yet plumbing.
+- **The name index covers kotlin-stdlib and nothing else.** §20. A project's
+  AARs and any other Kotlin dependency contribute no extension proposals, and
+  indexing those means running the same scan over jars `:engine:deps` unpacks,
+  at install time rather than build time.
+- **Kotlin completion is ~220 ms against a 200 ms budget** once the standard
+  library is in the session, where Java is 76 ms. The cost is library
+  resolution, not extensions (§20), and no attempt has been made to reduce it.
 - **AARs and cross-module references are still untried.** `android.jar` works
   (§18) and so does kotlin-stdlib; a real dependency graph, with AARs unpacked
   by `:engine:deps`, is wired through `LanguageServices` but has never been
   exercised.
 - **Session build time with `android.jar` is unmeasured.** §13's 1808 ms is a
   trivial module with no libraries. With the platform it is visibly several
-  seconds, and it sits in front of the first completion after opening a file.
+  seconds. It is paid when the file opens -- diagnostics run then, and that is
+  what builds the session -- so it lands before the first answer rather than
+  before the first keystroke. §18 on why that distinction was nearly recorded
+  backwards.
 - **The component exists; the release asset does not.** §17. Everything on this
   side is done -- packaging, checksum, component, installer path, routing -- and
-  the archive has not been uploaded to the release URL it pins. Until it is,
-  Kotlin intelligence is reachable only from the instrumented tests.
+  the archive has not been uploaded to the release URL it pins. Until it is, no
+  device installs this by itself: the instrumented tests stage it, and driving
+  the app meant placing the four jars into `files/toolchains/` as root -- which
+  needs `chown` to the app's uid **and** `chcon` to the parent's *full* label,
+  because `restorecon` restores `app_data_file:s0` without the per-app category
+  set. §7 is the older half of that trap.
 - **Only one file, in one project, has been driven by hand.** §18 is what that
   found. Nothing has opened a second Kotlin file, switched between them, or
   changed projects while a session was warm -- and `LanguageServices` closes and

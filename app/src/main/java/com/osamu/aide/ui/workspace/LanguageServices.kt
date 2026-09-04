@@ -162,6 +162,7 @@ class LanguageServices(
                 stdlibJar = files.stdlibJar,
                 analysisApiJar = files.analysisApiJar,
                 backendJar = files.backendJar,
+                nameIndex = files.nameIndex,
                 workingDir = File(buildOutputRoot.parentFile, "kotlin-lsp"),
             ),
             projectRoot = projectRoot,

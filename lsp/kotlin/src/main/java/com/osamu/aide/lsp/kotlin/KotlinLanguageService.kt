@@ -1,5 +1,6 @@
 package com.osamu.aide.lsp.kotlin
 
+import android.util.Log
 import com.osamu.aide.core.common.DispatcherProvider
 import com.osamu.aide.engine.api.Diagnostic
 import com.osamu.aide.engine.api.DiagnosticSeverity
@@ -74,7 +75,7 @@ class KotlinLanguageService(
     private val backend: Class<*> = load()
 
     private val openMethod: Method =
-        backend.getMethod("open", String::class.java, String::class.java)
+        backend.getMethod("open", String::class.java, String::class.java, String::class.java)
     private val diagnosticsMethod: Method =
         backend.getMethod("diagnostics", String::class.java)
     private val completeMethod: Method =
@@ -97,11 +98,31 @@ class KotlinLanguageService(
     private val lock = Mutex()
     private var opened = false
 
+    /**
+     * Why the session would not open, remembered so it is not retried.
+     *
+     * **A failure here must not reach the editor as an exception.** These
+     * methods are called on every keystroke, from sora's completion thread,
+     * and `LanguageServices` invokes them without a guard -- so a session that
+     * cannot build would throw on every character typed rather than once.
+     * `LanguageService` says nothing is an ordinary answer; this is how that
+     * stays true when the toolchain itself is broken.
+     *
+     * Not retried, because the causes are permanent within a service: a corrupt
+     * archive, or a project the front end will not accept. Rebuilding takes
+     * seconds and would be paid per keystroke to fail the same way. A service
+     * is constructed fresh when the project or classpath changes, which is the
+     * point at which a retry makes sense.
+     */
+    private var openFailure: String? = null
+
     override fun handles(file: File): Boolean =
         file.extension == "kt" || file.extension == "kts"
 
     override suspend fun diagnostics(file: File, text: String): List<Diagnostic> =
-        query { ensureOpen(); records(diagnosticsMethod.invoke(null, text)) }
+        query {
+            if (!ensureOpen()) emptyList() else records(diagnosticsMethod.invoke(null, text))
+        }
             .mapNotNull { fields ->
                 if (fields.size < 4) return@mapNotNull null
                 Diagnostic(
@@ -120,7 +141,13 @@ class KotlinLanguageService(
             }
 
     override suspend fun complete(file: File, text: String, offset: Int): List<CompletionItem> =
-        query { ensureOpen(); records(completeMethod.invoke(null, text, offset)) }
+        query {
+            if (!ensureOpen()) {
+                emptyList()
+            } else {
+                records(completeMethod.invoke(null, text, offset))
+            }
+        }
             .mapNotNull { fields ->
                 if (fields.size < 4) return@mapNotNull null
                 CompletionItem(
@@ -143,14 +170,21 @@ class KotlinLanguageService(
 
     override suspend fun signatureAt(file: File, text: String, offset: Int): String? =
         query {
-            ensureOpen()
-            (signatureMethod.invoke(null, text, offset) as String)
-                .takeIf { it.isNotBlank() && !it.startsWith("ERR ") }
+            if (!ensureOpen()) {
+                null
+            } else {
+                (signatureMethod.invoke(null, text, offset) as String)
+                    .takeIf { it.isNotBlank() && !it.startsWith("ERR ") }
+            }
         }
 
     override fun close() {
         runCatching { closeMethod.invoke(null) }
         opened = false
+    }
+
+    private companion object {
+        const val TAG = "KotlinLanguageService"
     }
 
     /**
@@ -161,21 +195,31 @@ class KotlinLanguageService(
      * those are builtins the front end carries, so its absence looks like
      * success. FINDINGS.md section 16.
      */
-    private fun ensureOpen() {
-        if (opened) return
+    private fun ensureOpen(): Boolean {
+        if (opened) return true
+        openFailure?.let { return false }
         val roots = listOf(File(projectRoot, "src/main/java"), File(projectRoot, "src/main/kotlin"))
             .filter { it.isDirectory }
             .ifEmpty { listOf(projectRoot) }
         val libraries = (listOf(stdlib) + classpath)
             .filter { it.isFile }
             .joinToString(File.pathSeparator) { it.absolutePath }
-        val result = openMethod.invoke(
-            null,
-            roots.joinToString(File.pathSeparator) { it.absolutePath },
-            libraries,
-        ) as String
-        check(result == "OK") { "the Kotlin backend would not open: $result" }
+        val result = runCatching {
+            openMethod.invoke(
+                null,
+                roots.joinToString(File.pathSeparator) { it.absolutePath },
+                libraries,
+                prepared.nameIndex.absolutePath,
+            ) as String
+        }.getOrElse { "ERR ${it.cause?.message ?: it.message}" }
+
+        if (result != "OK") {
+            openFailure = result
+            Log.w(TAG, "the Kotlin session would not open, so Kotlin is silent here: $result")
+            return false
+        }
         opened = true
+        return true
     }
 
     /**

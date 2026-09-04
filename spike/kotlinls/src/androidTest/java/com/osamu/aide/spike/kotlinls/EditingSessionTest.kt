@@ -287,6 +287,68 @@ class EditingSessionTest {
         assertTrue(result.isNotBlank())
     }
 
+    /**
+     * Does a **package scope** enumerate what the importing scope will not?
+     *
+     * §16 of `tools/analysisapi/FINDINGS.md` is a wall: the star-importing
+     * scope answers only for names it already knows, so `kotlin.text`'s
+     * extensions never appear and `String` completes to eight members.
+     * `findPackage` + `packageScope` asks the symbol provider, which reads
+     * jars, instead of an import scope. If that enumerates, the wall has a door.
+     *
+     * A diagnostic, printed to logcat; asserts only that it ran.
+     */
+    @Test
+    fun zz_package_scope_report() {
+        val method = probe.getMethod(
+            "packageScopeReport",
+            String::class.java, String::class.java, String::class.java,
+            Int::class.javaPrimitiveType, String::class.java,
+        )
+        for (pkg in listOf("kotlin.text", "kotlin.collections")) {
+            val result = method.invoke(
+                null, sourceDir.absolutePath, stdlib.absolutePath,
+                STRING_RECEIVER, cursorIn(STRING_RECEIVER), pkg,
+            ) as String
+            Log.i(TAG, "package: $result")
+        }
+        val index = probe.getMethod(
+            "declarationIndexReport",
+            String::class.java, String::class.java, String::class.java,
+        )
+        for (pkg in listOf("kotlin.text", "kotlin.collections", "probe")) {
+            val result = index.invoke(
+                null, sourceDir.absolutePath, stdlib.absolutePath, pkg,
+            ) as String
+            Log.i(TAG, "index: $result")
+        }
+        val facade = probe.getMethod(
+            "facadeReport",
+            String::class.java, String::class.java, String::class.java, String::class.java,
+        )
+        for ((pkg, cls) in listOf("kotlin.text" to "StringsKt", "kotlin.collections" to "CollectionsKt")) {
+            val result = facade.invoke(
+                null, sourceDir.absolutePath, stdlib.absolutePath, pkg, cls,
+            ) as String
+            Log.i(TAG, "facade: $result")
+        }
+        val topLevel = probe.getMethod(
+            "topLevelCallableReport",
+            String::class.java, String::class.java, String::class.java, String::class.java,
+        )
+        for ((pkg, name) in listOf(
+            "kotlin.text" to "uppercase",
+            "kotlin.text" to "isBlank",
+            "kotlin.collections" to "map",
+        )) {
+            val result = topLevel.invoke(
+                null, sourceDir.absolutePath, stdlib.absolutePath, pkg, name,
+            ) as String
+            Log.i(TAG, "topLevel: $result")
+        }
+        assertTrue(true)
+    }
+
     private companion object {
         const val TAG = "EditingSessionTest"
 

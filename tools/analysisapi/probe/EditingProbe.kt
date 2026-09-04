@@ -3,6 +3,7 @@ package com.osamu.aide.analysisapi.probe
 import org.jetbrains.kotlin.analysis.api.analyze
 import org.jetbrains.kotlin.analysis.api.components.KaDiagnosticCheckerFilter
 import org.jetbrains.kotlin.analysis.api.components.KaExtensionApplicabilityResult
+import org.jetbrains.kotlin.analysis.api.projectStructure.KaModule
 import org.jetbrains.kotlin.analysis.api.projectStructure.KaSourceModule
 import org.jetbrains.kotlin.analysis.api.projectStructure.contextModule
 import org.jetbrains.kotlin.analysis.api.standalone.StandaloneAnalysisAPISession
@@ -12,6 +13,10 @@ import org.jetbrains.kotlin.analysis.project.structure.builder.buildKtLibraryMod
 import org.jetbrains.kotlin.analysis.project.structure.builder.buildKtSourceModule
 import org.jetbrains.kotlin.com.intellij.openapi.Disposable
 import org.jetbrains.kotlin.com.intellij.openapi.util.Disposer
+import org.jetbrains.kotlin.analysis.api.platform.declarations.createDeclarationProvider
+import org.jetbrains.kotlin.name.ClassId
+import org.jetbrains.kotlin.name.FqName
+import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.platform.jvm.JvmPlatforms
 import org.jetbrains.kotlin.psi.KtDotQualifiedExpression
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
@@ -48,6 +53,16 @@ object EditingProbe {
     private var residentKey: String? = null
     private var resident: StandaloneAnalysisAPISession? = null
     private var residentDisposable: Disposable? = null
+
+    /**
+     * The library modules, kept because the session will not give them back.
+     *
+     * `modulesWithFiles` maps modules to their PSI files, and a binary library
+     * has none -- so it holds only source modules, and a query about a library
+     * silently asks the wrong thing. This cost one round of "the index returns
+     * nothing" that was really "the index was never asked".
+     */
+    private var residentLibraries: List<KaModule> = emptyList()
 
     /**
      * The completion marker.
@@ -87,6 +102,7 @@ object EditingProbe {
                     }
                 }
                 libraries.forEach { addModule(it) }
+                residentLibraries = libraries
 
                 addModule(
                     buildKtSourceModule {
@@ -287,6 +303,240 @@ object EditingProbe {
         }
     } catch (failure: Throwable) {
         "ERR ${failure::class.java.name}: ${failure.message}"
+    }
+
+    /**
+     * Whether a **package scope** enumerates what an importing scope will not.
+     *
+     * §16 stopped at a wall: `DefaultStarImportingScope` answers only for names
+     * it has already been told about, so extensions from `kotlin.text` never
+     * appear. `KaSymbolProvider.findPackage` plus `getPackageScope` is the
+     * other way in, and it asks the symbol provider -- which reads jars --
+     * rather than an import scope.
+     *
+     * Returns `OK <package> callables=<n> ext=<n> applicable=<n> [sample]`.
+     */
+    @JvmStatic
+    fun packageScopeReport(
+        sourceDir: String,
+        libraryJars: String,
+        text: String,
+        offset: Int,
+        packageName: String,
+    ): String = try {
+        val previous = Thread.currentThread().contextClassLoader
+        Thread.currentThread().contextClassLoader = EditingProbe::class.java.classLoader
+        try {
+            val session = sessionFor(sourceDir, libraryJars)
+            val marked = text.substring(0, offset) + MARKER + text.substring(offset)
+            val file = KtPsiFactory(session.project, false)
+                .createFile("AideBuffer.kt", marked)
+            file.contextModule = session.modulesWithFiles.keys.first { it is KaSourceModule }
+
+            val reference = file.findElementAt(offset)?.parent as? KtNameReferenceExpression
+                ?: return "ERR no reference at the marker"
+            val receiver = (reference.parent as? KtDotQualifiedExpression)?.receiverExpression
+                ?: return "ERR the marker is not a qualified reference"
+
+            analyze(file) {
+                val symbol = findPackage(FqName(packageName))
+                    ?: return@analyze "ERR no package symbol for $packageName"
+                val callables = symbol.packageScope.callables { true }.toList()
+                val extensions = callables.filter { it.isExtension }
+                val checker = createExtensionCandidateChecker(file, reference, receiver)
+                val applicable = extensions.filter {
+                    checker.computeApplicability(it) is
+                        KaExtensionApplicabilityResult.Applicable
+                }
+                val sample = applicable
+                    .mapNotNull { (it as? KaNamedSymbol)?.name?.asString() }
+                    .distinct()
+                    .sorted()
+                    .take(12)
+                "OK $packageName callables=${callables.size} ext=${extensions.size} " +
+                    "applicable=${applicable.size} [${sample.joinToString(" ")}]"
+            }
+        } finally {
+            Thread.currentThread().contextClassLoader = previous
+        }
+    } catch (failure: Throwable) {
+        "ERR ${failure::class.java.name}: ${failure.message}"
+    }
+
+    /**
+     * Does a **declaration provider** know the names in a binary library?
+     *
+     * The scopes are a dead end: neither the star-importing scope (§16) nor a
+     * package scope (`packageScopeReport`) will enumerate. Both answer for
+     * names they are given. So the question is only ever "where do the names
+     * come from", and `KotlinDeclarationProvider.getTopLevelCallableNamesInPackage`
+     * is the method with exactly that shape.
+     *
+     * The doubt is whether it covers **binaries**. It is documented over PSI --
+     * `KtNamedFunction`s in Kotlin source -- and `kotlin.text.uppercase` exists
+     * only as a class file. This asks it, per module, rather than assuming.
+     *
+     * Returns one clause per module: `<module>=<n names>[sample]`.
+     */
+    @JvmStatic
+    fun declarationIndexReport(
+        sourceDir: String,
+        libraryJars: String,
+        packageName: String,
+    ): String = try {
+        val previous = Thread.currentThread().contextClassLoader
+        Thread.currentThread().contextClassLoader = EditingProbe::class.java.classLoader
+        try {
+            val session = sessionFor(sourceDir, libraryJars)
+            val fqName = FqName(packageName)
+            buildString {
+                append("OK ").append(packageName).append(' ')
+                for (module in session.modulesWithFiles.keys + residentLibraries) {
+                    val provider = runCatching {
+                        session.project.createDeclarationProvider(module.contentScope, module)
+                    }.getOrNull()
+                    if (provider == null) {
+                        append(module.javaClass.simpleName).append("=<no provider> ")
+                        continue
+                    }
+                    val names = runCatching {
+                        provider.getTopLevelCallableNamesInPackage(fqName)
+                    }.getOrElse { emptySet() }
+                    append(module.javaClass.simpleName)
+                        .append('=').append(names.size)
+                        .append('[')
+                        .append(names.map { it.asString() }.sorted().take(8).joinToString(" "))
+                        .append("] ")
+                }
+            }
+        } finally {
+            Thread.currentThread().contextClassLoader = previous
+        }
+    } catch (failure: Throwable) {
+        "ERR ${failure::class.java.name}: ${failure.message}"
+    }
+
+    /**
+     * The fourth route: **name the facade class and ask for its members.**
+     *
+     * The three enumeration routes are all closed, and yet types resolve --
+     * which says the symbol provider answers by `ClassId` on demand and simply
+     * cannot list. So stop asking it to list.
+     *
+     * Kotlin's top-level functions compile into per-file *facade* classes:
+     * everything in `kotlin/text/Strings.kt` becomes a static member of
+     * `kotlin.text.StringsKt`. Those are ordinary classes with ordinary
+     * ClassIds, and `findClass` takes a ClassId. If their members come back,
+     * extensions are reachable without any index the API refuses to build --
+     * and the facades themselves are findable by listing `*Kt.class` in the
+     * jars we ship, which is our own file to read.
+     *
+     * Returns `OK <classId> declared=<n> static=<n> ext=<n> [sample]`.
+     */
+    @JvmStatic
+    fun facadeReport(
+        sourceDir: String,
+        libraryJars: String,
+        packageName: String,
+        facade: String,
+    ): String = try {
+        val previous = Thread.currentThread().contextClassLoader
+        Thread.currentThread().contextClassLoader = EditingProbe::class.java.classLoader
+        try {
+            val session = sessionFor(sourceDir, libraryJars)
+            val file = KtPsiFactory(session.project, false)
+                .createFile("AideBuffer.kt", "package probe")
+            file.contextModule = session.modulesWithFiles.keys.first { it is KaSourceModule }
+
+            analyze(file) {
+                val id = ClassId(FqName(packageName), Name.identifier(facade))
+                val symbol = findClass(id)
+                    ?: return@analyze "ERR no class $packageName.$facade"
+                val declared = symbol.declaredMemberScope.callables { true }.toList()
+                val static = symbol.staticDeclaredMemberScope.callables { true }.toList()
+                val extensions = (declared + static).filter { it.isExtension }
+                val sample = extensions
+                    .mapNotNull { (it as? KaNamedSymbol)?.name?.asString() }
+                    .distinct().sorted().take(10)
+                "OK $packageName.$facade declared=${declared.size} static=${static.size} " +
+                    "ext=${extensions.size} [${sample.joinToString(" ")}]"
+            }
+        } finally {
+            Thread.currentThread().contextClassLoader = previous
+        }
+    } catch (failure: Throwable) {
+        "ERR ${failure::class.java.name}: ${failure.message}"
+    }
+
+    /**
+     * **Ask for a top-level callable by name**, which is the one thing that works.
+     *
+     * `findClass` will not find `kotlin.text.StringsKt` even though that class
+     * is plainly in the jar, and it is right not to: a facade is a JVM
+     * implementation detail, and in the Kotlin view `uppercase` is a *top-level
+     * callable of the package `kotlin.text`*, not a member of anything.
+     * `KaSymbolProvider.findTopLevelCallables` is the method shaped for exactly
+     * that, and it takes a name rather than returning a list.
+     *
+     * If this resolves, the extension problem is no longer "can the API reach
+     * these declarations" -- it is only "where does a candidate name come
+     * from", which is a question about our own jars rather than about the API.
+     */
+    @JvmStatic
+    fun topLevelCallableReport(
+        sourceDir: String,
+        libraryJars: String,
+        packageName: String,
+        callable: String,
+    ): String = try {
+        val previous = Thread.currentThread().contextClassLoader
+        Thread.currentThread().contextClassLoader = EditingProbe::class.java.classLoader
+        try {
+            val session = sessionFor(sourceDir, libraryJars)
+            val marked = "package probe" + System.lineSeparator() +
+                "fun q() { val local: String = \"x\"; local." + MARKER + " }"
+            val file = KtPsiFactory(session.project, false)
+                .createFile("AideBuffer.kt", marked)
+            file.contextModule = session.modulesWithFiles.keys.first { it is KaSourceModule }
+            val reference = file.collectMarker()
+                ?: return "ERR the marker did not parse as a reference"
+            val receiver = (reference.parent as? KtDotQualifiedExpression)?.receiverExpression
+                ?: return "ERR the marker is not a qualified reference"
+
+            analyze(file) {
+                val found = findTopLevelCallables(
+                    FqName(packageName), Name.identifier(callable),
+                ).toList()
+                if (found.isEmpty()) return@analyze "OK $packageName.$callable found=0"
+                val checker = createExtensionCandidateChecker(file, reference, receiver)
+                val applicable = found.count {
+                    checker.computeApplicability(it) is
+                        KaExtensionApplicabilityResult.Applicable
+                }
+                "OK $packageName.$callable found=${found.size} " +
+                    "ext=${found.count { it.isExtension }} applicableOnString=$applicable"
+            }
+        } finally {
+            Thread.currentThread().contextClassLoader = previous
+        }
+    } catch (failure: Throwable) {
+        "ERR ${failure::class.java.name}: ${failure.message}"
+    }
+
+    /** The marker reference, found by walking rather than by offset arithmetic. */
+    private fun org.jetbrains.kotlin.psi.KtFile.collectMarker(): KtNameReferenceExpression? {
+        var found: KtNameReferenceExpression? = null
+        accept(object : org.jetbrains.kotlin.psi.KtTreeVisitorVoid() {
+            override fun visitSimpleNameExpression(
+                expression: org.jetbrains.kotlin.psi.KtSimpleNameExpression,
+            ) {
+                if (found == null && expression.getReferencedName() == MARKER) {
+                    found = expression as? KtNameReferenceExpression
+                }
+                super.visitSimpleNameExpression(expression)
+            }
+        })
+        return found
     }
 
     /** Drops the resident session, so a test can measure a cold one again. */

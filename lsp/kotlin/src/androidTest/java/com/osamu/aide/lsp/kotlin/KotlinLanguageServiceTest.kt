@@ -1,5 +1,6 @@
 package com.osamu.aide.lsp.kotlin
 
+import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.osamu.aide.core.common.DispatcherProvider
@@ -37,6 +38,8 @@ class KotlinLanguageServiceTest {
     private lateinit var service: KotlinLanguageService
     private lateinit var projectRoot: File
     private lateinit var source: File
+    private lateinit var archives: KotlinArchives
+    private lateinit var dispatchers: DispatcherProvider
 
     @Before
     fun setUp() {
@@ -57,13 +60,19 @@ class KotlinLanguageServiceTest {
         if (componentZip.isFile) {
             extract(componentZip, "analysis-api.jar", File(unpacked, "analysis-api.jar"))
             extract(componentZip, "analysis-backend.jar", File(unpacked, "analysis-backend.jar"))
+            extract(
+                componentZip,
+                "top-level-callables.index",
+                File(unpacked, "top-level-callables.index"),
+            )
         }
 
-        val archives = KotlinArchives(
+        archives = KotlinArchives(
             compilerJar = File(unpacked, "kotlinc.jar"),
             stdlibJar = File(unpacked, "kotlin-stdlib.jar"),
             analysisApiJar = File(unpacked, "analysis-api.jar"),
             backendJar = File(unpacked, "analysis-backend.jar"),
+            nameIndex = File(unpacked, "top-level-callables.index"),
             workingDir = File(context.filesDir, "kotlin-lsp"),
         )
         // **Not `assumeTrue` on a message alone.** This suite is worthless if
@@ -87,15 +96,16 @@ class KotlinLanguageServiceTest {
             """.trimIndent(),
         )
 
+        dispatchers = object : DispatcherProvider {
+            override val main = Dispatchers.Unconfined
+            override val io = Dispatchers.IO
+            override val default = Dispatchers.Default
+            override val compiler = Dispatchers.Default
+        }
         service = KotlinLanguageService(
             archives = archives,
             projectRoot = projectRoot,
-            dispatchers = object : DispatcherProvider {
-                override val main = Dispatchers.Unconfined
-                override val io = Dispatchers.IO
-                override val default = Dispatchers.Default
-                override val compiler = Dispatchers.Default
-            },
+            dispatchers = dispatchers,
         )
     }
 
@@ -264,6 +274,166 @@ class KotlinLanguageServiceTest {
     }
 
     /**
+     * A declaration from a **sibling file on disk** resolves from the buffer.
+     *
+     * Everything else here could pass with a session that reads only the
+     * buffer. `onDisk()` is declared in `Sample.kt` and appears nowhere in the
+     * text being analysed, so calling it without a diagnostic proves the source
+     * root is actually in the session — and completing it proves the same for
+     * the path a user takes.
+     */
+    @Test
+    fun a_declaration_from_another_file_in_the_project_resolves() = runBlocking {
+        val text = """
+            package sample
+
+            fun caller() {
+                val greeting: String = onDi
+            }
+        """.trimIndent()
+
+        val items = service.complete(source, text, text.indexOf("onDi") + "onDi".length)
+
+        assertTrue(
+            "onDisk() from Sample.kt is missing: ${items.map { it.insert }}",
+            items.any { it.insert == "onDisk" },
+        )
+        val onDisk = items.first { it.insert == "onDisk" }
+        assertEquals("its return type should be resolved", "String", onDisk.detail)
+    }
+
+    /**
+     * Calling it is not an error, which is the other half of the same claim.
+     *
+     * Completion could offer a name the front end would still reject. This
+     * asserts the call itself type-checks against the sibling file's signature.
+     */
+    @Test
+    fun calling_a_sibling_files_function_produces_no_diagnostic() = runBlocking {
+        val text = """
+            package sample
+
+            fun caller() {
+                val greeting: String = onDisk()
+            }
+        """.trimIndent()
+
+        assertEquals(emptyList<Any>(), service.diagnostics(source, text))
+    }
+
+    /**
+     * **Extensions.** `uppercase` is not a member of `String` and must appear.
+     *
+     * This is the one that was a wall. `KaType.scope` gives eight members and
+     * `uppercase` is none of them — it is a top-level callable in
+     * `kotlin.text`, living in a binary jar the Analysis API will resolve by
+     * name and refuses to enumerate. The names come from an index built at
+     * build time; see `tools/analysisapi/FINDINGS.md` section 20.
+     *
+     * Asserted on a receiver whose type is declared only in the buffer, so a
+     * pass still means the front end resolved `String` and then judged
+     * `uppercase` applicable to it — not that a name was matched in a list.
+     */
+    @Test
+    fun completion_offers_extensions_from_the_standard_library() = runBlocking {
+        val text = """
+            package sample
+
+            fun edit() {
+                val local: String = "x"
+                local.upp
+            }
+        """.trimIndent()
+
+        val items = service.complete(source, text, text.indexOf("local.upp") + "local.upp".length)
+
+        assertTrue(
+            "String.uppercase is missing, so extensions are still not reaching completion: " +
+                items.map { it.insert },
+            items.any { it.insert == "uppercase" },
+        )
+        assertEquals(CompletionKind.METHOD, items.first { it.insert == "uppercase" }.kind)
+    }
+
+    /**
+     * An extension that does **not** apply to the receiver stays out.
+     *
+     * The index knows `getOrPut` and the prefix matches, so a service that
+     * offered every indexed name would include it. It is a `MutableMap`
+     * extension, and only the applicability check keeps it out — which is the
+     * difference between completion and a word list.
+     *
+     * `getOrPut` specifically because the obvious choice was wrong.
+     * `mapNotNull` looked like an `Iterable`-only extension and is not:
+     * `kotlin.text` defines it on `CharSequence`, so it applies to a `String`
+     * and the checker was right to offer it. Anything picked for this test has
+     * to be checked against the index rather than against intuition —
+     * `kotlin.text` shadows a great deal of `kotlin.collections`.
+     */
+    @Test
+    fun an_extension_that_does_not_apply_to_the_receiver_is_not_offered() = runBlocking {
+        val text = """
+            package sample
+
+            fun edit() {
+                val local: String = "x"
+                local.getOrPu
+            }
+        """.trimIndent()
+
+        val items =
+            service.complete(source, text, text.indexOf("local.getOrPu") + "local.getOrPu".length)
+
+        assertTrue(
+            "getOrPut is a MutableMap extension and must not be offered on a String: " +
+                items.map { it.insert },
+            items.none { it.insert == "getOrPut" },
+        )
+    }
+
+    /**
+     * What a completion with extensions costs, warm.
+     *
+     * The point of resolving the index by prefix *before* touching a symbol is
+     * that cost tracks the request. The rejected shape — enumerate what is
+     * visible, then ask which applies — measured four times the latency for an
+     * answer that did not change (`tools/analysisapi/FINDINGS.md` section 16),
+     * so this is the number that says the redesign was worth it.
+     *
+     * Only the shape is asserted. A millisecond threshold would fail on other
+     * hardware for a reason nobody could act on; the measurement goes to
+     * logcat and to FINDINGS.
+     */
+    @Test
+    fun a_completion_with_extensions_stays_cheap() = runBlocking {
+        val text = """
+            package sample
+
+            fun edit() {
+                val local: String = "x"
+                local.upp
+            }
+        """.trimIndent()
+        val offset = text.indexOf("local.upp") + "local.upp".length
+
+        val cold = measure { service.complete(source, text, offset) }
+        val warm = (1..4).map { measure { service.complete(source, text, offset) } }.sorted()
+        val median = warm[warm.size / 2]
+        Log.i(TAG, "completion with extensions: cold=${cold}ms warm=${median}ms of $warm")
+
+        assertTrue(
+            "a warm completion (${median}ms) was no cheaper than the first (${cold}ms)",
+            median < cold,
+        )
+    }
+
+    private suspend fun measure(body: suspend () -> Unit): Long {
+        val started = System.nanoTime()
+        body()
+        return (System.nanoTime() - started) / 1_000_000
+    }
+
+    /**
      * A malformed buffer is an ordinary answer, not a crash.
      *
      * `LanguageService` says every method may return nothing and that nothing
@@ -280,5 +450,9 @@ class KotlinLanguageServiceTest {
         service.diagnostics(source, text)
         service.complete(source, text, text.length)
         service.signatureAt(source, text, text.length)
+    }
+
+    private companion object {
+        const val TAG = "KotlinLanguageServiceTest"
     }
 }

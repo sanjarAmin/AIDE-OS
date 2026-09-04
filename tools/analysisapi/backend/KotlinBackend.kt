@@ -19,6 +19,8 @@ import org.jetbrains.kotlin.com.intellij.openapi.Disposable
 import org.jetbrains.kotlin.com.intellij.openapi.util.Disposer
 import org.jetbrains.kotlin.idea.references.mainReference
 import org.jetbrains.kotlin.analysis.api.types.KaType
+import org.jetbrains.kotlin.name.FqName
+import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.platform.jvm.JvmPlatforms
 import org.jetbrains.kotlin.types.Variance
 import org.jetbrains.kotlin.psi.KtDotQualifiedExpression
@@ -68,6 +70,21 @@ object KotlinBackend {
     private var key: String? = null
 
     /**
+     * Package -> top-level callable names, from `top-level-callables.index`.
+     *
+     * **The API can resolve one of these by name and cannot list them.** Three
+     * routes were tried against a binary library and all return nothing: the
+     * star-importing scope, `findPackage().packageScope`, and
+     * `KotlinDeclarationProvider`. Meanwhile
+     * `findTopLevelCallables(FqName, Name)` resolves out of the same jar
+     * perfectly well, and extension applicability filters correctly on the
+     * result. So the gap is names, and only names -- which is a question about
+     * our own jars rather than about the API. `tools/analysisapi/
+     * build-name-index.py` reads them at build time. FINDINGS.md section 20.
+     */
+    private var topLevelNames: Map<String, List<String>> = emptyMap()
+
+    /**
      * Builds the session, or reuses the one already built for these roots.
      *
      * Separate from the queries because it is the expensive call -- ~1.8 s on
@@ -75,8 +92,8 @@ object KotlinBackend {
      * pay it. Returns `OK` or `ERR <message>`.
      */
     @JvmStatic
-    fun open(sourceRoots: String, libraryJars: String): String = guarded {
-        val wanted = "$sourceRoots|$libraryJars"
+    fun open(sourceRoots: String, libraryJars: String, nameIndexPath: String): String = guarded {
+        val wanted = "$sourceRoots|$libraryJars|$nameIndexPath"
         if (session != null && key == wanted) return@guarded "OK"
         close()
 
@@ -114,7 +131,30 @@ object KotlinBackend {
         session = built
         disposable = owner
         key = wanted
+        topLevelNames = readNameIndex(nameIndexPath)
         "OK"
+    }
+
+    /**
+     * `package<TAB>name name name` per line, both sorted, as the build emits.
+     *
+     * A missing or unreadable index is not fatal: it costs extensions and
+     * leaves members working, which is the state this had before the index
+     * existed. Failing the whole session over it would trade a partial feature
+     * for none.
+     */
+    private fun readNameIndex(path: String): Map<String, List<String>> {
+        val file = java.io.File(path)
+        if (path.isBlank() || !file.isFile) return emptyMap()
+        return runCatching {
+            file.readLines().mapNotNull { line ->
+                val tab = line.indexOf('\t')
+                if (tab <= 0) return@mapNotNull null
+                line.substring(0, tab) to line.substring(tab + 1).split(' ').filter {
+                    it.isNotBlank()
+                }
+            }.toMap()
+        }.getOrDefault(emptyMap())
     }
 
     /**
@@ -168,14 +208,19 @@ object KotlinBackend {
                 // What it cannot do is find candidates the scope will not
                 // enumerate; FINDINGS.md section 16 is that wall.
                 val checker = createExtensionCandidateChecker(file, reference, receiver)
-                val extensions = file.scopeContext(reference).scopes.asSequence()
+
+                // What the scopes will yield: locals, the file's own
+                // declarations, and explicitly imported names. Cheap, and the
+                // only source for anything the index does not cover.
+                val inScope = file.scopeContext(reference).scopes.asSequence()
                     .flatMap { it.scope.callables { true } }
                     .filter { it.isExtension }
+
+                members + (inScope + indexedExtensions(file, prefix))
                     .filter {
                         checker.computeApplicability(it) is
                             KaExtensionApplicabilityResult.Applicable
                     }
-                members + extensions
             } else {
                 file.scopeContext(reference).scopes.asSequence()
                     .flatMap { it.scope.declarations }
@@ -209,6 +254,75 @@ object KotlinBackend {
                 .toList()
         }
     }
+
+    /**
+     * Extension candidates from the name index, narrowed by [prefix] first.
+     *
+     * **Prefix first, and that ordering is the whole design.** The obvious
+     * shape -- enumerate what is visible, then ask which applies -- costs in
+     * proportion to what the scopes happen to yield, which has nothing to do
+     * with what was typed: measured at four times the latency for an answer
+     * that did not change. Here the index is filtered by the typed prefix
+     * before a single symbol is resolved, so the cost tracks the request.
+     *
+     * **Nothing until a character is typed.** Right after `.` the prefix is
+     * empty and every top-level callable in every default-imported package
+     * would qualify -- hundreds of resolutions and applicability checks for a
+     * list nobody can read anyway. Members alone answer that keystroke, and
+     * extensions arrive with the first letter. That is a deliberate trade of
+     * completeness for the 200 ms budget, not an oversight.
+     */
+    private fun KaSession.indexedExtensions(
+        file: KtFile,
+        prefix: String,
+    ): Sequence<org.jetbrains.kotlin.analysis.api.symbols.KaCallableSymbol> {
+        if (prefix.isEmpty() || topLevelNames.isEmpty()) return emptySequence()
+
+        // Only packages whose names are actually visible here: Kotlin's
+        // default imports, plus whatever the file star-imports. A candidate
+        // from an unimported package would resolve and then be uncallable.
+        val visible = DEFAULT_IMPORTS + file.importDirectives
+            .filter { it.isAllUnder }
+            .mapNotNull { it.importedFqName?.asString() }
+
+        return visible.asSequence()
+            .flatMap { packageName ->
+                topLevelNames[packageName].orEmpty().asSequence()
+                    .filter { it.startsWith(prefix) }
+                    .map { packageName to it }
+            }
+            .take(CANDIDATE_LIMIT)
+            .flatMap { (packageName, name) ->
+                findTopLevelCallables(FqName(packageName), Name.identifier(name))
+            }
+            .filter { it.isExtension }
+    }
+
+    /**
+     * Kotlin's default imports, which are what is visible with no import at all.
+     *
+     * `kotlin.jvm` is in the list because this is the JVM platform; on another
+     * it would not be. Nothing here is derived from the session, which is a
+     * simplification worth knowing about if a target other than JVM ever
+     * arrives.
+     */
+    private val DEFAULT_IMPORTS = listOf(
+        "kotlin",
+        "kotlin.annotation",
+        "kotlin.collections",
+        "kotlin.comparisons",
+        "kotlin.io",
+        "kotlin.jvm",
+        "kotlin.ranges",
+        "kotlin.sequences",
+        "kotlin.text",
+    )
+
+    /**
+     * A ceiling on resolutions per request, so a one-letter prefix cannot stall
+     * a keystroke. Reached only for the commonest first letters.
+     */
+    private const val CANDIDATE_LIMIT = 120
 
     /**
      * A type as a person reads it, not as the compiler spells it.
