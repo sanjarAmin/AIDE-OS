@@ -555,10 +555,10 @@ Two things to know before writing `:lsp:kotlin` against this:
   `EditingSessionTest.extensions_are_still_missing_from_completion` pins the gap
   and is written to fail when it closes.
 
-## 16. ~~Extensions need an index~~ — solved by §20, kept for the diagnosis
+## 16. ~~Extensions need an index~~ — solved by §19, kept for the diagnosis
 
-Superseded by §20, which builds the index this section says is needed. Kept
-because the diagnosis is why §20 looks the way it does, and because the cost
+Superseded by §19, which builds the index this section says is needed. Kept
+because the diagnosis is why §19 looks the way it does, and because the cost
 measurement below is the reason it resolves by prefix first.
 
 §15 pinned extensions as the largest gap between the probe and a usable
@@ -605,7 +605,7 @@ real implementation has to go the other way -- take the prefix the user has
 typed, get candidate **names** from an index, and only then resolve and check
 those. That is what IntelliJ's stub index is for.
 
-**What was ruled out**, and §20 confirmed each on a device:
+**What was ruled out**, and §19 confirmed each on a device:
 `KotlinDeclarationProvider` has exactly the right method,
 `getTopLevelCallableNamesInPackage`, and it is obtainable
 (`project.createDeclarationProvider(scope, module)`). It is PSI-oriented: it
@@ -742,7 +742,7 @@ the front end is doing real work: `setActionBar(Toolbar?)` carries the `?`, and
 `setContentView(View!)` carries the `!`. Nullable, platform, and neither guessed
 from the source text.
 
-## 20. Extensions work: the API resolves by name, so we supply the names
+## 19. Extensions work: the API resolves by name, so we supply the names
 
 `String` completes to `uppercase`. §16's wall came down, and not by finding a
 better enumeration API -- there is not one -- but by noticing that enumeration
@@ -824,17 +824,17 @@ component ships -- both are pinned to the same Kotlin version, and an index
 naming callables a different stdlib lacks would offer completions that vanish
 when chosen.
 
-## 21. What is still unknown
+## 20. What is still unknown
 
 Honest limits of what has been established. None of this is evidence yet.
 
-- **The name index covers kotlin-stdlib and nothing else.** §20. A project's
+- **The name index covers kotlin-stdlib and nothing else.** §19. A project's
   AARs and any other Kotlin dependency contribute no extension proposals, and
   indexing those means running the same scan over jars `:engine:deps` unpacks,
   at install time rather than build time.
 - **Kotlin completion is ~220 ms against a 200 ms budget** once the standard
   library is in the session, where Java is 76 ms. The cost is library
-  resolution, not extensions (§20), and no attempt has been made to reduce it.
+  resolution, not extensions (§19), and no attempt has been made to reduce it.
 - **AARs and cross-module references are still untried.** `android.jar` works
   (§18) and so does kotlin-stdlib; a real dependency graph, with AARs unpacked
   by `:engine:deps`, is wired through `LanguageServices` but has never been

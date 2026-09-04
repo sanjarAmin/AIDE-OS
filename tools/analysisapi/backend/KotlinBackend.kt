@@ -80,7 +80,7 @@ object KotlinBackend {
      * perfectly well, and extension applicability filters correctly on the
      * result. So the gap is names, and only names -- which is a question about
      * our own jars rather than about the API. `tools/analysisapi/
-     * build-name-index.py` reads them at build time. FINDINGS.md section 20.
+     * build-name-index.py` reads them at build time. FINDINGS.md section 19.
      */
     private var topLevelNames: Map<String, List<String>> = emptyMap()
 

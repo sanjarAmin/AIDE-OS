@@ -328,7 +328,7 @@ class KotlinLanguageServiceTest {
      * `uppercase` is none of them — it is a top-level callable in
      * `kotlin.text`, living in a binary jar the Analysis API will resolve by
      * name and refuses to enumerate. The names come from an index built at
-     * build time; see `tools/analysisapi/FINDINGS.md` section 20.
+     * build time; see `tools/analysisapi/FINDINGS.md` section 19.
      *
      * Asserted on a receiver whose type is declared only in the buffer, so a
      * pass still means the front end resolved `String` and then judged

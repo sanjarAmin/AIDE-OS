@@ -177,7 +177,7 @@ data class ToolchainComponent(
                     "analysis-backend.jar" to "analysis-backend.jar",
                     // Not a jar: the top-level callable names completion needs,
                     // because the Analysis API resolves them by name and will
-                    // not enumerate them. tools/analysisapi/FINDINGS.md §20.
+                    // not enumerate them. tools/analysisapi/FINDINGS.md §19.
                     "top-level-callables.index" to "top-level-callables.index",
                 ),
             ),

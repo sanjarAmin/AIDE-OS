@@ -47,7 +47,7 @@ cp "$BACKEND" "$work/analysis-backend.jar"
 # **The name index, because the API will not build one.** Completion can
 # resolve a top-level callable by name and cannot list them; the names come
 # from the standard library jar, read here. See build-name-index.py and
-# FINDINGS.md section 20.
+# FINDINGS.md section 19.
 #
 # Built from the *compiler component's* stdlib, which is the one the session
 # resolves against at runtime. The two components are pinned to the same

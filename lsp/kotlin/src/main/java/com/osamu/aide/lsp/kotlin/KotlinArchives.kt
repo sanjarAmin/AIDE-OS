@@ -38,7 +38,7 @@ data class KotlinArchives(
      * Not a jar and not on any classloader -- a text file the backend reads.
      * Completion can resolve a top-level callable by name and cannot enumerate
      * them, so without this there are no extension proposals at all.
-     * `tools/analysisapi/FINDINGS.md` section 20.
+     * `tools/analysisapi/FINDINGS.md` section 19.
      */
     val nameIndex: File,
     /** App-private storage for the read-only copies [prepare] makes. */
