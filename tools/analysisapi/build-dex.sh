@@ -5,8 +5,10 @@
 # Simpler than ../kotlinc/build-kotlinc-dex.py, and the difference is the
 # interesting part: that one rewrites java.lang.management and replaces four
 # classes outright, because the *compiler* reaches for JDK APIs Android does not
-# have. The Analysis API reaches for almost none -- no java.lang.management, no
-# AWT, three classes touching javax.swing -- so nothing here needs a shim.
+# have. The Analysis API reaches for far fewer, but not none: three shims, for
+# Caffeine's StripedBuffer, javax.management and javax.swing.SwingUtilities.
+# FINDINGS.md section 12 explains each, and why the last two are honest stubs
+# while the first is patched upstream source.
 #
 # What it does need is the relocation, which must have run first: see
 # relocate.sh and FINDINGS.md §4.
@@ -39,7 +41,70 @@ ANDROID_JAR="$(ls "$SDK"/platforms/*/android.jar 2>/dev/null | sort | tail -1)"
 [ -n "$D8" ] && [ -n "$ANDROID_JAR" ] || { echo "no d8 or android.jar under $SDK" >&2; exit 1; }
 
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
-mkdir -p "$work/dex"
+mkdir -p "$work/dex" "$work/shim"
+
+# **The shim, and why Caffeine needs one.**
+#
+# Caffeine's StripedBuffer reads Thread.threadLocalRandomProbe through Unsafe;
+# Android's Thread does not declare that field, so its static initialiser throws
+# and takes every Caffeine cache with it. FINDINGS.md section 11 has the detail,
+# including why Caffeine 3.x is not an escape (it needs System.getLogger, which
+# Android also lacks).
+#
+# The replacement carries the same fully-qualified name, so the original has to
+# be dropped from the jar on the way past -- d8 rejects a duplicate type, and it
+# rejects it several minutes into the build.
+echo "compiling the shim..."
+# --release 11, not the JDK's default: this JDK is 25 and emits class file 69,
+# which d8 rejects -- several minutes in, as "Unsupported class file major
+# version 69" with no mention of javac. 11 matches what the rest of the archive
+# is built at.
+#
+# --patch-module for the same reason ../kotlinc/build-shim.sh needs it:
+# javax.management belongs to the java.management system module, and javac
+# refuses to compile into a package a module already owns ("package exists in
+# another module"). This says the extension is deliberate.
+JAVAC="${JAVA_HOME:-/opt/android-studio/jbr}/bin/javac"
+
+# One javac per patched module: each javax package belongs to a different
+# system module, and a single invocation cannot claim two of them at once.
+for patch in "java.management:javax/management" "java.desktop:javax/swing"; do
+  module="${patch%%:*}"; dir="${patch##*:}"
+  [ -d "$HERE/shim/$dir" ] || continue
+  "$JAVAC" -nowarn -proc:none --release 11 -Xlint:-options \
+    --patch-module "$module=$HERE/shim" \
+    -d "$work/shim" \
+    $(find "$HERE/shim/$dir" -name '*.java')
+done
+
+"$JAVAC" -nowarn -proc:none --release 11 -Xlint:-options \
+  -cp "$JARS/caffeine.jar" -d "$work/shim" \
+  $(find "$HERE/shim/com" -name '*.java')
+
+shimmed="$work/caffeine-shimmed.jar"
+python3 - "$JARS/caffeine.jar" "$shimmed" "$work/shim" <<'TRIM'
+import sys, zipfile, pathlib
+source, target, shim = sys.argv[1], sys.argv[2], pathlib.Path(sys.argv[3])
+replaced = {
+    str(p.relative_to(shim)).replace("\\", "/")
+    for p in shim.rglob("*.class")
+}
+# Nested and synthetic classes of a replaced type go too: the shim supplies its
+# own, and a stale StripedBuffer$1 would reference the original's shape.
+roots = {name.split("$")[0].removesuffix(".class") for name in replaced}
+dropped = 0
+with zipfile.ZipFile(source) as src, zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as out:
+    for entry in src.infolist():
+        stem = entry.filename.split("$")[0].removesuffix(".class")
+        if entry.filename.endswith(".class") and stem in roots:
+            dropped += 1
+            continue
+        out.writestr(entry, src.read(entry.filename))
+if dropped == 0:
+    print("the shim replaced nothing -- is it still needed?", file=sys.stderr)
+    sys.exit(1)
+print(f"  dropped {dropped} original classes for {len(roots)} shimmed types")
+TRIM
 
 # The compiler jars are --classpath, not input: they are already dexed in the
 # kotlinc archive, and dexing them again would put two copies of the platform on
@@ -53,7 +118,8 @@ echo "dexing (min-api $MIN_API)..."
   --lib "$ANDROID_JAR" \
   "${classpath[@]}" \
   --output "$work/dex" \
-  "$RELOCATED"/*.jar "$JARS/caffeine.jar" "$JARS/kotlinx-serialization-core.jar"
+  "$RELOCATED"/*.jar "$shimmed" "$JARS/kotlinx-serialization-core.jar" \
+  $(find "$work/shim" -name '*.class')
 
 stage="$work/stage"; mkdir -p "$stage"
 cp "$work"/dex/*.dex "$stage"/
