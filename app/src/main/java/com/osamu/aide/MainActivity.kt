@@ -41,7 +41,10 @@ class MainActivity : ComponentActivity() {
 
     private fun handleOAuthRedirect(intent: Intent?) {
         val uri = intent?.data ?: return
-        if (uri.scheme == "com.osamu.aide" && uri.host == "oauth2callback") {
+        // Scheme only: Google's redirect is `scheme:/oauth2redirect`, which
+        // has no authority, so `uri.host` is null and matching on it drops
+        // every callback silently.
+        if (uri.scheme == GoogleAuthManager.DEFAULT_REDIRECT_URI.substringBefore(':')) {
             lifecycleScope.launch {
                 val authManager = GoogleAuthManager(keys)
                 val result = authManager.handleRedirectUri(uri)

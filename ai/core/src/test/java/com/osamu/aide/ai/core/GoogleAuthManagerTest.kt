@@ -67,7 +67,10 @@ class GoogleAuthManagerTest {
      */
     @Test
     fun the_placeholder_client_id_is_refused_before_it_reaches_google() {
-        val manager = GoogleAuthManager(keyStore = null)
+        val manager = GoogleAuthManager(
+            keyStore = null,
+            clientId = GoogleAuthManager.PLACEHOLDER_CLIENT_ID,
+        )
 
         val failure = runCatching { manager.createAuthorizationRequest() }.exceptionOrNull()
 
@@ -75,5 +78,25 @@ class GoogleAuthManagerTest {
         val message = failure!!.message.orEmpty()
         assertTrue("the message must say a client needs registering: $message", "Register" in message)
         assertTrue("and that a pasted API key is unaffected: $message", "API key" in message)
+    }
+
+    /**
+     * The redirect must be the reverse of the client id, or Google refuses it.
+     *
+     * An Android OAuth client accepts exactly one custom scheme: its own id,
+     * reversed. Nothing in the build checks that the two agree, and they are
+     * edited in different places — the client id here, the scheme in
+     * `AndroidManifest.xml` — so changing one and not the others fails at run
+     * time as a browser that never comes back, with no error anywhere.
+     */
+    @Test
+    fun the_redirect_is_the_reverse_of_the_client_id() {
+        val suffix = GoogleAuthManager.DEFAULT_CLIENT_ID
+            .removeSuffix(".apps.googleusercontent.com")
+
+        assertEquals(
+            "com.googleusercontent.apps.$suffix:/oauth2redirect",
+            GoogleAuthManager.DEFAULT_REDIRECT_URI,
+        )
     }
 }

@@ -468,15 +468,32 @@ one that matters most:
   `ScriptedProviderApi`, which proves the JSON matches *our reading of the spec*
   and nothing about whether the provider accepts it. One test modelled on
   `GeminiOnDeviceTest`, skipping without a key, is the cheapest way to close it.
-- **Google Sign-In needs a registered OAuth client, and nothing else.** The
+- **Google Sign-In: registered, and Google accepts the request.** The
   flow is wired end to end -- PKCE, the `com.osamu.aide://oauth2callback`
   intent filter in the manifest, the settings entry point and the
-  `MainActivity` callback. `DEFAULT_CLIENT_ID` is a placeholder, and
-  `createAuthorizationRequest` now **refuses it** rather than sending it:
-  Google answers an unregistered client with "Access blocked: authorisation
-  error" and no mention of a client id, which reads like broken sign-in code
-  and sends the next person to debug PKCE. Registering the client is a console
-  task; the redirect to register is the one already in the manifest.
+  `MainActivity` callback, and an Android OAuth client is registered for
+  `com.osamu.aide` against the **debug** signing certificate. Hitting the
+  authorize endpoint now redirects to Google's sign-in page rather than an
+  error, which is as far as this can be verified without a human typing a
+  password. A release build signed with a different key needs its own client
+  id and will fail with this one.
+
+  **Two things had to change, and neither was guessable.** An Android client
+  accepts exactly one redirect -- the reverse of its own client id,
+  `com.googleusercontent.apps.<suffix>:/oauth2redirect`, single slash. The
+  `com.osamu.aide://oauth2callback` this code shipped with was registrable
+  nowhere. And the redirect has **no authority**, so `MainActivity` matching on
+  `uri.host` dropped every callback silently; it matches on scheme now.
+
+  **Custom URI schemes are off by default on new Android clients.** With
+  everything else correct, Google answered `invalid_request` / "Custom URI
+  scheme is not enabled for your Android client" -- base64-encoded inside the
+  `authError` parameter of a 302, so from inside the app it is a browser page
+  that fails with nothing to read. It is a toggle on the client in the console.
+  **Check an OAuth client with one request to the authorize endpoint** before
+  driving any UI: a `location:` header pointing at `signin/identifier` means
+  accepted, and one pointing at `signin/oauth/error` carries the reason once
+  the `authError` blob is decoded.
 
   **It will not spend a Gemini subscription.** The token carries the
   `generative-language` scope and calls `generativelanguage.googleapis.com`,

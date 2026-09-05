@@ -43,9 +43,9 @@ class GoogleAuthManager(
         // authorisation error", no mention of a client id -- which reads like
         // the sign-in code is broken. It is not; nobody has registered a client
         // for this package yet. Failing here names the actual cause.
-        check(clientId != DEFAULT_CLIENT_ID) {
+        check(clientId != PLACEHOLDER_CLIENT_ID) {
             "Google Sign-In needs an OAuth client registered for this package. " +
-                "$DEFAULT_CLIENT_ID is a placeholder, not a real client id -- a real " +
+                "$PLACEHOLDER_CLIENT_ID is a placeholder, not a real client id -- a real " +
                 "one ends in .apps.googleusercontent.com with a generated suffix. " +
                 "Register one whose redirect is $DEFAULT_REDIRECT_URI (already declared " +
                 "in the manifest) and pass it as GoogleAuthManager(clientId = ...). " +
@@ -178,17 +178,37 @@ class GoogleAuthManager(
         const val TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 
         /**
-         * Not a real client id, and deliberately still here.
+         * The OAuth client registered for `com.osamu.aide`.
          *
-         * Registering one is a console task nobody has done for this package,
-         * so the honest default is a value that **cannot** work and says so --
-         * see the check in [createAuthorizationRequest]. Replacing it with an
-         * empty string would make the failure a null-ish error somewhere lower
-         * down; leaving a plausible-looking string would let it reach Google
-         * and come back as an unexplained "Access blocked".
+         * Bound to the **debug** signing certificate's SHA-1, which is what an
+         * Android client type means: Google checks the calling package and its
+         * signature rather than a client secret, so this can sit in source
+         * safely -- and so a release build signed with a different key needs
+         * its own client id and will fail with this one.
          */
-        const val DEFAULT_CLIENT_ID = "1041121096058-aide-os.apps.googleusercontent.com"
-        const val DEFAULT_REDIRECT_URI = "com.osamu.aide://oauth2callback"
+        const val DEFAULT_CLIENT_ID =
+            "787312694223-4bhh6bk282u07553nc3iq1m7fuok6anh.apps.googleusercontent.com"
+
+        /**
+         * The value that was here before a client was registered.
+         *
+         * Kept so [createAuthorizationRequest] can still recognise it. Google
+         * answers an unregistered client with "Access blocked: authorisation
+         * error" and no mention of a client id, which reads like broken
+         * sign-in code -- the check turns that into a sentence naming the
+         * cause.
+         */
+        const val PLACEHOLDER_CLIENT_ID = "1041121096058-aide-os.apps.googleusercontent.com"
+
+        /**
+         * **Not a scheme of our choosing.** An Android OAuth client only
+         * accepts the reverse of its own client id; `com.osamu.aide://...`
+         * was registrable nowhere and was the redirect this code shipped with
+         * before a client existed. The single slash after the colon is
+         * Google's form, not a typo.
+         */
+        const val DEFAULT_REDIRECT_URI =
+            "com.googleusercontent.apps.787312694223-4bhh6bk282u07553nc3iq1m7fuok6anh:/oauth2redirect"
 
         const val SCOPES = "openid email profile https://www.googleapis.com/auth/generative-language"
 

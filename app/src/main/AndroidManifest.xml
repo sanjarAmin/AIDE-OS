@@ -48,9 +48,14 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data
-                    android:scheme="com.osamu.aide"
-                    android:host="oauth2callback" />
+                <!--
+                    Google's reverse-client-id scheme, not one we chose: an
+                    Android OAuth client accepts only this form. Matched on
+                    scheme alone because the redirect has no authority
+                    (`scheme:/oauth2redirect`), and an intent filter cannot
+                    match a path without a host.
+                -->
+                <data android:scheme="com.googleusercontent.apps.787312694223-4bhh6bk282u07553nc3iq1m7fuok6anh" />
             </intent-filter>
         </activity>
 
