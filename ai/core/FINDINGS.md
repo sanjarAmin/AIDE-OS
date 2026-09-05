@@ -468,10 +468,25 @@ one that matters most:
   `ScriptedProviderApi`, which proves the JSON matches *our reading of the spec*
   and nothing about whether the provider accepts it. One test modelled on
   `GeminiOnDeviceTest`, skipping without a key, is the cheapest way to close it.
-- **Google Sign-In cannot complete.** `GoogleAuthManager.DEFAULT_CLIENT_ID` is a
-  placeholder and not the shape of a real Google client ID. The PKCE mechanics
-  are implemented and unit-tested, but the flow is dead until a real OAuth
-  client is registered for this package. Gemini by pasted API key is unaffected,
+- **Google Sign-In needs a registered OAuth client, and nothing else.** The
+  flow is wired end to end -- PKCE, the `com.osamu.aide://oauth2callback`
+  intent filter in the manifest, the settings entry point and the
+  `MainActivity` callback. `DEFAULT_CLIENT_ID` is a placeholder, and
+  `createAuthorizationRequest` now **refuses it** rather than sending it:
+  Google answers an unregistered client with "Access blocked: authorisation
+  error" and no mention of a client id, which reads like broken sign-in code
+  and sends the next person to debug PKCE. Registering the client is a console
+  task; the redirect to register is the one already in the manifest.
+
+  **It will not spend a Gemini subscription.** The token carries the
+  `generative-language` scope and calls `generativelanguage.googleapis.com`,
+  which bills to a Cloud project -- the same billing that answered
+  `429 prepayment credits are depleted` for a pasted key. Gemini in Android
+  Studio is a first-party product on Google's own entitlement path, not this
+  API. **Not verified**, because it cannot be until a client id exists; the
+  experiment is one `generateContent` call from a signed-in subscriber account
+  with no project credit, and it is worth running because being wrong about it
+  would change what the feature is for. Gemini by pasted API key is unaffected,
   which is why this is easy to miss.
 - **Prompt caching has no analogue on the generic path**, so §5 simply does not
   apply there. Whether these providers offer anything equivalent, and what it

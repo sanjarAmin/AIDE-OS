@@ -55,4 +55,25 @@ class GoogleAuthManagerTest {
         assertEquals("developer@example.com", profile.email)
         assertEquals("Android Dev", profile.name)
     }
+
+    /**
+     * The placeholder client id is refused, and the refusal explains itself.
+     *
+     * Sending it reaches Google and comes back as "Access blocked:
+     * authorisation error" with no mention of a client id -- which reads like
+     * the sign-in code is broken when the real state is that nobody has
+     * registered an OAuth client for this package. The message has to name that,
+     * because the person who hits it will otherwise debug PKCE.
+     */
+    @Test
+    fun the_placeholder_client_id_is_refused_before_it_reaches_google() {
+        val manager = GoogleAuthManager(keyStore = null)
+
+        val failure = runCatching { manager.createAuthorizationRequest() }.exceptionOrNull()
+
+        assertNotNull("the placeholder client id was sent to Google", failure)
+        val message = failure!!.message.orEmpty()
+        assertTrue("the message must say a client needs registering: $message", "Register" in message)
+        assertTrue("and that a pasted API key is unaffected: $message", "API key" in message)
+    }
 }

@@ -38,6 +38,20 @@ class GoogleAuthManager(
      * Prepares the Google OAuth 2.0 PKCE authorization URL to open in a browser or Custom Tab.
      */
     fun createAuthorizationRequest(): AuthState {
+        // **Refuse the placeholder rather than send it.** Google answers an
+        // unregistered client id with its own error page -- "Access blocked:
+        // authorisation error", no mention of a client id -- which reads like
+        // the sign-in code is broken. It is not; nobody has registered a client
+        // for this package yet. Failing here names the actual cause.
+        check(clientId != DEFAULT_CLIENT_ID) {
+            "Google Sign-In needs an OAuth client registered for this package. " +
+                "$DEFAULT_CLIENT_ID is a placeholder, not a real client id -- a real " +
+                "one ends in .apps.googleusercontent.com with a generated suffix. " +
+                "Register one whose redirect is $DEFAULT_REDIRECT_URI (already declared " +
+                "in the manifest) and pass it as GoogleAuthManager(clientId = ...). " +
+                "Gemini by pasted API key does not need this."
+        }
+
         val verifier = generateCodeVerifier()
         val challenge = generateCodeChallenge(verifier)
         lastVerifier = verifier
@@ -163,6 +177,16 @@ class GoogleAuthManager(
         const val AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
         const val TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 
+        /**
+         * Not a real client id, and deliberately still here.
+         *
+         * Registering one is a console task nobody has done for this package,
+         * so the honest default is a value that **cannot** work and says so --
+         * see the check in [createAuthorizationRequest]. Replacing it with an
+         * empty string would make the failure a null-ish error somewhere lower
+         * down; leaving a plausible-looking string would let it reach Google
+         * and come back as an unexplained "Access blocked".
+         */
         const val DEFAULT_CLIENT_ID = "1041121096058-aide-os.apps.googleusercontent.com"
         const val DEFAULT_REDIRECT_URI = "com.osamu.aide://oauth2callback"
 
