@@ -32,6 +32,20 @@ class GoogleAuthManager(
     data class UserProfile(
         val email: String?,
         val name: String?,
+        /**
+         * What Google actually granted, which is not what was asked for.
+         *
+         * A scope the consent screen does not carry is dropped rather than
+         * refused: the sign-in succeeds and the first API call fails with
+         * `ACCESS_TOKEN_SCOPE_INSUFFICIENT`, naming the method and not the
+         * missing scope. This is the only place the truth is available.
+         *
+         * Carried on the profile rather than logged because **the device this
+         * was diagnosed on emits no logcat at all** -- some OEM ROMs suppress
+         * it -- so a log line is not a diagnostic you can rely on reaching
+         * anyone. It goes on screen.
+         */
+        val grantedScopes: String? = null,
     )
 
     /**
@@ -116,17 +130,27 @@ class GoogleAuthManager(
             }
 
             val json = JSONObject(responseBody)
+
+            // **Granted is not requested.** Google returns the scopes it
+            // actually issued, and it can be a subset of the ones asked for --
+            // a scope the consent screen does not carry is dropped rather than
+            // refused, so the flow succeeds and the first API call fails with
+            // ACCESS_TOKEN_SCOPE_INSUFFICIENT and no clue which scope is
+            // missing. This is the only place the answer exists.
+            val grantedScopes = json.optString("scope").takeIf { it.isNotBlank() }
+
             val accessToken = json.getString("access_token")
             val refreshToken = json.optString("refresh_token").takeIf { it.isNotBlank() }
             val idToken = json.optString("id_token").takeIf { it.isNotBlank() }
 
-            val profile = parseUserProfile(idToken)
+            val profile = parseUserProfile(idToken).copy(grantedScopes = grantedScopes)
 
             keyStore?.saveGoogleOAuth(
                 accessToken = accessToken,
                 refreshToken = refreshToken,
                 email = profile.email,
                 name = profile.name,
+                grantedScopes = grantedScopes,
             )
 
             profile
@@ -210,7 +234,25 @@ class GoogleAuthManager(
         const val DEFAULT_REDIRECT_URI =
             "com.googleusercontent.apps.787312694223-4bhh6bk282u07553nc3iq1m7fuok6anh:/oauth2redirect"
 
-        const val SCOPES = "openid email profile https://www.googleapis.com/auth/generative-language"
+        /**
+         * **`cloud-platform`, not `generative-language`.**
+         *
+         * The obvious scope for this API does not exist. Requesting
+         * `.../auth/generative-language` gets as far as the account chooser and
+         * then fails with `Error 400: invalid_scope` -- "Some requested scopes
+         * cannot be shown" -- and the API's own discovery document
+         * (`generativelanguage.googleapis.com/$discovery/rest`) declares no
+         * such scope: the only OAuth scope it lists is
+         * `devstorage.read_only`. `cloud-platform` is the scope Google Cloud
+         * APIs are reached with.
+         *
+         * **A scope error cannot be caught before a user signs in.** The
+         * authorize endpoint accepts every one of these -- valid or not -- and
+         * redirects to the sign-in page; the scope is only evaluated after an
+         * account is chosen. So a `curl` against the authorize endpoint proves
+         * the client id and redirect are right and says nothing about scopes.
+         */
+        const val SCOPES = "openid email profile https://www.googleapis.com/auth/cloud-platform"
 
         @Volatile
         var lastVerifier: String? = null

@@ -50,10 +50,18 @@ class MainActivity : ComponentActivity() {
                 val result = authManager.handleRedirectUri(uri)
                 result.fold(
                     onSuccess = { profile ->
+                        // The granted scopes are on screen because this device
+                        // emits no logcat -- see UserProfile.grantedScopes. The
+                        // short names only: the full URLs do not fit a toast
+                        // and the suffix is the part that differs.
+                        val scopes = profile.grantedScopes
+                            ?.split(' ')
+                            ?.joinToString(", ") { it.substringAfterLast('/') }
+                            ?: "none reported"
                         Toast.makeText(
                             this@MainActivity,
-                            "Signed in to Gemini as ${profile.email ?: "Google Account"}",
-                            Toast.LENGTH_SHORT,
+                            "Signed in as ${profile.email ?: "Google Account"} — granted: $scopes",
+                            Toast.LENGTH_LONG,
                         ).show()
                     },
                     onFailure = { err ->

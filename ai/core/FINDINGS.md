@@ -434,6 +434,64 @@ check against the catalogue would have passed.
 `gemini-2.5-pro` is dropped from the picker. `gemini-3.1-pro-preview`, which the
 error message recommends, was already there.
 
+## 16. Google Sign-In cannot authorise a Gemini call, and no scope will fix it
+
+The sign-in flow works. On a real device: authorize, consent, redirect back
+through `com.googleusercontent.apps.<suffix>:/oauth2redirect`, PKCE token
+exchange, profile parsed, account shown in settings. That part is done.
+
+**What it cannot do is authorise `generateContent`.** Signed in, every request
+returns:
+
+```
+403 PERMISSION_DENIED  ACCESS_TOKEN_SCOPE_INSUFFICIENT
+method: google.ai.generativelanguage.v1beta.GenerativeService.GenerateContent
+```
+
+Three pieces of evidence, in the order they were found, because the first two
+were wrong turns:
+
+1. `https://www.googleapis.com/auth/generative-language` -- the scope this code
+   shipped with -- fails at the account chooser with `400 invalid_scope`,
+   "Some requested scopes cannot be shown".
+2. `https://www.googleapis.com/auth/cloud-platform` **is granted** -- the token
+   response says so, and the app now shows it in settings -- and the call still
+   fails identically. So the scope is not missing; it is not sufficient either.
+3. The API's own discovery document settles it:
+   `generativelanguage.models.generateContent` declares **`scopes: NONE`**, and
+   the only OAuth scope the whole API declares is `devstorage.read_only`.
+
+**There is no scope to find.** `generateContent` on
+`generativelanguage.googleapis.com` authenticates with an API key. OAuth user
+credentials reach the endpoint -- an unauthenticated probe answers
+`401 UNAUTHENTICATED: Expected OAuth 2 access token, login cookie or other
+valid authentication credential`, which is what made the first two attempts look
+reasonable -- but no scope authorises this method.
+
+The Gemini in Android Studio comparison does not hold: that is a first-party
+Google product on Google's own entitlement path, not this public API.
+
+**What is actually available**, none of it free:
+
+- **Keep sign-in for identity only** and keep calling with a pasted API key.
+  `docs/PLAN.md`'s locked decision is already "bring-your-own API key"; sign-in
+  then shows who you are and nothing more, which is close to worthless.
+- **Move the OAuth path to Vertex AI** (`aiplatform.googleapis.com`), which does
+  accept `cloud-platform` tokens. Different endpoint, different request shape, a
+  GCP project and region per user, and `cloud-platform` is a **sensitive scope**
+  -- shipping it needs Google's app verification, since in testing it is capped
+  at 100 named testers.
+- **Drop sign-in.** The feature was worth building on the assumption it removed
+  the key-pasting step. It does not.
+
+**The method that settled this is the one to reuse.** Two scope guesses were
+made from documentation and both were wrong; what ended it was reading the
+API's discovery document for the method's declared scopes, and showing the
+*granted* scopes in the UI so "requested" and "granted" could be told apart.
+A token response's `scope` field is the only place that difference is visible,
+and a dropped scope is otherwise invisible until a request fails naming the
+method and not the scope.
+
 ## Still open — needs a real API key
 
 Two questions are semantics rather than platform, and a local fake must not be

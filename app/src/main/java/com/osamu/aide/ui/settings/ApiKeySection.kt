@@ -62,6 +62,7 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
 
     var isGoogleSignedIn by remember { mutableStateOf(keys.isGoogleSignedIn()) }
     var googleEmail by remember { mutableStateOf(keys.googleUserEmail()) }
+    var googleScopes by remember { mutableStateOf(keys.googleGrantedScopes()) }
 
     var saved by remember { mutableStateOf(keys.hasKey()) }
     var draft by remember { mutableStateOf("") }
@@ -140,14 +141,36 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.primary,
                         )
-                        Text(
-                            text = if (isGoogleSignedIn) {
-                                "Signed in: ${googleEmail ?: "Google Account"}"
-                            } else {
-                                "Google Account (Android Studio style)"
-                            },
-                            style = MaterialTheme.typography.titleSmall,
-                        )
+                        Column {
+                            Text(
+                                text = if (isGoogleSignedIn) {
+                                    "Signed in: ${googleEmail ?: "Google Account"}"
+                                } else {
+                                    "Google Account (Android Studio style)"
+                                },
+                                style = MaterialTheme.typography.titleSmall,
+                            )
+                            // **The scopes Google granted, not the ones asked
+                            // for.** A dropped scope is invisible until the
+                            // first request fails with
+                            // ACCESS_TOKEN_SCOPE_INSUFFICIENT, which names the
+                            // method and not the scope -- and a toast was
+                            // truncated on the device this was diagnosed on,
+                            // which emits no logcat either. It lives here
+                            // because here it can be read.
+                            if (isGoogleSignedIn) {
+                                Text(
+                                    text = "Granted: " + (
+                                        googleScopes
+                                            ?.split(' ')
+                                            ?.joinToString(", ") { it.substringAfterLast('/') }
+                                            ?: "not reported"
+                                        ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
                     }
 
                     if (isGoogleSignedIn) {
@@ -156,6 +179,7 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                                 keys.signOutGoogle()
                                 isGoogleSignedIn = false
                                 googleEmail = null
+                                googleScopes = null
                                 saved = keys.hasKey()
                             },
                         ) {

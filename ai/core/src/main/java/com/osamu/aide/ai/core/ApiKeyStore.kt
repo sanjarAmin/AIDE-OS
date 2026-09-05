@@ -147,11 +147,15 @@ class ApiKeyStore(context: Context) {
     fun googleUserName(): String? =
         preferences.getString(KEY_GOOGLE_USER_NAME, null)
 
+    fun googleGrantedScopes(): String? =
+        preferences.getString(KEY_GOOGLE_GRANTED_SCOPES, null)
+
     fun saveGoogleOAuth(
         accessToken: String,
         refreshToken: String? = null,
         email: String? = null,
         name: String? = null,
+        grantedScopes: String? = null,
     ) {
         encryptAndStore(KEY_GOOGLE_ACCESS_TOKEN_CIPHER, KEY_GOOGLE_ACCESS_TOKEN_IV, accessToken)
         if (refreshToken != null) {
@@ -160,6 +164,7 @@ class ApiKeyStore(context: Context) {
         val editor = preferences.edit()
         if (email != null) editor.putString(KEY_GOOGLE_USER_EMAIL, email)
         if (name != null) editor.putString(KEY_GOOGLE_USER_NAME, name)
+        if (grantedScopes != null) editor.putString(KEY_GOOGLE_GRANTED_SCOPES, grantedScopes)
         editor.commit()
     }
 
@@ -171,6 +176,7 @@ class ApiKeyStore(context: Context) {
             .remove(KEY_GOOGLE_REFRESH_TOKEN_IV)
             .remove(KEY_GOOGLE_USER_EMAIL)
             .remove(KEY_GOOGLE_USER_NAME)
+            .remove(KEY_GOOGLE_GRANTED_SCOPES)
             .commit()
     }
 
@@ -231,6 +237,7 @@ class ApiKeyStore(context: Context) {
             .remove(KEY_GOOGLE_REFRESH_TOKEN_IV)
             .remove(KEY_GOOGLE_USER_EMAIL)
             .remove(KEY_GOOGLE_USER_NAME)
+            .remove(KEY_GOOGLE_GRANTED_SCOPES)
             .commit()
         runCatching { keyStore().deleteEntry(ALIAS) }
     }
@@ -309,6 +316,16 @@ class ApiKeyStore(context: Context) {
         const val KEY_GOOGLE_REFRESH_TOKEN_IV = "google.oauth.refresh.iv"
         const val KEY_GOOGLE_USER_EMAIL = "google.user.email"
         const val KEY_GOOGLE_USER_NAME = "google.user.name"
+
+        /**
+         * The scopes Google granted, which can be a subset of those requested.
+         *
+         * Stored, not logged: a dropped scope surfaces later as
+         * `ACCESS_TOKEN_SCOPE_INSUFFICIENT` naming the method and not the
+         * scope, and the device this was first diagnosed on emits no logcat at
+         * all. Somewhere a person can read it is the only place that works.
+         */
+        const val KEY_GOOGLE_GRANTED_SCOPES = "google.granted.scopes"
 
         // OpenAI
         const val KEY_OPENAI_KEY_CIPHER = "openai.apiKey.ciphertext"
