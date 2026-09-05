@@ -408,6 +408,32 @@ date, and it is cheap to look up and expensive to guess.
 
 ---
 
+## 15. A model in `models.list` is not a model you can call
+
+`AiProviderType.GEMINI.availableModels` offered `gemini-2.5-pro`. The models
+endpoint lists it, with `generateContent` among its
+`supportedGenerationMethods` -- and calling it returns:
+
+```
+404  This model models/gemini-2.5-pro is no longer available to new users.
+     Please update your code to use models/gemini-3.1-pro-preview
+```
+
+So the catalogue and the capability disagree, and the catalogue is the
+optimistic one. **Checking a model id against `models.list` proves nothing**;
+that check was run here first, reported all five ids present, and was wrong
+about one of them. Only a request settles it, which is what
+`GeminiOnDeviceTest.every_offered_model_answers` does -- one tiny call per model
+in the picker, because the cost of a dead entry is a user selecting it and
+getting an error that names the model as missing rather than retired.
+
+This is §14's failure -- a model id that rots with nothing to catch it -- with
+one addition: the id had not been renamed or removed, so even an id-existence
+check against the catalogue would have passed.
+
+`gemini-2.5-pro` is dropped from the picker. `gemini-3.1-pro-preview`, which the
+error message recommends, was already there.
+
 ## Still open — needs a real API key
 
 Two questions are semantics rather than platform, and a local fake must not be
@@ -428,12 +454,20 @@ allowed to look like it settled them. They remain skipped tests in
 question above now exists once per provider, and it is least answered for the
 one that matters most:
 
-- **No request has ever reached Google or OpenAI.** Every test of those clients
-  runs against `ScriptedProviderApi`, which proves the JSON matches *our reading
-  of the spec* and nothing about whether the provider accepts it. **Gemini is
-  the default**, so this is unverified on the path every new user takes. There
-  is no `:spike:ai` equivalent of `AnthropicOnDeviceTest` for either; one
-  modelled on it, skipping without a key, is the cheapest way to close this.
+- **Gemini: the test exists, the account does not pay for it.**
+  `GeminiOnDeviceTest` (in `:ai:core`, not `:spike:ai` -- that spike is about
+  whether a vendor SDK survives ART and does not depend on our code) drives
+  `GeminiAiClient` against the live API and skips without a `geminiApiKey`
+  argument. It has already earned its place by catching §15. The four
+  assertions themselves are **still unproven**: with a valid key but no billing
+  credit, `generateContent` returns
+  `429 Your prepayment credits are depleted`, so whether Google accepts the
+  request shape our client builds is *still* an open question. A key is not
+  enough; the project behind it needs credit.
+- **No request has ever reached OpenAI.** Every test of that client runs against
+  `ScriptedProviderApi`, which proves the JSON matches *our reading of the spec*
+  and nothing about whether the provider accepts it. One test modelled on
+  `GeminiOnDeviceTest`, skipping without a key, is the cheapest way to close it.
 - **Google Sign-In cannot complete.** `GoogleAuthManager.DEFAULT_CLIENT_ID` is a
   placeholder and not the shape of a real Google client ID. The PKCE mechanics
   are implemented and unit-tested, but the flow is dead until a real OAuth
