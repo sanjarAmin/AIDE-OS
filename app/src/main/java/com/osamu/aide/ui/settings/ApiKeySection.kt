@@ -185,7 +185,7 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                         ) {
                             Text("Sign out")
                         }
-                    } else {
+                    } else if (GoogleAuthManager.SIGN_IN_ENABLED) {
                         Button(
                             onClick = {
                                 val authManager = GoogleAuthManager(keys)
@@ -197,6 +197,11 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                             Text("Sign in with Google")
                         }
                     }
+                    // No else: signing in succeeds and then every Gemini
+                    // request fails, because generateContent accepts no OAuth
+                    // scope. Offering a button that works and then does not is
+                    // worse than offering none. Sign *out* stays available
+                    // above, so anyone already signed in can clear it.
                 }
             }
         }

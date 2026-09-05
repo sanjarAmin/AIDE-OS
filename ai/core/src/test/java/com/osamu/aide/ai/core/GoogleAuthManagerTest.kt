@@ -1,6 +1,7 @@
 package com.osamu.aide.ai.core
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -97,6 +98,24 @@ class GoogleAuthManagerTest {
         assertEquals(
             "com.googleusercontent.apps.$suffix:/oauth2redirect",
             GoogleAuthManager.DEFAULT_REDIRECT_URI,
+        )
+    }
+
+    /**
+     * Sign-in stays off until `generateContent` can be authorised by a token.
+     *
+     * The flow works; it is the API that will not take it. Flipping
+     * [GoogleAuthManager.SIGN_IN_ENABLED] on its own restores a button that
+     * signs in successfully and then fails every request with
+     * `ACCESS_TOKEN_SCOPE_INSUFFICIENT` — worse than no button. This test is
+     * here so that turning it on means reading `FINDINGS.md` section 16 first.
+     */
+    @Test
+    fun sign_in_is_disabled_until_an_endpoint_accepts_the_token() {
+        assertFalse(
+            "re-enabling this needs an endpoint that accepts OAuth for " +
+                "generateContent — see ai/core/FINDINGS.md section 16",
+            GoogleAuthManager.SIGN_IN_ENABLED,
         )
     }
 }

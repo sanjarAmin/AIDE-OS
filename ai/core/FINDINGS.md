@@ -484,6 +484,19 @@ Google product on Google's own entitlement path, not this public API.
 - **Drop sign-in.** The feature was worth building on the assumption it removed
   the key-pasting step. It does not.
 
+**Dropped, and the code kept.** `GoogleAuthManager.SIGN_IN_ENABLED` is `false`
+and the settings button is gone; sign *out* stays, so anyone already signed in
+can clear it. Nothing else was deleted, because nothing else is wrong -- and if
+a Vertex AI path ever arrives this is its front half unchanged. Re-deriving a
+working PKCE flow, a registered Android client, the reversed-client-id redirect
+and the custom-URI-scheme toggle would cost far more than a flag. A test pins
+the flag to this section so flipping it means reading first: on its own it
+restores a button that signs in and then fails every request.
+
+**So every provider the app supports is bring-your-own API key** -- Gemini,
+Anthropic, OpenAI and anything OpenAI-compatible. `docs/PLAN.md`'s locked
+decision turns out to be the only shape on offer rather than a preference.
+
 **The method that settled this is the one to reuse.** Two scope guesses were
 made from documentation and both were wrong; what ended it was reading the
 API's discovery document for the method's declared scopes, and showing the

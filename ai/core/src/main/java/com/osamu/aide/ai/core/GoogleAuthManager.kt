@@ -198,6 +198,29 @@ class GoogleAuthManager(
     }
 
     companion object {
+        /**
+         * Whether to offer Google Sign-In in the UI. **It is off, and the code
+         * below is deliberately kept.**
+         *
+         * The flow works -- PKCE, consent, redirect, token exchange, all
+         * verified on a real device. What it cannot do is authorise a Gemini
+         * call: `generateContent` declares no OAuth scopes at all, so no scope
+         * grants it and the API takes a key instead. `FINDINGS.md` section 16
+         * is the evidence.
+         *
+         * Kept rather than deleted because nothing here is wrong. If the Gemini
+         * client ever gains a Vertex AI path (`aiplatform.googleapis.com`
+         * *does* accept `cloud-platform` tokens), this becomes the front half
+         * of it unchanged -- and re-deriving a working PKCE flow, a registered
+         * client, the reversed-client-id redirect and the custom-URI-scheme
+         * toggle would cost far more than a flag.
+         *
+         * Flipping this back on is not sufficient by itself: it would offer a
+         * sign-in that succeeds and then fails on the first request, which is
+         * worse than not offering it.
+         */
+        const val SIGN_IN_ENABLED = false
+
         const val AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
         const val TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 
