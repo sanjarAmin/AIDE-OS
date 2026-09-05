@@ -505,6 +505,57 @@ A token response's `scope` field is the only place that difference is visible,
 and a dropped scope is otherwise invisible until a request fails naming the
 method and not the scope.
 
+## 17. Every provider's key was written to Anthropic's slot
+
+`ApiKeyStore` keeps one encrypted preference per provider, plus a *legacy* pair
+(`apiKey.ciphertext` / `apiKey.iv`) that predates providers and is still what
+`save()` and `read()` use for Anthropic. The settings screen called `save()`
+**and** the provider's own setter on every save:
+
+```kotlin
+keys.save(trimmed)                                   // the legacy slot
+when (activeProvider) { GEMINI -> keys.saveGeminiApiKey(trimmed); ... }
+```
+
+So saving a Gemini key also wrote it into Anthropic's store. Two consequences,
+neither of which announces itself:
+
+- `hasAnthropic()` reads the legacy slot, so **Anthropic reported a key it had
+  never been given** -- and any UI marking configured providers marks it too.
+- Switching to Anthropic then sends a *Gemini* key to `api.anthropic.com`, which
+  fails as an authentication error naming neither the key nor where it came
+  from.
+
+Only Anthropic writes the legacy slot now, and
+`ApiKeySectionTest.a_key_saved_for_one_provider_does_not_appear_under_another`
+pins it.
+
+**Removing one key may not use `clear()`.** `clear()` ends with
+`keyStore().deleteEntry(ALIAS)`, and that alias is shared by all four providers:
+deleting it turns every ciphertext that was meant to survive into undecryptable
+bytes. `clearProviderKey(provider)` removes only that provider's preferences and
+leaves the alias alone. The alias may only be deleted by the call that is
+removing every key in the same breath.
+
+## 18. A Compose test composing more than one screenful loses its own nodes
+
+`ApiKeySectionTest` composed the section bare -- `setContent { ApiKeySection(keys) }`
+-- and every test passed until one added a saved key. That adds a status row,
+which pushes the endpoint field past the bottom of the display, and the failure
+is:
+
+```
+Failed to perform text input.
+Reason: Expected exactly '1' node but could not find any node that satisfies:
+(ContentDescription = 'API endpoint')
+```
+
+which reads as *the field does not exist* rather than *nothing could scroll to
+it*. The section is hosted in a `LazyColumn` in `SettingsScreen`, so the harness
+now wraps it in a `verticalScroll` and reaches nodes with `performScrollTo()`.
+**A test that composes a section in a container the app never uses is testing a
+layout that does not ship**, and this is how that difference surfaces.
+
 ## Still open — needs a real API key
 
 Two questions are semantics rather than platform, and a local fake must not be
@@ -535,6 +586,14 @@ one that matters most:
   `429 Your prepayment credits are depleted`, so whether Google accepts the
   request shape our client builds is *still* an open question. A key is not
   enough; the project behind it needs credit.
+
+  Those four tests now **skip** on `429 RESOURCE_EXHAUSTED` rather than fail. A
+  depleted account answers every request that way whatever was asked, so the
+  failures said nothing about the code -- and `every_offered_model_answers`
+  reported the entire picker dead, which is a false accusation against a model
+  list that had been answering an hour earlier. Anything else, a 400 on our
+  JSON or a 404 on a retired id, stays a failure: those are the questions the
+  suite exists to ask.
 - **No request has ever reached OpenAI.** Every test of that client runs against
   `ScriptedProviderApi`, which proves the JSON matches *our reading of the spec*
   and nothing about whether the provider accepts it. One test modelled on

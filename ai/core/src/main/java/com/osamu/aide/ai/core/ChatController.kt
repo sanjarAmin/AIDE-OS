@@ -39,6 +39,15 @@ data class ChatUiState(
     val error: String? = null,
     /** True when there is no API key or sign-in for the active provider. */
     val needsKey: Boolean = false,
+    /**
+     * The providers that already hold a key.
+     *
+     * The picker offers four and the user cannot see which of them will work,
+     * so switching to an unconfigured one used to look like it succeeded and
+     * failed on the next message instead. Holding the whole set lets the menu
+     * say so before the switch.
+     */
+    val providersWithKeys: Set<AiProviderType> = emptySet(),
     val activeProvider: AiProviderType = AiProviderType.GEMINI,
     val activeModel: String = AiProviderType.DEFAULT.defaultModel,
     val isGoogleSignedIn: Boolean = false,
@@ -64,6 +73,8 @@ class ChatController(
         return ChatUiState(
             activeProvider = provider,
             activeModel = model,
+            needsKey = keys != null && !keys.hasProviderKey(provider),
+            providersWithKeys = configuredProviders(),
             isGoogleSignedIn = keys?.isGoogleSignedIn() == true,
             userEmail = keys?.googleUserEmail(),
             shareProjectContext = keys?.shareProjectContext() ?: true,
@@ -122,6 +133,15 @@ class ChatController(
         }
     }
 
+    /**
+     * Without a store there is nothing to ask, and claiming every provider is
+     * unconfigured would put a key prompt in front of a test harness that has
+     * no keys by design.
+     */
+    private fun configuredProviders(): Set<AiProviderType> =
+        keys?.let { store -> AiProviderType.entries.filter(store::hasProviderKey).toSet() }
+            ?: AiProviderType.entries.toSet()
+
     fun switchProvider(provider: AiProviderType) {
         keys?.setActiveProvider(provider)
         session = null
@@ -130,6 +150,11 @@ class ChatController(
             it.copy(
                 activeProvider = provider,
                 activeModel = model,
+                // Recomputed on the switch, not left to the next send to
+                // discover: the prompt belongs to the moment the provider was
+                // chosen, which is when the user can still change their mind.
+                needsKey = keys != null && !keys.hasProviderKey(provider),
+                providersWithKeys = configuredProviders(),
                 isGoogleSignedIn = keys?.isGoogleSignedIn() == true,
                 userEmail = keys?.googleUserEmail(),
             )

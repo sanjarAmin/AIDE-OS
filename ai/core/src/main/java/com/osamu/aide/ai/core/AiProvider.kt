@@ -63,7 +63,10 @@ enum class AiProviderType(
     ),
     CUSTOM(
         id = "custom",
-        displayName = "Custom / Compatible",
+        // One word. "Custom / Compatible" is four times the width of the
+        // longest other name, and in a row of chips on a phone it wrapped
+        // character by character into a column six lines tall.
+        displayName = "Custom",
         defaultModel = "default",
         availableModels = listOf(
             "default",

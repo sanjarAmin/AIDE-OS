@@ -41,6 +41,9 @@ class ChatControllerTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         keys = ApiKeyStore(context)
         keys.clear()
+        // clear() spares the active provider, which is shared state one test
+        // can hand to the next.
+        keys.setActiveProvider(AiProviderType.ANTHROPIC)
         root = File(context.cacheDir, "chat-${System.nanoTime()}").apply { mkdirs() }
         File(root, "src/Main.kt").apply { parentFile?.mkdirs() }.writeText("fun main() = Unit")
     }
@@ -75,6 +78,63 @@ class ChatControllerTest {
             clientFactory = { _, _ -> ScriptedApi(responses).also { api = it }.client() },
         )
         return ChatController(assistant, root, this)
+    }
+
+    /**
+     * The same controller, but able to see the key store.
+     *
+     * The tests above deliberately pass no store: without one the controller
+     * cannot know which providers are configured, and answering "none of them"
+     * would put a key prompt in front of every one of them. These two need the
+     * opposite -- a controller that can read what is actually saved.
+     */
+    private fun TestScope.controllerWithKeys(): ChatController {
+        val onScheduler = StandardTestDispatcher(testScheduler)
+        val assistant = Assistant(
+            keys = keys,
+            dispatchers = object : DispatcherProvider {
+                override val main: CoroutineDispatcher get() = onScheduler
+                override val default: CoroutineDispatcher get() = onScheduler
+                override val io: CoroutineDispatcher get() = onScheduler
+                override val compiler: CoroutineDispatcher get() = onScheduler
+            },
+            clientFactory = { _, _ -> ScriptedApi(emptyList()).also { api = it }.client() },
+        )
+        return ChatController(assistant, root, this, keys = keys)
+    }
+
+    /**
+     * Switching to a provider with no key says so at the switch.
+     *
+     * `needsKey` was only ever set by a send that failed, so choosing an
+     * unconfigured provider looked like it worked and the message typed after
+     * it was the thing that broke -- three taps later, and apparently
+     * unrelated to the choice that caused it.
+     */
+    @Test
+    fun switching_to_a_provider_without_a_key_asks_for_one_immediately() = runTest {
+        keys.save("sk-ant-test")
+        val controller = controllerWithKeys()
+        assertFalse("Anthropic has a key", controller.state.value.needsKey)
+
+        controller.switchProvider(AiProviderType.OPENAI)
+
+        assertTrue("OpenAI has no key", controller.state.value.needsKey)
+        assertEquals(AiProviderType.OPENAI, controller.state.value.activeProvider)
+    }
+
+    /** The header marks the providers that can answer, so it has to be told. */
+    @Test
+    fun the_state_reports_which_providers_hold_a_key() = runTest {
+        keys.save("sk-ant-test")
+        keys.saveGeminiApiKey("AIzaTest")
+
+        val configured = controllerWithKeys().state.value.providersWithKeys
+
+        assertEquals(
+            setOf(AiProviderType.ANTHROPIC, AiProviderType.GEMINI),
+            configured,
+        )
     }
 
     @Test

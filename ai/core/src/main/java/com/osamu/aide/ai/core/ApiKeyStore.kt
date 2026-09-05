@@ -216,7 +216,76 @@ class ApiKeyStore(context: Context) {
         editor.commit()
     }
 
+    // -- The endpoint the active provider is actually built with ------------
+
+    /**
+     * Where a provider's requests go, read from the preference that provider
+     * actually uses.
+     *
+     * There are three endpoint preferences and they are not interchangeable:
+     * [Assistant] builds Anthropic with [baseUrl], OpenAI with [openAiBaseUrl]
+     * and Custom with [customBaseUrl]. The settings screen wrote [baseUrl] for
+     * all of them, so the endpoint field was **inert for three providers out of
+     * four** -- including Custom, whose only reason to exist is pointing at an
+     * address of your own. It looked saved, and every request still went to the
+     * default host.
+     *
+     * Gemini has no endpoint preference at all: [GeminiAiClient] takes no base
+     * URL, so there is nothing to return and nothing to write.
+     */
+    fun providerBaseUrl(provider: AiProviderType): String? = when (provider) {
+        AiProviderType.ANTHROPIC -> baseUrl()
+        AiProviderType.OPENAI -> openAiBaseUrl()
+        AiProviderType.CUSTOM -> customBaseUrl()
+        AiProviderType.GEMINI -> null
+    }
+
+    fun saveProviderBaseUrl(provider: AiProviderType, endpoint: Endpoint) {
+        if (endpoint is Endpoint.Rejected) return
+        val url = (endpoint as? Endpoint.Custom)?.baseUrl
+        when (provider) {
+            AiProviderType.ANTHROPIC -> saveBaseUrl(endpoint)
+            AiProviderType.OPENAI -> saveOpenAiBaseUrl(url)
+            AiProviderType.CUSTOM -> saveCustomBaseUrl(url)
+            AiProviderType.GEMINI -> Unit
+        }
+    }
+
     // -- Clear / Removal ----------------------------------------------------
+
+    /**
+     * Forgets one provider's key, leaving the other three alone.
+     *
+     * The Keystore alias is deliberately **not** deleted: it is shared by every
+     * provider, and deleting it turns the keys that were meant to survive into
+     * undecryptable ciphertext. Only [clear], which removes them all in the same
+     * breath, may take the alias with it.
+     *
+     * Gemini's Google tokens are not touched either -- signing out is its own
+     * action, and it is the only one that should end a session.
+     */
+    fun clearProviderKey(provider: AiProviderType) {
+        val editor = preferences.edit()
+        when (provider) {
+            AiProviderType.GEMINI -> editor
+                .remove(KEY_GEMINI_KEY_CIPHER)
+                .remove(KEY_GEMINI_IV)
+            AiProviderType.OPENAI -> editor
+                .remove(KEY_OPENAI_KEY_CIPHER)
+                .remove(KEY_OPENAI_IV)
+            // Anthropic answers to two slots: the legacy pair predates providers
+            // and is still what save()/read() use for it.
+            AiProviderType.ANTHROPIC -> editor
+                .remove(KEY_CIPHERTEXT)
+                .remove(KEY_IV)
+                .remove(KEY_ANTHROPIC_KEY_CIPHER)
+                .remove(KEY_ANTHROPIC_IV)
+            AiProviderType.CUSTOM -> editor
+                .remove(KEY_CUSTOM_KEY_CIPHER)
+                .remove(KEY_CUSTOM_IV)
+        }
+        editor.commit()
+    }
 
     /** Forgets all keys. Preserves base URLs as per specification. */
     fun clear() {

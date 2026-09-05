@@ -1,5 +1,9 @@
 package com.osamu.aide.ui.settings
 
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -7,8 +11,10 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextClearance
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.test.platform.app.InstrumentationRegistry
+import com.osamu.aide.ai.core.AiProviderType
 import com.osamu.aide.ai.core.ApiKeyStore
 import com.osamu.aide.ai.core.Endpoint
 import org.junit.After
@@ -44,18 +50,44 @@ class ApiKeySectionTest {
     @After
     fun tearDown() = reset()
 
-    /** clear() spares the endpoint on purpose, so it has to be reset by hand. */
+    /**
+     * clear() spares the endpoint on purpose, so it has to be reset by hand --
+     * and it spares the active provider too, which is shared state one test can
+     * hand to the next. These tests exercise the legacy Anthropic slot, so they
+     * say so rather than inheriting whatever ran last.
+     */
     private fun reset() {
         keys.clear()
         keys.saveBaseUrl(Endpoint.Default)
+        keys.setActiveProvider(AiProviderType.ANTHROPIC)
+    }
+
+    /**
+     * The section as the screen actually hosts it: inside something that
+     * scrolls.
+     *
+     * Composed bare, the section is taller than the display as soon as a saved
+     * key adds its Remove row, and everything past that point is clipped out of
+     * reach -- a test failure that says the endpoint field does not exist when
+     * what it means is that nothing could scroll to it. SettingsScreen puts this
+     * in a LazyColumn, so the harness gives it the same.
+     */
+    private fun showSection() = compose.setContent {
+        Column(Modifier.verticalScroll(rememberScrollState())) { ApiKeySection(keys) }
+    }
+
+    /** The endpoint is behind a disclosure unless one is already stored. */
+    private fun revealEndpoint() {
+        compose.onNodeWithText("Advanced").performScrollTo().performClick()
+        compose.waitForIdle()
     }
 
     @Test
     fun a_typed_key_is_saved_to_the_keystore() {
-        compose.setContent { ApiKeySection(keys) }
+        showSection()
 
         compose.onNodeWithContentDescription("API key").performTextInput("sk-ant-typed")
-        compose.onNodeWithText("Save").performClick()
+        compose.onNodeWithText("Save key").performScrollTo().performClick()
         compose.waitForIdle()
 
         assertTrue(keys.hasKey())
@@ -71,10 +103,10 @@ class ApiKeySectionTest {
      */
     @Test
     fun surrounding_whitespace_is_trimmed() {
-        compose.setContent { ApiKeySection(keys) }
+        showSection()
 
         compose.onNodeWithContentDescription("API key").performTextInput("  sk-ant-padded\n")
-        compose.onNodeWithText("Save").performClick()
+        compose.onNodeWithText("Save key").performScrollTo().performClick()
         compose.waitForIdle()
 
         assertEquals("sk-ant-padded", keys.read())
@@ -82,9 +114,9 @@ class ApiKeySectionTest {
 
     @Test
     fun saving_is_refused_until_something_is_typed() {
-        compose.setContent { ApiKeySection(keys) }
+        showSection()
 
-        compose.onNodeWithText("Save").assertIsNotEnabled()
+        compose.onNodeWithText("Save key").performScrollTo().assertIsNotEnabled()
         assertFalse(keys.hasKey())
     }
 
@@ -92,21 +124,47 @@ class ApiKeySectionTest {
     @Test
     fun an_existing_key_is_reported_without_being_shown() {
         keys.save("sk-ant-secret")
-        compose.setContent { ApiKeySection(keys) }
+        showSection()
 
-        compose.onNodeWithText("A key is saved.").assertExists()
+        compose.onNodeWithText("Anthropic key saved").assertExists()
         compose.onNodeWithText("sk-ant-secret").assertDoesNotExist()
+    }
+
+    /**
+     * A key goes to the provider that is selected, and to no other.
+     *
+     * Every save used to write the legacy slot as well as the provider's own,
+     * and the legacy slot is Anthropic's -- so saving a Gemini key made
+     * Anthropic report a key it had never been given, and the assistant would
+     * then send a Gemini key to Anthropic's API.
+     */
+    @Test
+    fun a_key_saved_for_one_provider_does_not_appear_under_another() {
+        keys.setActiveProvider(AiProviderType.GEMINI)
+        showSection()
+
+        compose.onNodeWithContentDescription("API key").performTextInput("AIzaTyped")
+        compose.onNodeWithText("Save key").performScrollTo().performClick()
+        compose.waitForIdle()
+
+        assertEquals("AIzaTyped", keys.geminiApiKey())
+        assertFalse(
+            "the Gemini key was also written to Anthropic's store",
+            keys.hasProviderKey(AiProviderType.ANTHROPIC),
+        )
     }
 
     // -- the endpoint -------------------------------------------------------
 
     @Test
     fun a_typed_endpoint_is_saved() {
-        compose.setContent { ApiKeySection(keys) }
+        showSection()
+        revealEndpoint()
 
         compose.onNodeWithContentDescription("API endpoint")
+            .performScrollTo()
             .performTextInput("https://gateway.internal")
-        compose.onNodeWithText("Save").performClick()
+        compose.onNodeWithText("Save endpoint").performScrollTo().performClick()
         compose.waitForIdle()
 
         assertEquals("https://gateway.internal", keys.baseUrl())
@@ -122,11 +180,13 @@ class ApiKeySectionTest {
     @Test
     fun the_endpoint_can_be_saved_while_the_key_field_is_empty() {
         keys.save("sk-ant-existing")
-        compose.setContent { ApiKeySection(keys) }
+        showSection()
+        revealEndpoint()
 
         compose.onNodeWithContentDescription("API endpoint")
+            .performScrollTo()
             .performTextInput("https://gateway.internal")
-        compose.onNodeWithText("Save").assertIsEnabled().performClick()
+        compose.onNodeWithText("Save endpoint").performScrollTo().assertIsEnabled().performClick()
         compose.waitForIdle()
 
         assertEquals("https://gateway.internal", keys.baseUrl())
@@ -142,69 +202,137 @@ class ApiKeySectionTest {
      */
     @Test
     fun the_field_is_rewritten_with_what_was_actually_stored() {
-        compose.setContent { ApiKeySection(keys) }
+        showSection()
+        revealEndpoint()
 
         compose.onNodeWithContentDescription("API endpoint")
+            .performScrollTo()
             .performTextInput("https://gateway.internal/v1/")
-        compose.onNodeWithText("Save").performClick()
+        compose.onNodeWithText("Save endpoint").performScrollTo().performClick()
         compose.waitForIdle()
 
         assertEquals("https://gateway.internal", keys.baseUrl())
-        compose.onNodeWithText("https://gateway.internal").assertExists()
+        compose.onNodeWithText("https://gateway.internal").performScrollTo().assertExists()
     }
 
-    /** A blank endpoint field is how the user goes back to Anthropic. */
+    /**
+     * A stored endpoint opens the disclosure it lives in.
+     *
+     * A custom address is the kind of setting that is forgotten and then blamed
+     * on the network, so it is never hidden once it is set.
+     */
+    @Test
+    fun an_endpoint_that_is_already_set_is_shown_without_being_asked_for() {
+        keys.saveBaseUrl(Endpoint.Custom("https://gateway.internal"))
+        showSection()
+
+        compose.onNodeWithText("https://gateway.internal").performScrollTo().assertExists()
+    }
+
+    /** A blank endpoint field is how the user goes back to the default. */
     @Test
     fun blanking_the_endpoint_restores_the_default() {
         keys.saveBaseUrl(Endpoint.Custom("https://gateway.internal"))
-        compose.setContent { ApiKeySection(keys) }
+        showSection()
 
-        compose.onNodeWithContentDescription("API endpoint").performTextClearance()
-        compose.onNodeWithText("Save").performClick()
+        compose.onNodeWithContentDescription("API endpoint").performScrollTo().performTextClearance()
+        compose.onNodeWithText("Save endpoint").performScrollTo().performClick()
         compose.waitForIdle()
 
         assertNull(keys.baseUrl())
     }
 
     /**
-     * A bad endpoint cannot be saved, and says why on the way.
+     * A bad endpoint blocks its own Save, and nothing else.
      *
-     * Without this the failure surfaces on the first chat message as an SDK
-     * transport error, which names neither the field nor the fix.
+     * Without the message the failure surfaces on the first chat message as an
+     * SDK transport error, which names neither the field nor the fix. And with
+     * the single Save this screen used to have, a typo in an address the user
+     * did not need also stopped them saving their key.
      */
     @Test
-    fun an_endpoint_that_cannot_work_blocks_saving_and_explains_itself() {
-        compose.setContent { ApiKeySection(keys) }
+    fun an_endpoint_that_cannot_work_blocks_only_the_endpoint() {
+        showSection()
+        revealEndpoint()
 
         compose.onNodeWithContentDescription("API key").performTextInput("sk-ant-typed")
         compose.onNodeWithContentDescription("API endpoint")
+            .performScrollTo()
             .performTextInput("http://gateway.internal")
 
-        compose.onNodeWithText("Save").assertIsNotEnabled()
+        compose.onNodeWithText("Save endpoint").performScrollTo().assertIsNotEnabled()
         compose.onNodeWithText("https is required.", substring = true).assertExists()
-        assertFalse("a refused endpoint must not take the key with it", keys.hasKey())
+        compose.onNodeWithText("Save key").performScrollTo().assertIsEnabled()
+    }
+
+    /**
+     * The endpoint is stored where the provider that will use it looks.
+     *
+     * There are three endpoint preferences and they are not interchangeable:
+     * `Assistant` builds Anthropic from `baseUrl`, OpenAI from `openAiBaseUrl`
+     * and Custom from `customBaseUrl`. This screen wrote `baseUrl` for all of
+     * them, so the field was inert for three providers out of four -- including
+     * Custom, whose only reason to exist is an address of your own. It looked
+     * saved and every request still went to the default host.
+     */
+    @Test
+    fun a_custom_providers_endpoint_is_stored_where_its_client_reads_it() {
+        keys.setActiveProvider(AiProviderType.CUSTOM)
+        showSection()
+
+        compose.onNodeWithContentDescription("API endpoint")
+            .performScrollTo()
+            .performTextInput("https://ollama.local")
+        compose.onNodeWithText("Save endpoint").performScrollTo().performClick()
+        compose.waitForIdle()
+
+        assertEquals("https://ollama.local", keys.customBaseUrl())
+        assertNull("Anthropic's endpoint was written instead", keys.baseUrl())
     }
 
     /** A custom endpoint is where the key goes, so the screen says so. */
     @Test
     fun a_custom_endpoint_warns_that_the_key_is_sent_there() {
-        compose.setContent { ApiKeySection(keys) }
+        showSection()
+        revealEndpoint()
 
         compose.onNodeWithContentDescription("API endpoint")
+            .performScrollTo()
             .performTextInput("https://gateway.internal")
 
         compose.onNodeWithText("Your key will be sent to this address.").assertExists()
     }
 
+    // -- removal ------------------------------------------------------------
+
     @Test
     fun removing_clears_the_stored_key() {
         keys.save("sk-ant-secret")
-        compose.setContent { ApiKeySection(keys) }
+        showSection()
 
         compose.onNodeWithText("Remove").performClick()
         compose.waitForIdle()
 
         assertFalse(keys.hasKey())
-        compose.onNodeWithText("A key is saved.").assertDoesNotExist()
+        compose.onNodeWithText("Anthropic key saved").assertDoesNotExist()
+    }
+
+    /**
+     * Remove takes one key, not all of them.
+     *
+     * It called `clear()`, which forgets all four providers *and* deletes the
+     * shared Keystore alias, under a label that said "a key".
+     */
+    @Test
+    fun removing_one_provider_key_leaves_the_others_readable() {
+        keys.save("sk-ant-secret")
+        keys.saveGeminiApiKey("AIzaKept")
+        showSection()
+
+        compose.onNodeWithText("Remove").performClick()
+        compose.waitForIdle()
+
+        assertFalse(keys.hasProviderKey(AiProviderType.ANTHROPIC))
+        assertEquals("AIzaKept", keys.geminiApiKey())
     }
 }

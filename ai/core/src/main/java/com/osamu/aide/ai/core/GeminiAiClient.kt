@@ -48,7 +48,7 @@ class GeminiAiClient(
             put("generationConfig", JSONObject().apply {
                 put("temperature", 0.2)
                 put("maxOutputTokens", request.maxTokens)
-                if (model.contains("3.7") || model.contains("flash")) {
+                if (model in THINKING_MODELS) {
                     val budget = if (request.effort == OutputConfig.Effort.LOW) 512 else 2048
                     put("thinkingConfig", JSONObject().put("thinkingBudget", budget))
                 }
@@ -235,6 +235,38 @@ class GeminiAiClient(
     }
 
     companion object {
+        /**
+         * Models that take a `thinkingConfig`, named rather than pattern-matched.
+         *
+         * This was `model.contains("3.7") || model.contains("flash")`, which is
+         * the same rot `FINDINGS.md` section 14 records for model ids: a
+         * version substring that no build or startup check can catch. It read
+         * as "3.7 and flash models think", and meant a `gemini-4-pro` would
+         * silently lose its thinking budget while `gemini-3.1-pro-preview`
+         * already did.
+         *
+         * An explicit set makes adding a model a decision instead of an
+         * accident, and `GeminiAiClientTest` fails if a model reaches the
+         * picker without appearing here or in [NON_THINKING_MODELS] -- so the
+         * omission is caught at build time rather than as quietly worse answers.
+         *
+         * **Not verified against the API.** Which models accept the field is
+         * unmeasured -- the account has no billing credit -- so this reflects
+         * the previous behaviour plus the pro models it appeared to miss.
+         * Sending the field to a model that rejects it is a 400; omitting it
+         * where it is supported only costs quality, so an unknown model is
+         * treated as non-thinking.
+         */
+        val THINKING_MODELS = setOf(
+            "gemini-3.8-flash",
+            "gemini-3.7-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-3.1-pro-preview",
+        )
+
+        /** Models deliberately classified as taking no `thinkingConfig`. */
+        val NON_THINKING_MODELS = emptySet<String>()
+
         const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 

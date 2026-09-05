@@ -21,6 +21,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Check
@@ -61,14 +62,14 @@ import com.osamu.aide.ai.core.AiProviderType
 import com.osamu.aide.ai.core.ApprovalRequest
 import com.osamu.aide.ai.core.ChatEntry
 import com.osamu.aide.ai.core.ChatUiState
+import com.osamu.aide.ai.core.GoogleAuthManager
 import com.osamu.aide.core.ui.theme.CodeTextStyle
 
 /**
- * The assistant panel, styled like Gemini in Android Studio.
+ * The assistant panel.
  *
- * Supports Google Gemini by default with Google Sign-In and API Key options,
- * plus multi-model switching (OpenAI, Anthropic, Custom), quick action chips,
- * and Android Studio-style diff previews.
+ * Four providers, each with its own models and its own key. The header is where
+ * both are chosen; see [AgentHeader] for why it says as much as it does.
  */
 @Composable
 fun ChatPanel(
@@ -127,6 +128,21 @@ fun ChatPanel(
     }
 }
 
+/**
+ * Which assistant is answering, and which of its models.
+ *
+ * **Both controls now look like controls.** They were a bare `TextButton` and a
+ * bare chip -- text with no affordance, in a header full of other text -- so the
+ * only way to find out the assistant could be changed at all was to tap the
+ * name and see what happened. Each carries a caret, and each menu ticks the
+ * entry that is currently in use.
+ *
+ * **The provider menu says which providers can actually answer.** Switching to
+ * one with no key used to look like it worked; the failure arrived on the next
+ * message, by which point the switch was three taps back and looked unrelated.
+ * `Needs a key` is stated in the menu, before the choice, and the key prompt
+ * appears the moment the switch is made rather than after a lost message.
+ */
 @Composable
 private fun AgentHeader(
     state: ChatUiState,
@@ -165,14 +181,46 @@ private fun AgentHeader(
                             style = MaterialTheme.typography.titleSmall,
                             color = MaterialTheme.colorScheme.primary,
                         )
+                        Icon(
+                            Icons.Default.ArrowDropDown,
+                            contentDescription = "Change assistant",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp),
+                        )
                     }
                     DropdownMenu(
                         expanded = showProviderMenu,
                         onDismissRequest = { showProviderMenu = false },
                     ) {
                         AiProviderType.entries.forEach { provider ->
+                            val configured = provider in state.providersWithKeys
                             DropdownMenuItem(
                                 text = { Text(provider.displayName) },
+                                trailingIcon = if (configured) {
+                                    null
+                                } else {
+                                    {
+                                        Text(
+                                            text = "Needs a key",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                },
+                                leadingIcon = {
+                                    // A fixed-width slot either way, so the
+                                    // names stay on one left edge instead of
+                                    // stepping in and out as keys are added.
+                                    if (provider == state.activeProvider) {
+                                        Icon(
+                                            Icons.Default.Check,
+                                            contentDescription = "in use",
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    } else {
+                                        Box(Modifier.size(18.dp))
+                                    }
+                                },
                                 onClick = {
                                     onSwitchProvider(provider)
                                     showProviderMenu = false
@@ -195,6 +243,13 @@ private fun AgentHeader(
                                 style = MaterialTheme.typography.labelSmall,
                             )
                         },
+                        trailingIcon = {
+                            Icon(
+                                Icons.Default.ArrowDropDown,
+                                contentDescription = "Change model",
+                                modifier = Modifier.size(18.dp),
+                            )
+                        },
                         colors = AssistChipDefaults.assistChipColors(
                             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                         ),
@@ -206,6 +261,17 @@ private fun AgentHeader(
                         state.activeProvider.availableModels.forEach { model ->
                             DropdownMenuItem(
                                 text = { Text(model) },
+                                leadingIcon = {
+                                    if (model == state.activeModel) {
+                                        Icon(
+                                            Icons.Default.Check,
+                                            contentDescription = "in use",
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    } else {
+                                        Box(Modifier.size(18.dp))
+                                    }
+                                },
                                 onClick = {
                                     onSwitchModel(model)
                                     showModelMenu = false
@@ -299,16 +365,23 @@ private fun EmptyTranscript(
                 textAlign = TextAlign.Center,
             )
 
-            if (state.needsKey && state.activeProvider == AiProviderType.GEMINI) {
+            // Every provider that needs a key says so here, not just Gemini.
+            // The other three left this space empty and the composer disabled,
+            // which reads as a broken panel rather than an unfinished setup.
+            if (state.needsKey) {
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.padding(top = 8.dp),
                 ) {
-                    Button(onClick = onSignInGoogle) {
-                        Text("Sign in with Google")
+                    if (state.activeProvider == AiProviderType.GEMINI &&
+                        GoogleAuthManager.SIGN_IN_ENABLED
+                    ) {
+                        OutlinedButton(onClick = onSignInGoogle) {
+                            Text("Sign in with Google")
+                        }
                     }
-                    OutlinedButton(onClick = onAddKey) {
-                        Text("Add API Key")
+                    Button(onClick = onAddKey) {
+                        Text("Add ${state.activeProvider.displayName} key")
                     }
                 }
             }
@@ -533,16 +606,16 @@ private fun KeyPrompt(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = if (activeProvider == AiProviderType.GEMINI) {
-                    "Gemini needs sign-in or an API key. Data stays on this device."
-                } else {
-                    "The assistant needs your ${activeProvider.displayName} API key. It stays on this device."
-                },
+                // Gemini used to be offered "sign-in or an API key" here. The
+                // sign-in completes and then every request fails, because
+                // generateContent accepts no OAuth scope -- so the sentence
+                // named a route that does not arrive anywhere.
+                text = "${activeProvider.displayName} needs an API key. It stays on this device.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
-            if (activeProvider == AiProviderType.GEMINI) {
+            if (activeProvider == AiProviderType.GEMINI && GoogleAuthManager.SIGN_IN_ENABLED) {
                 TextButton(onClick = onSignInGoogle) { Text("Sign in") }
             }
             TextButton(onClick = onAddKey) { Text("Add key") }

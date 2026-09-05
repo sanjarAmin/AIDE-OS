@@ -1,11 +1,13 @@
 package com.osamu.aide.ai.ui
 
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import com.osamu.aide.ai.core.AiProviderType
 import com.osamu.aide.ai.core.ApprovalRequest
 import com.osamu.aide.ai.core.ChatEntry
 import com.osamu.aide.ai.core.ChatUiState
@@ -40,6 +42,65 @@ class ChatPanelTest {
             onDismissError = {},
             onAddKey = {},
         )
+    }
+
+    // -- the header ---------------------------------------------------------
+
+    /**
+     * The provider menu says which providers can answer before one is chosen.
+     *
+     * Switching to a provider with no key used to look like it worked, and the
+     * failure arrived on the next message -- by which point the switch was
+     * several taps back and looked unrelated to it.
+     */
+    @Test
+    fun the_provider_menu_marks_the_ones_that_have_no_key() {
+        show(
+            ChatUiState(
+                activeProvider = AiProviderType.GEMINI,
+                providersWithKeys = setOf(AiProviderType.GEMINI),
+            ),
+        )
+
+        compose.onNodeWithContentDescription("Change assistant").performClick()
+
+        // Three of the four are unconfigured, so the menu says so three times.
+        assertEquals(3, compose.onAllNodesWithText("Needs a key").fetchSemanticsNodes().size)
+    }
+
+    /**
+     * Both header controls announce that they open something.
+     *
+     * They were plain text in a header full of plain text: the only way to find
+     * out the assistant or the model could be changed was to tap the name and
+     * see what happened.
+     */
+    @Test
+    fun the_assistant_and_model_read_as_controls() {
+        show(ChatUiState())
+
+        compose.onNodeWithContentDescription("Change assistant").assertExists()
+        compose.onNodeWithContentDescription("Change model").assertExists()
+    }
+
+    /**
+     * A provider that needs a key says so and offers the fix, whichever it is.
+     *
+     * Only Gemini used to get a call to action here. The other three left the
+     * space empty with the composer disabled, which reads as a broken panel
+     * rather than an unfinished setup.
+     */
+    @Test
+    fun any_provider_without_a_key_is_offered_the_way_to_add_one() {
+        show(
+            ChatUiState(
+                needsKey = true,
+                activeProvider = AiProviderType.OPENAI,
+                activeModel = AiProviderType.OPENAI.defaultModel,
+            ),
+        )
+
+        compose.onNodeWithText("Add OpenAI key").assertExists()
     }
 
     /**

@@ -2,16 +2,22 @@ package com.osamu.aide.ui.settings
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
@@ -20,6 +26,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -48,11 +55,27 @@ import com.osamu.aide.ai.core.GoogleAuthManager
 import com.osamu.aide.ai.core.parseEndpoint
 
 /**
- * Settings for the AI Assistant, with Gemini as the default provider.
+ * Choosing an assistant and giving it a key.
  *
- * Supports Google Sign-In, Gemini API keys, multi-model selection (OpenAI, Anthropic, Custom),
- * and context sharing preferences.
+ * **Ordered as the job is done, not as the data is stored.** Three groups, each
+ * answering one question: which assistant, what key, and how it behaves. The
+ * previous version was one flat column of controls under a single Save button,
+ * so nothing said which control that button applied to -- and it applied to two
+ * of them.
+ *
+ * Three things here are deliberately factual rather than decorative:
+ *
+ *  - **The tick on a provider chip** answers "which of these can I use", which
+ *    otherwise took four taps to find out. It means a key is stored, not that
+ *    the key works; only a successful request proves that.
+ *  - **Remove names its provider**, because it now removes only that provider's
+ *    key. It used to call [ApiKeyStore.clear], which wipes all four and deletes
+ *    the Keystore alias, while the label said "a key".
+ *  - **Two Save buttons, each naming what it writes.** With one button a typo in
+ *    the endpoint blocked saving the key, and saving a key silently rewrote the
+ *    endpoint.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
     val context = LocalContext.current
@@ -64,12 +87,23 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
     var googleEmail by remember { mutableStateOf(keys.googleUserEmail()) }
     var googleScopes by remember { mutableStateOf(keys.googleGrantedScopes()) }
 
-    var saved by remember { mutableStateOf(keys.hasKey()) }
+    // Keyed by provider so switching chips re-reads rather than showing the
+    // previous provider's state under the new provider's name.
+    var saved by remember { mutableStateOf(keys.hasProviderKey(activeProvider)) }
     var draft by remember { mutableStateOf("") }
     var revealed by remember { mutableStateOf(false) }
 
-    var storedEndpoint by remember { mutableStateOf(keys.baseUrl().orEmpty()) }
+    // Per provider, because the store keeps one endpoint per provider and each
+    // client is built from its own -- see ApiKeyStore.providerBaseUrl.
+    var storedEndpoint by remember { mutableStateOf(keys.providerBaseUrl(activeProvider).orEmpty()) }
     var endpointDraft by remember { mutableStateOf(storedEndpoint) }
+
+    // Open when there is already something to see, or when the provider is the
+    // one whose entire purpose is a custom address. Otherwise the endpoint is a
+    // field almost nobody wants, sitting between the key and the switch.
+    var showAdvanced by remember {
+        mutableStateOf(storedEndpoint.isNotEmpty() || activeProvider == AiProviderType.CUSTOM)
+    }
 
     val endpoint = parseEndpoint(endpointDraft)
     val normalised = when (endpoint) {
@@ -97,17 +131,24 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
         }
 
         Text(
-            text = "Gemini is the built-in default assistant. Sign in with Google or bring your own API key. " +
-                "Credentials are encrypted in the device's hardware Keystore.",
+            // No mention of Google Sign-In: it is disabled, and naming a way in
+            // that does not exist is worse than naming none. See
+            // GoogleAuthManager.SIGN_IN_ENABLED.
+            text = "Bring a key from one of these services. Keys are encrypted by the " +
+                "device's hardware keystore, and are sent only to the service you pick.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        // -- Provider Selector Chips ----------------------------------------
-        Text("Provider", style = MaterialTheme.typography.labelMedium)
-        Row(
+        // == 1. Which assistant ==============================================
+
+        // FlowRow, not Row: four chips do not fit the width of a phone, and a
+        // Row shrinks the last one until its label wraps one character per
+        // line. Wrapping by chip is the only thing that degrades sensibly.
+        FlowRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             AiProviderType.entries.forEach { provider ->
                 FilterChip(
@@ -116,15 +157,38 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                         activeProvider = provider
                         keys.setActiveProvider(provider)
                         activeModel = keys.activeModel(provider)
-                        saved = keys.hasKey()
+                        saved = keys.hasProviderKey(provider)
+                        draft = ""
+                        revealed = false
+                        storedEndpoint = keys.providerBaseUrl(provider).orEmpty()
+                        endpointDraft = storedEndpoint
+                        showAdvanced = showAdvanced ||
+                            storedEndpoint.isNotEmpty() ||
+                            provider == AiProviderType.CUSTOM
                     },
                     label = { Text(provider.displayName) },
+                    leadingIcon = if (keys.hasProviderKey(provider)) {
+                        {
+                            Icon(
+                                Icons.Default.CheckCircle,
+                                contentDescription = "${provider.displayName} has a key",
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                    } else {
+                        null
+                    },
                 )
             }
         }
 
-        // -- Google Sign In for Gemini --------------------------------------
-        if (activeProvider == AiProviderType.GEMINI) {
+        // The Google card is a real second way in, so it stays a card -- but
+        // only when it can do something. Rendering a signed-out card with no
+        // button, which is what SIGN_IN_ENABLED = false leaves, advertises a
+        // route that does not exist.
+        if (activeProvider == AiProviderType.GEMINI &&
+            (isGoogleSignedIn || GoogleAuthManager.SIGN_IN_ENABLED)
+        ) {
             Card(
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
@@ -144,9 +208,9 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                         Column {
                             Text(
                                 text = if (isGoogleSignedIn) {
-                                    "Signed in: ${googleEmail ?: "Google Account"}"
+                                    "Signed in as ${googleEmail ?: "a Google Account"}"
                                 } else {
-                                    "Google Account (Android Studio style)"
+                                    "Google Account"
                                 },
                                 style = MaterialTheme.typography.titleSmall,
                             )
@@ -174,18 +238,24 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                     }
 
                     if (isGoogleSignedIn) {
+                        Text(
+                            "Gemini does not accept a Google sign-in for chat requests. " +
+                                "Add an API key below instead.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         OutlinedButton(
                             onClick = {
                                 keys.signOutGoogle()
                                 isGoogleSignedIn = false
                                 googleEmail = null
                                 googleScopes = null
-                                saved = keys.hasKey()
+                                saved = keys.hasProviderKey(activeProvider)
                             },
                         ) {
                             Text("Sign out")
                         }
-                    } else if (GoogleAuthManager.SIGN_IN_ENABLED) {
+                    } else {
                         Button(
                             onClick = {
                                 val authManager = GoogleAuthManager(keys)
@@ -197,25 +267,29 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                             Text("Sign in with Google")
                         }
                     }
-                    // No else: signing in succeeds and then every Gemini
-                    // request fails, because generateContent accepts no OAuth
-                    // scope. Offering a button that works and then does not is
-                    // worse than offering none. Sign *out* stays available
-                    // above, so anyone already signed in can clear it.
                 }
             }
         }
 
-        // -- Model Selector -------------------------------------------------
         var showModelDropdown by remember { mutableStateOf(false) }
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Model", style = MaterialTheme.typography.bodyMedium)
+            Column(Modifier.weight(1f)) {
+                Text("Model", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "Each service remembers its own model.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Box {
-                OutlinedButton(onClick = { showModelDropdown = true }) {
+                OutlinedButton(
+                    onClick = { showModelDropdown = true },
+                    modifier = Modifier.semantics { contentDescription = "Model" },
+                ) {
                     Text(activeModel)
                 }
                 DropdownMenu(
@@ -236,7 +310,10 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
             }
         }
 
-        // -- Status Indicator -----------------------------------------------
+        HorizontalDivider()
+
+        // == 2. Its key ======================================================
+
         if (saved) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -248,23 +325,20 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                     tint = MaterialTheme.colorScheme.primary,
                 )
                 Text(
-                    text = "A key is saved.",
+                    text = "${activeProvider.displayName} key saved",
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.weight(1f),
                 )
                 TextButton(
                     onClick = {
-                        keys.clear()
-                        saved = false
+                        keys.clearProviderKey(activeProvider)
+                        saved = keys.hasProviderKey(activeProvider)
                         draft = ""
-                        isGoogleSignedIn = false
-                        googleEmail = null
                     },
                 ) { Text("Remove") }
             }
         }
 
-        // -- API Key Input --------------------------------------------------
         OutlinedTextField(
             value = draft,
             onValueChange = { draft = it },
@@ -272,16 +346,8 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                 .fillMaxWidth()
                 .semantics { contentDescription = "API key" },
             label = { Text(if (saved) "Replace key" else "API key") },
-            placeholder = {
-                Text(
-                    when (activeProvider) {
-                        AiProviderType.GEMINI -> "AIza..."
-                        AiProviderType.ANTHROPIC -> "sk-ant-..."
-                        AiProviderType.OPENAI -> "sk-..."
-                        AiProviderType.CUSTOM -> "API key (optional)"
-                    },
-                )
-            },
+            placeholder = { Text(keyPlaceholder(activeProvider)) },
+            supportingText = { Text(whereToGetAKey(activeProvider)) },
             singleLine = true,
             visualTransformation = if (revealed) VisualTransformation.None else PasswordVisualTransformation(),
             trailingIcon = {
@@ -294,38 +360,29 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
             },
         )
 
-        // -- Endpoint Input -------------------------------------------------
-        OutlinedTextField(
-            value = endpointDraft,
-            onValueChange = { endpointDraft = it },
-            modifier = Modifier
-                .fillMaxWidth()
-                .semantics { contentDescription = "API endpoint" },
-            label = { Text("API endpoint") },
-            placeholder = {
-                Text(
-                    when (activeProvider) {
-                        AiProviderType.GEMINI -> "Google AI (default)"
-                        AiProviderType.ANTHROPIC -> "Anthropic (default)"
-                        AiProviderType.OPENAI -> "OpenAI (default)"
-                        AiProviderType.CUSTOM -> "https://my-proxy.local"
-                    },
-                )
+        Button(
+            onClick = {
+                val trimmed = draft.trim()
+                when (activeProvider) {
+                    // Only Anthropic writes the legacy slot. Every provider used
+                    // to write it, so saving a Gemini key put that key in
+                    // Anthropic's store and lit Anthropic's tick.
+                    AiProviderType.ANTHROPIC -> keys.save(trimmed)
+                    AiProviderType.GEMINI -> keys.saveGeminiApiKey(trimmed)
+                    AiProviderType.OPENAI -> keys.saveOpenAiApiKey(trimmed)
+                    AiProviderType.CUSTOM -> keys.saveCustomApiKey(trimmed)
+                }
+                saved = true
+                draft = ""
+                revealed = false
             },
-            singleLine = true,
-            isError = endpoint is Endpoint.Rejected,
-            supportingText = {
-                Text(
-                    text = when (endpoint) {
-                        is Endpoint.Rejected -> endpoint.reason
-                        is Endpoint.Custom -> "Your key will be sent to this address."
-                        Endpoint.Default -> "Leave blank for the default service endpoint."
-                    },
-                )
-            },
-        )
+            enabled = draft.isNotBlank(),
+        ) { Text("Save key") }
 
-        // -- Code Context Sharing Switch ------------------------------------
+        HorizontalDivider()
+
+        // == 3. How it behaves ===============================================
+
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -334,7 +391,7 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
             Column(Modifier.weight(1f)) {
                 Text("Share project context", style = MaterialTheme.typography.bodyMedium)
                 Text(
-                    "Include project file structure and compiler diagnostics with queries.",
+                    "Send your file tree and compiler errors along with each question.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -348,27 +405,86 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
             )
         }
 
-        // -- Save Button ----------------------------------------------------
-        Button(
-            onClick = {
-                if (draft.isNotBlank()) {
-                    val trimmed = draft.trim()
-                    keys.save(trimmed)
-                    when (activeProvider) {
-                        AiProviderType.GEMINI -> keys.saveGeminiApiKey(trimmed)
-                        AiProviderType.OPENAI -> keys.saveOpenAiApiKey(trimmed)
-                        AiProviderType.ANTHROPIC -> keys.save(trimmed)
-                        AiProviderType.CUSTOM -> keys.saveCustomApiKey(trimmed)
-                    }
-                    saved = true
-                    draft = ""
-                    revealed = false
+        TextButton(onClick = { showAdvanced = !showAdvanced }) {
+            Text(if (showAdvanced) "Hide advanced" else "Advanced")
+            Icon(
+                if (showAdvanced) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = null,
+            )
+        }
+
+        AnimatedVisibility(visible = showAdvanced) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (activeProvider == AiProviderType.GEMINI) {
+                    // GeminiAiClient takes no base URL, so a field here would be
+                    // one that accepts an address and ignores it.
+                    Text(
+                        "Gemini always goes to Google's own endpoint. " +
+                            "Pick Custom to use a service of your own.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    OutlinedTextField(
+                        value = endpointDraft,
+                        onValueChange = { endpointDraft = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics { contentDescription = "API endpoint" },
+                        label = { Text("API endpoint") },
+                        placeholder = {
+                            Text(
+                                when (activeProvider) {
+                                    AiProviderType.GEMINI -> "Google AI (default)"
+                                    AiProviderType.ANTHROPIC -> "Anthropic (default)"
+                                    AiProviderType.OPENAI -> "OpenAI (default)"
+                                    AiProviderType.CUSTOM -> "https://my-proxy.local"
+                                },
+                            )
+                        },
+                        singleLine = true,
+                        isError = endpoint is Endpoint.Rejected,
+                        supportingText = {
+                            Text(
+                                text = when (endpoint) {
+                                    is Endpoint.Rejected -> endpoint.reason
+                                    is Endpoint.Custom -> "Your key will be sent to this address."
+                                    Endpoint.Default -> "Leave blank for the default service endpoint."
+                                },
+                            )
+                        },
+                    )
+                    Button(
+                        onClick = {
+                            keys.saveProviderBaseUrl(activeProvider, endpoint)
+                            storedEndpoint = normalised.orEmpty()
+                            endpointDraft = storedEndpoint
+                        },
+                        enabled = normalised != null && normalised != storedEndpoint,
+                    ) { Text("Save endpoint") }
                 }
-                keys.saveBaseUrl(endpoint)
-                storedEndpoint = normalised.orEmpty()
-                endpointDraft = storedEndpoint
-            },
-            enabled = normalised != null && (draft.isNotBlank() || normalised != storedEndpoint),
-        ) { Text("Save") }
+            }
+        }
     }
+}
+
+private fun keyPlaceholder(provider: AiProviderType): String = when (provider) {
+    AiProviderType.GEMINI -> "AIza..."
+    AiProviderType.ANTHROPIC -> "sk-ant-..."
+    AiProviderType.OPENAI -> "sk-..."
+    AiProviderType.CUSTOM -> "Whatever your service issues"
+}
+
+/**
+ * Where the key comes from.
+ *
+ * The console that issues a key is not guessable from the provider's name, and
+ * an IDE on a phone is a bad place to go hunting for it. Naming the page is the
+ * difference between a two-minute detour and abandoning the screen.
+ */
+private fun whereToGetAKey(provider: AiProviderType): String = when (provider) {
+    AiProviderType.GEMINI -> "Create one at aistudio.google.com/apikey"
+    AiProviderType.ANTHROPIC -> "Create one at console.anthropic.com under API keys"
+    AiProviderType.OPENAI -> "Create one at platform.openai.com/api-keys"
+    AiProviderType.CUSTOM -> "Any OpenAI-compatible service. Set its address under Advanced."
 }

@@ -26,7 +26,7 @@
 | 🟢 | **M2** First APK ⭐ | **The thesis holds, and it is reachable.** A person can create a project, edit it, tap Build, and end up with the app installed — all on the device. |
 | 🟢 | **M3** Intelligence | Completion, diagnostics-as-you-type, go-to-definition, signature hints. **76 ms** warm completion on an AndroidX type against the 200 ms budget. |
 | 🟢 | **M4** Deps + Kotlin | A Kotlin project using `androidx.appcompat` builds on device: 41 artifacts resolved, kotlinc ahead of ECJ. Resolution reads Gradle Module Metadata, so AndroidX aligns the way Gradle aligns it. `engine/deps/FINDINGS.md` |
-| 🟡 | **M5** AI ⭐ | Feature-complete, and **multi-provider** since 2026-09-02: Gemini (default, with Google Sign-In), OpenAI, anything OpenAI-compatible, and Anthropic. Anthropic is **verified live** (8/8, including that prompt caching reads back on Sonnet 5 and not on Opus 5). Gemini has a live test that already caught a model the picker offered and the API 404s, but the four assertions themselves wait on **billing credit**, not a key. **Google Sign-In works and cannot be used**: the PKCE flow completes on a real device, and `generateContent` declares no OAuth scopes at all, so no scope authorises it — `ai/core/FINDINGS.md` §16 has the evidence and the three options. `ai/core/FINDINGS.md` §§11–14 cover the provider work, including that `AiSession` now has two tool loops sharing nothing but tool execution |
+| 🟡 | **M5** AI ⭐ | Feature-complete, and **multi-provider** since 2026-09-02: Gemini (default), OpenAI, anything OpenAI-compatible, and Anthropic — **all four by API key, which is the only way in**. Anthropic is **verified live** (8/8, including that prompt caching reads back on Sonnet 5 and not on Opus 5). Gemini has a live test that already caught a model the picker offered and the API 404s, but the four assertions themselves wait on **billing credit**, not a key. **Google Sign-In works and cannot be used**, and is now switched off: the PKCE flow completes on a real device with every scope granted, and `generateContent` declares no OAuth scopes at all, so no scope authorises it — `ai/core/FINDINGS.md` §16. Settings and the chat header were rebuilt around that on 2026-09-05, which surfaced a key-store bug that let one provider's key appear under another — §17. `ai/core/FINDINGS.md` §§11–14 cover the provider work, including that `AiSession` now has two tool loops sharing nothing but tool execution |
 | 🟢 | **M6** Compose | A Compose app builds, installs, launches and **draws**, on device, with its libraries' manifests merged. Six fixes, none visible to a build-only test. `engine/deps/FINDINGS.md` |
 | 🟢 | **M10** Kotlin intelligence | `:lsp:kotlin` answers about a Kotlin buffer on device: placed diagnostics before any build, completion that resolves a receiver declared only in the buffer, filtered by the typed prefix and following an edit the session has not seen. A third shape of language service — in-process like javac, but behind a classloader nothing in the app can name, so every call crosses into a backend shipped inside the archive. Driven by hand in the running app: a Kotlin project's `MainActivity.kt` opens clean and completes `this.setC` to `setContentView(View!)` out of **`android.jar`** — which is how two bugs were found that seven passing tests missed (there are fourteen now). **Extensions work**: `String` offers `uppercase`, and a `MutableMap` extension is correctly withheld from it. The Analysis API resolves a top-level callable by name and will list none — three enumeration routes return nothing for a binary library — so the names are read from **`@kotlin.Metadata`** — the protobuf the compiler wrote — over the session's own library jars at startup, which covers a project's AARs and tells extensions from ordinary functions before anything is resolved. **Warm completion is ~230 ms** against the 200 ms budget M3 holds Java to at 76 ms; the cost is library resolution, not extensions — the same session answers in 59 ms with no library module, which is the configuration nobody ships. **Installed through the app end to end**: on a device with no components, opening a Kotlin file offers the compiler and then the Analysis API, and completion answers out of archives the app downloaded and checksum-verified itself. **Go-to-definition** resolves too — through the Analysis API rather than the index, with a `resolveToCall` fallback for convention references (`a + b`, `by lazy`, `for`) that have no name reference at all; library symbols have no source PSI and correctly answer nothing. `tools/analysisapi/FINDINGS.md` §17–22 |
 | 🟢 | **M7** C/C++ | A JNI project builds on device: clang compiles `src/main/cpp`, the library is packaged into the APK, and it loads and runs. **clangd answers too** — diagnostics, completion, go-to-definition and hover for C and C++, through the same interface the Java service implements. Verified on API 34 x86_64 and Android 16 arm64. `tools/clang/FINDINGS.md` |
@@ -271,7 +271,7 @@ Bring-your-own-key, no backend infrastructure, no per-user liability for you.
 | **M2** First APK ⭐ | `:toolchain:native` (aapt2 in jniLibs), `:build:fast` for Java, PackageInstaller | Hello-world Java project builds + installs in **< 10s**. *This is the make-or-break milestone.* |
 | **M3** Intelligence | `:lsp:java`, completion, diagnostics-as-you-type, go-to-definition | Completion on AndroidX types < 200ms |
 | **M4** Deps + Kotlin | maven-resolver, AAR extraction, kotlinc integration | Project with `androidx.appcompat` + Kotlin sources builds |
-| **M5** AI ⭐ | `:ai:core` + `:ai:ui`, chat, inline completion, fix-my-error — **plus a provider interface**: Gemini (default, Google Sign-In or key), OpenAI, OpenAI-compatible, Anthropic | BYO key → chat with project context, one-tap error fix works. Still needs a live key to close |
+| **M5** AI ⭐ | `:ai:core` + `:ai:ui`, chat, inline completion, fix-my-error — **plus a provider interface**: Gemini (default), OpenAI, OpenAI-compatible, Anthropic, each by API key | BYO key → chat with project context, one-tap error fix works. Still needs a live key to close |
 | ✅ **M6** Compose | Compose compiler plugin hosted in on-device kotlinc | A Compose hello-world builds and runs |
 | **M7** C/C++ | Termux clang/lld toolchain download, NDK sysroot, clangd | JNI project with a native `.so` builds — **met**, clangd included |
 | **M8** Git + Terminal | JGit, PTY terminal | Clone from GitHub, edit, commit, push |
@@ -363,13 +363,29 @@ M0–M5 is the real v1.0. Everything from M6 on is expansion.
 
    **M5 went multi-provider on 2026-09-02**, which the AI Layer section covers
    in full. What matters at roadmap level: `AiSession` now has *two* tool loops,
-   the acceptance test is unchanged and still unmet for want of a key, and two
-   things are knowingly unfinished. The Google OAuth client ID in
-   `GoogleAuthManager` is a placeholder, so Sign-In cannot complete until a real
-   client is registered for the package — Gemini by API key is unaffected. And
-   `ai/core/FINDINGS.md`, the milestone's other deliverable, has not been
-   updated for any of it; three providers and a second tool loop arrived without
-   a line in the document that is supposed to explain them.
+   and the acceptance test is unchanged and still unmet for want of a paid key.
+   `ai/core/FINDINGS.md` §§11–18 now cover all of it.
+
+   **Google Sign-In is settled and the answer is no** (2026-09-05). A real
+   OAuth client was registered, the PKCE flow completed on a real device, and
+   Google granted every scope asked for — and `generateContent` still refused
+   the token, because it declares no OAuth scopes at all. There is no scope to
+   ask for. `GoogleAuthManager.SIGN_IN_ENABLED = false`; the code is kept
+   because the flow itself works and a future Google API may accept it. **An API
+   key is the only way in, for every provider.** `ai/core/FINDINGS.md` §16 has
+   the evidence.
+
+   **The settings and agent-picker UX was rebuilt around that** (2026-09-05),
+   and it turned up a correctness bug that the flat layout had hidden: every
+   save wrote Anthropic's legacy key slot as well as the provider's own, so a
+   Gemini key made Anthropic report a key it had never been given — and
+   "Remove" called `clear()`, which forgets all four providers and deletes the
+   shared Keystore alias. `ai/core/FINDINGS.md` §17. The screen now runs in the
+   order the job is done — which assistant, its key, how it behaves — marks the
+   providers that actually hold a key, names the console each key comes from,
+   and says which settings sections do not exist yet. The chat header's provider
+   menu marks unconfigured providers *before* they are chosen, rather than
+   letting the next message discover it.
 
 9. **M6 Compose — the build half is done and proven.** Spike R2 had already put
    the Compose plugin in the same dex archive as the compiler, and

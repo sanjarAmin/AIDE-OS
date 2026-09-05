@@ -52,6 +52,36 @@ class GeminiOnDeviceTest {
         GeminiAiClient(apiKey = key, model = model)
 
     /**
+     * An account that cannot serve requests is a skip, not a failure.
+     *
+     * Google answers an out-of-credit project with 429 RESOURCE_EXHAUSTED on
+     * every request, whatever was asked. That turns this suite into four
+     * failures that say nothing about the code -- and it makes
+     * [every_offered_model_answers] report the entire picker dead, which is a
+     * false accusation against a model list that was answering an hour before.
+     * The same status covers rate limiting, which is the same kind of fact
+     * about the account rather than about the request.
+     *
+     * Anything else -- a 400 on our JSON, a 404 on a retired id -- stays a
+     * failure, because those are the questions this suite exists to ask.
+     */
+    private fun skipIfTheAccountCannotAnswer(failure: Throwable) {
+        val message = failure.message.orEmpty()
+        assumeTrue(
+            "the Gemini account cannot serve requests: $message",
+            !(message.contains("(429)") && message.contains("RESOURCE_EXHAUSTED")),
+        )
+    }
+
+    private suspend fun <T> live(block: suspend () -> T): T =
+        try {
+            block()
+        } catch (failure: Exception) {
+            skipIfTheAccountCannotAnswer(failure)
+            throw failure
+        }
+
+    /**
      * Question 1: does Google accept the request `GeminiAiClient` builds?
      *
      * The whole shape at once -- system instruction, contents, generationConfig
@@ -60,13 +90,15 @@ class GeminiOnDeviceTest {
      */
     @Test
     fun a_request_completes_against_the_real_api() = runBlocking {
-        val response = client().send(
-            AiClientRequest(
-                systemInstruction = "You are terse. Answer with a single word.",
-                messages = listOf(AiMessage(AiRole.USER, "What colour is a clear midday sky?")),
-                maxTokens = 64L,
-            ),
-        )
+        val response = live {
+            client().send(
+                AiClientRequest(
+                    systemInstruction = "You are terse. Answer with a single word.",
+                    messages = listOf(AiMessage(AiRole.USER, "What colour is a clear midday sky?")),
+                    maxTokens = 64L,
+                ),
+            )
+        }
 
         Log.i(TAG, "gemini text='${response.text}' finish=${response.finishReason}")
         assertTrue("the model returned nothing: $response", response.text.isNotBlank())
@@ -82,13 +114,15 @@ class GeminiOnDeviceTest {
      */
     @Test
     fun the_default_model_id_is_live() = runBlocking {
-        val response = client(AiProviderType.GEMINI.defaultModel).send(
-            AiClientRequest(
-                systemInstruction = "Reply with exactly: ok",
-                messages = listOf(AiMessage(AiRole.USER, "Reply with exactly: ok")),
-                maxTokens = 16L,
-            ),
-        )
+        val response = live {
+            client(AiProviderType.GEMINI.defaultModel).send(
+                AiClientRequest(
+                    systemInstruction = "Reply with exactly: ok",
+                    messages = listOf(AiMessage(AiRole.USER, "Reply with exactly: ok")),
+                    maxTokens = 16L,
+                ),
+            )
+        }
         assertTrue(
             "the default model ${AiProviderType.GEMINI.defaultModel} answered nothing",
             response.text.isNotBlank(),
@@ -114,6 +148,7 @@ class GeminiOnDeviceTest {
                     ),
                 ).text
             }.getOrElse { failure ->
+                skipIfTheAccountCannotAnswer(failure)
                 Log.w(TAG, "model $model failed: ${failure.message}")
                 ""
             }
@@ -146,14 +181,16 @@ class GeminiOnDeviceTest {
             handler = { ProjectFiles.Outcome.Ok("never executed in this test") },
         )
 
-        val response = client().send(
-            AiClientRequest(
-                systemInstruction = "Use the read_file tool when asked to read a file. Do not answer from memory.",
-                messages = listOf(AiMessage(AiRole.USER, "Read the file src/main/Main.kt and tell me what it does.")),
-                tools = listOf(tool),
-                maxTokens = 256L,
-            ),
-        )
+        val response = live {
+            client().send(
+                AiClientRequest(
+                    systemInstruction = "Use the read_file tool when asked to read a file. Do not answer from memory.",
+                    messages = listOf(AiMessage(AiRole.USER, "Read the file src/main/Main.kt and tell me what it does.")),
+                    tools = listOf(tool),
+                    maxTokens = 256L,
+                ),
+            )
+        }
 
         val calls = response.parts.filterIsInstance<AiPart.FunctionCall>()
         Log.i(TAG, "gemini calls=${calls.map { it.name to it.args }}")

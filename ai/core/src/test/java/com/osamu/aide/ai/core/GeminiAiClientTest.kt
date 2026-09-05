@@ -145,4 +145,35 @@ class GeminiAiClientTest {
 
         assertEquals("println(\"hello world\")", completion)
     }
+
+    /**
+     * Every model in the picker is classified for thinking, one way or other.
+     *
+     * The rule used to be `model.contains("3.7") || model.contains("flash")`,
+     * so adding a model to the picker silently decided its thinking behaviour
+     * by whether its name happened to contain a substring — and a `gemini-4-pro`
+     * would have lost its budget with nothing to notice. This fails instead,
+     * at build time, naming the model that needs a decision.
+     */
+    @Test
+    fun every_offered_gemini_model_is_classified_for_thinking() {
+        val classified = GeminiAiClient.THINKING_MODELS + GeminiAiClient.NON_THINKING_MODELS
+        val unclassified = AiProviderType.GEMINI.availableModels - classified
+
+        assertEquals(
+            "these models are offered but not classified for thinkingConfig — " +
+                "add each to THINKING_MODELS or NON_THINKING_MODELS in GeminiAiClient",
+            emptyList<String>(),
+            unclassified,
+        )
+    }
+
+    /** And nothing is classified that is not offered, so the sets do not rot. */
+    @Test
+    fun nothing_is_classified_that_the_picker_no_longer_offers() {
+        val classified = GeminiAiClient.THINKING_MODELS + GeminiAiClient.NON_THINKING_MODELS
+        val stale = classified - AiProviderType.GEMINI.availableModels.toSet()
+
+        assertEquals("classified models the picker no longer offers", emptySet<String>(), stale)
+    }
 }
