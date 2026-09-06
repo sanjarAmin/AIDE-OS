@@ -81,17 +81,47 @@ class KotlinLanguageService(
      */
     private val backend: Class<*> = load()
 
-    private val openMethod: Method =
-        backend.getMethod("open", String::class.java, String::class.java)
-    private val diagnosticsMethod: Method =
-        backend.getMethod("diagnostics", String::class.java)
-    private val completeMethod: Method =
-        backend.getMethod("complete", String::class.java, Int::class.javaPrimitiveType)
-    private val signatureMethod: Method =
-        backend.getMethod("signatureAt", String::class.java, Int::class.javaPrimitiveType)
-    private val definitionMethod: Method =
-        backend.getMethod("definitionAt", String::class.java, Int::class.javaPrimitiveType)
-    private val closeMethod: Method = backend.getMethod("close")
+    /**
+     * The backend's entry points, or null when the installed archive is older
+     * than this app.
+     *
+     * **Resolved defensively, because the component ships separately.** These
+     * were `val x: Method = backend.getMethod(...)`, which throws
+     * `NoSuchMethodException` from the **constructor** for a backend that
+     * predates a method -- and `LanguageServices.kotlinFor` constructs this
+     * unguarded, on the editor's completion thread. A user whose installed
+     * component is one release behind therefore got an exception per keystroke
+     * rather than an editor without Kotlin intelligence.
+     *
+     * That is not hypothetical: the archive published as
+     * `kotlin-analysis-2.2.10` has no `definitionAt`, which was added after it.
+     * FINDINGS.md §27.
+     */
+    private val methods: Map<String, Method>? = runCatching {
+        mapOf(
+            "open" to backend.getMethod("open", String::class.java, String::class.java),
+            "diagnostics" to backend.getMethod("diagnostics", String::class.java),
+            "complete" to backend.getMethod(
+                "complete", String::class.java, Int::class.javaPrimitiveType,
+            ),
+            "signatureAt" to backend.getMethod(
+                "signatureAt", String::class.java, Int::class.javaPrimitiveType,
+            ),
+            "definitionAt" to backend.getMethod(
+                "definitionAt", String::class.java, Int::class.javaPrimitiveType,
+            ),
+            "close" to backend.getMethod("close"),
+        )
+    }.onFailure {
+        Log.w(TAG, "the installed Kotlin backend is not the one this app expects: ${it.message}")
+    }.getOrNull()
+
+    private val openMethod: Method? get() = methods?.get("open")
+    private val diagnosticsMethod: Method? get() = methods?.get("diagnostics")
+    private val completeMethod: Method? get() = methods?.get("complete")
+    private val signatureMethod: Method? get() = methods?.get("signatureAt")
+    private val definitionMethod: Method? get() = methods?.get("definitionAt")
+    private val closeMethod: Method? get() = methods?.get("close")
 
     private val stdlib: File = prepared.stdlib
 
@@ -144,7 +174,7 @@ class KotlinLanguageService(
 
     override suspend fun diagnostics(file: File, text: String): List<Diagnostic> =
         query {
-            if (!ensureOpen()) emptyList() else records(diagnosticsMethod.invoke(null, text))
+            if (!ensureOpen()) emptyList() else records(diagnosticsMethod?.invoke(null, text))
         }
             .mapNotNull { fields ->
                 if (fields.size < 4) return@mapNotNull null
@@ -168,7 +198,7 @@ class KotlinLanguageService(
             if (!ensureOpen()) {
                 emptyList()
             } else {
-                records(completeMethod.invoke(null, text, offset))
+                records(completeMethod?.invoke(null, text, offset))
             }
         }
             .mapNotNull { fields ->
@@ -200,7 +230,7 @@ class KotlinLanguageService(
             if (!ensureOpen()) {
                 null
             } else {
-                val fields = (definitionMethod.invoke(null, text, offset) as String)
+                val fields = (definitionMethod?.invoke(null, text, offset) as? String).orEmpty()
                     .takeIf { it.isNotBlank() && !it.startsWith("ERR ") }
                     ?.split('\t')
                 if (fields == null || fields.size < 4) {
@@ -222,7 +252,7 @@ class KotlinLanguageService(
             if (!ensureOpen()) {
                 null
             } else {
-                (signatureMethod.invoke(null, text, offset) as String)
+                (signatureMethod?.invoke(null, text, offset) as? String).orEmpty()
                     .takeIf { it.isNotBlank() && !it.startsWith("ERR ") }
             }
         }
@@ -334,6 +364,11 @@ class KotlinLanguageService(
     private fun ensureOpen(): Boolean {
         if (opened) return true
         openFailure?.let { return false }
+        val open = openMethod ?: run {
+            openFailure = "the installed Kotlin component is older than this app expects"
+            Log.w(TAG, "Kotlin is silent here: $openFailure")
+            return false
+        }
         // Before building one, finish closing any the last service left behind.
         closeAbandonedSession()
         val roots = listOf(File(projectRoot, "src/main/java"), File(projectRoot, "src/main/kotlin"))
@@ -343,7 +378,7 @@ class KotlinLanguageService(
             .filter { it.isFile }
             .joinToString(File.pathSeparator) { it.absolutePath }
         val result = runCatching {
-            openMethod.invoke(
+            open.invoke(
                 null,
                 roots.joinToString(File.pathSeparator) { it.absolutePath },
                 libraries,
@@ -366,7 +401,7 @@ class KotlinLanguageService(
     private fun closeAbandonedSession() {
         if (!teardownPending) return
         teardownPending = false
-        runCatching { closeMethod.invoke(null) }
+        runCatching { closeMethod?.invoke(null) }
     }
 
     /**
@@ -432,7 +467,7 @@ class KotlinLanguageService(
                     return@launch
                 }
                 lock.withLock {
-                    runCatching { completeMethod.invoke(null, WARM_UP_BUFFER, WARM_UP_OFFSET) }
+                    runCatching { completeMethod?.invoke(null, WARM_UP_BUFFER, WARM_UP_OFFSET) }
                 }
                 done++
                 yield()

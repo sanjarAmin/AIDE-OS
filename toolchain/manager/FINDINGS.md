@@ -96,3 +96,63 @@ between two builds is not a cache miss a user would forgive.
   `:engine:fast` proves the pieces fit -- download, stage the compile stubs,
   build -- but no screen offers the download, because there is no build screen
   yet. That is M1/M2 UI work.
+
+## The Kotlin Analysis API component cannot be installed, and this is why
+
+**Found by driving the app**, on 2026-09-06, with everything else green: a full
+sweep of 560 tests said nothing was wrong, because every test that uses this
+component stages the archive by hand and never downloads it.
+
+Opening a Kotlin file in a new project offers the Kotlin compiler (53 MB, which
+installs correctly) and then the Analysis API (1 MB), and the second one fails:
+
+```
+The connection was lost while downloading Kotlin Analysis API 2.2.10.
+Kotlin Analysis API 2.2.10 could not be downloaded (HTTP 416).      <- and for ever after
+```
+
+**One wrong number, three consequences.** `ToolchainComponent` pins
+`archiveBytes = 1_991_075`; the published release asset is **1,988,723 bytes**
+(`curl -sIL` on the release URL says so, and the partial left on the device was
+exactly that long). `archiveBytes` was the completeness gate, so:
+
+1. the whole file arrives, is 2,352 bytes shorter than the pin, and is reported
+   as a lost connection;
+2. the partial is kept, because keeping it is what makes resume work at all;
+3. every retry asks for `bytes=1988723-`, which the server answers **416**, and
+   nothing deletes the partial on a 416 -- so the component is unreachable until
+   the user clears the app's data.
+
+Two of those are now fixed and tested. **`Content-Length` decides completeness**
+and the pin is only what the progress bar counts against; **the sha1 is the one
+gate on correctness**, which it always was the only thing able to be. And a 416
+discards the partial and starts over. `ComponentInstallerTest` covers both, and
+both fail without the fix -- verified by reverting it.
+
+**The third is not fixable from here.** The pinned sha1
+(`9578660382…`) matches no published artifact either: the release holds
+`47f6187b…`. And the published `analysis-backend.jar` is 40,642 bytes against
+the current 43,132 -- it **predates `definitionAt`**, so it is not merely
+mis-pinned, it is too old to use. Correcting the pin downward would ship a
+component the app cannot drive.
+
+**So the release asset has to be rebuilt and re-uploaded, and the pin
+regenerated with it.** `tools/analysisapi/build-component.sh` prints the two
+numbers to paste:
+
+```
+  archiveSha1  = "…"
+  archiveBytes = …L
+```
+
+They must come from the artifact actually uploaded. A zip is not reproducible
+here -- rebuilding identical source twice gives the same byte count and a
+different sha1 -- so pinning a locally built archive and uploading a separately
+built one produces exactly this failure.
+
+**The lesson worth keeping is about the test gap, not the number.** Every test
+of this component stages its archive, which is right for speed and for working
+offline, and means **nothing exercises the pin**. A test that fetches the real
+release URL and checks its length and digest against the constant would have
+caught this the day it drifted, and costs one request.
+

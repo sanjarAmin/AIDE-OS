@@ -1435,11 +1435,12 @@ Honest limits of what has been established. None of this is evidence yet.
   restores `app_data_file:s0` without the per-app category set; §7 is the older
   half of that trap.
 - **Only one file, in one project, has been driven *by hand*.** §18 is what that
-  found. Changing projects while a session was warm is no longer untested --
-  §26 closes and reopens back to back, and asserts the new session answers from
-  the new project and no longer from the old -- but nobody has switched between
-  two open Kotlin tabs in the running app, which is the case §18's kind of bug
-  lives in.
+  found, and by hand is still where it stands. Everything around it is now
+  covered by test: changing projects while a session is warm (§26), two Kotlin
+  files in one project each answering about themselves and about each other,
+  and a Kotlin tab and a Java tab routed to different services that coexist in
+  one process. What no test replaces is a person typing in the running app,
+  which is how §18's two bugs were found with seven tests already passing.
 - **The 1808 ms build is on an emulator, with a trivial module.** It will grow
   with the project, and it sits on the path to first completion after opening
   one. Whether it can be moved off that path -- built ahead of time, or in the

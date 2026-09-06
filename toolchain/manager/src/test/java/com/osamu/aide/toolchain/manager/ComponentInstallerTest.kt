@@ -156,6 +156,50 @@ class ComponentInstallerTest {
     }
 
     @Test
+    fun `a pinned size larger than the published file still installs`() = runTest {
+        // **This shipped.** kotlin-analysis-2.2.10 was pinned at 1,991,075
+        // bytes and the release holds 1,988,723, and `archiveBytes` was the
+        // completeness gate -- so the whole file arrived, was declared short,
+        // and the install failed with "the connection was lost". The sha1 is
+        // the only thing that can decide correctness, and now does; the pin is
+        // what the progress bar counts against.
+        val component = server.component().copy(archiveBytes = server.archive.size + 2_352L)
+
+        val progress = install(component)
+
+        assertTrue(
+            "a file the server sent in full was rejected for disagreeing with the pin: " +
+                "${progress.last()}",
+            progress.last() is InstallProgress.Installed,
+        )
+    }
+
+    @Test
+    fun `a partial as long as the file is discarded rather than resumed for ever`() = runTest {
+        // The other half of the same failure. Once a partial reaches the
+        // server's true length, every retry asks for `bytes=<length>-`, the
+        // server answers 416, and the component becomes unreachable until the
+        // user clears the app's data. Reproduced by pinning a larger size, so
+        // the installer believes a complete file is still partial.
+        val component = server.component().copy(archiveBytes = server.archive.size + 2_352L)
+        val partial = storage.downloadFor(component)
+        partial.parentFile?.mkdirs()
+        partial.writeBytes(server.archive)
+
+        val progress = install(component)
+
+        assertTrue(
+            "a 416 was fatal, so the component can never be installed: ${progress.last()}",
+            progress.last() is InstallProgress.Installed,
+        )
+        assertTrue(
+            "the installer never asked to resume, so this proves nothing",
+            server.rangeHeaders.any { it != null },
+        )
+        assertEquals(300_000L, storage.fileFor(component).length())
+    }
+
+    @Test
     fun `an archive missing the entry fails rather than installing nothing`() = runTest {
         val component = server.component()
             .copy(archive = ComponentArchive.ZipEntries(mapOf("android-36/not-here.jar" to "android.jar")))

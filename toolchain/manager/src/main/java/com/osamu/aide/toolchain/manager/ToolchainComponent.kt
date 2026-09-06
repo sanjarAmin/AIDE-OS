@@ -325,5 +325,22 @@ data class ToolchainComponent(
             installedBytes = installedBytes,
             requiresSdkLicense = false,
         )
+
+        /**
+         * Every component this app can install.
+         *
+         * Exists so something can iterate them: `PinnedReleaseTest` checks each
+         * pin against what is actually published, which nothing did until a
+         * wrong `archiveBytes` shipped and made a component impossible to
+         * install. `FINDINGS.md`. Add new components here, or they go
+         * unchecked.
+         */
+        val ALL: List<ToolchainComponent> = listOf(
+            ANDROID_PLATFORM,
+            ANDROID_BUILD_TOOLS,
+            KOTLIN_COMPILER,
+            KOTLIN_ANALYSIS_API,
+            GRADLE,
+        )
     }
 }

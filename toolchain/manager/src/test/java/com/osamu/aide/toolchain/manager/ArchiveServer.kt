@@ -30,6 +30,14 @@ class ArchiveServer(
     /** Set to cut every response short, as a dropped connection would. */
     var truncateAfter: Int? = null
 
+    /**
+     * Answer a Range that starts at or past the end with **416**, as a real
+     * server does. Without it the handler would slice an empty body and reply
+     * 206, which is the one case that cannot happen in the wild and hides the
+     * one that bit us. See `ComponentInstallerTest`.
+     */
+    var answers416BeyondEnd: Boolean = true
+
     var requests: Int = 0
         private set
 
@@ -81,6 +89,12 @@ class ArchiveServer(
             ?.substringBefore('-')
             ?.toIntOrNull()
             ?: 0
+
+        if (from >= archive.size && answers416BeyondEnd) {
+            exchange.sendResponseHeaders(416, -1)
+            exchange.close()
+            return
+        }
 
         val body = archive.copyOfRange(from, archive.size)
         val sent = truncateAfter?.coerceAtMost(body.size) ?: body.size

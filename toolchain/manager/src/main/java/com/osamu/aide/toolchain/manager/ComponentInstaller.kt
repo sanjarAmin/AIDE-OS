@@ -110,13 +110,30 @@ class ComponentInstaller(
      * has to agree, though -- a 200 where a 206 was asked for means it ignored
      * the range and is sending the whole file, so the partial file is discarded
      * rather than appended to.
+     *
+     * **The size to trust is the server's, not the pin's.** `archiveBytes` was
+     * used as the completeness gate, and when it disagreed with the published
+     * artifact the result was an install that could never succeed *and could
+     * never be retried*:
+     *
+     *  1. the whole file arrives, is shorter than the pin, and is reported as
+     *     "the connection was lost";
+     *  2. the partial is kept, because keeping it is what makes resume work;
+     *  3. every retry asks for `bytes=<full length>-`, which the server answers
+     *     **416**, for ever.
+     *
+     * That shipped: the pin said 1,991,075 bytes and the release holds
+     * 1,988,723. So `Content-Length` decides completeness, the pin is only what
+     * the progress bar counts against, and **the sha1 remains the one gate on
+     * correctness** -- it always was the only one that could be. A 416 now
+     * discards the partial and starts over rather than becoming permanent.
+     * FINDINGS.md §27.
      */
     private suspend fun FlowCollector<InstallProgress>.download(
         component: ToolchainComponent,
         target: File,
     ) {
         val existing = if (target.isFile) target.length() else 0L
-        if (existing >= component.archiveBytes) return
 
         val connection = (URL(component.archiveUrl).openConnection() as HttpURLConnection).apply {
             connectTimeout = CONNECT_TIMEOUT_MILLIS
@@ -126,6 +143,15 @@ class ComponentInstaller(
 
         try {
             val resumed = connection.responseCode == HTTP_PARTIAL_CONTENT
+            if (connection.responseCode == HTTP_RANGE_NOT_SATISFIABLE && existing > 0) {
+                // The partial is at least as long as what the server has, so it
+                // can never be resumed. Throw it away and fetch the whole file;
+                // without this the component is unreachable for ever.
+                connection.disconnect()
+                target.delete()
+                download(component, target)
+                return
+            }
             if (connection.responseCode != HTTP_OK && !resumed) {
                 throw IOException(
                     "${component.displayName} could not be downloaded " +
@@ -134,7 +160,10 @@ class ComponentInstaller(
             }
 
             val from = if (resumed) existing else 0L
-            val total = component.archiveBytes
+            // What the server says it is sending, plus what is already here.
+            // Falls back to the pin only when the server declines to say.
+            val body = connection.contentLengthLong
+            val total = if (body > 0) from + body else component.archiveBytes
 
             connection.inputStream.use { input ->
                 RandomAccessFile(target, "rw").use { output ->
@@ -408,5 +437,11 @@ class ComponentInstaller(
         const val READ_TIMEOUT_MILLIS = 60_000
         const val HTTP_OK = 200
         const val HTTP_PARTIAL_CONTENT = 206
+
+        /**
+         * "Range Not Satisfiable" -- asked to resume from at or past the end.
+         * Recoverable exactly once, by discarding the partial. See [download].
+         */
+        const val HTTP_RANGE_NOT_SATISFIABLE = 416
     }
 }
