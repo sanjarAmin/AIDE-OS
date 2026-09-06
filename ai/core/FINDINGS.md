@@ -556,6 +556,47 @@ now wraps it in a `verticalScroll` and reaches nodes with `performScrollTo()`.
 **A test that composes a section in a container the app never uses is testing a
 layout that does not ship**, and this is how that difference surfaces.
 
+## 19. A provider checks the model before it checks the quota, and that is a free test
+
+Measured against both APIs with keys whose accounts have no credit:
+
+| request | answer |
+|---|---|
+| `gpt-5.6` | `429 credit_balance_exhausted` |
+| `gemini-3.8-flash` | `429 RESOURCE_EXHAUSTED` |
+| `definitely-not-a-model-xyz` | `404 model_not_found` / `404 NOT_FOUND` |
+| `gemini-2.5-pro` | `404 "no longer available to new users"` |
+
+**Validation happens before billing.** So the question that has bitten this
+project twice — §14 (a renamed id) and §15 (a listed id that cannot be called)
+— can be answered **without paying for a single token**:
+`every_offered_model_is_one_the_api_knows` probes every id in the picker and
+fails only on a 404, in both `GeminiOnDeviceTest` and `OpenAiOnDeviceTest`.
+Those two tests pass today on two exhausted accounts. The stronger claim, that
+a model *answers*, still needs credit and still skips.
+
+`LiveApiOutcome` holds the classifier, and
+`a_retired_model_is_told_apart_from_an_unpayable_one` is its negative control:
+on a credit-less account every live model reports the same 429, so without a
+known-retired id to test against, nothing would notice if the distinction
+stopped working. It was also verified the blunt way — adding `gemini-2.5-pro`
+to the shipped picker made the test fail and name it.
+
+**An empty 404 is not a missing model.** Probing several ids back to back
+earned a burst of `HTTP 404` with a **zero-length body**, `gemini-3.8-flash`
+included, which had answered 429 seconds earlier and did so again seconds
+later. That is Google's rate limiter, and read naively it would fail the suite
+by declaring every model dead. A genuine model-not-found always names the model
+in its body, so an empty one is classified `Inconclusive`, and the probes are
+spaced.
+
+**`models.list` is wrong in both directions.** §15 established that a listed
+model may not be callable. The reverse also holds: `gpt-5.6` — the OpenAI
+default — is **absent** from `/v1/models`, while `gpt-5.6-sol`, `-terra` and
+`-luna` are all present. It is nonetheless real, and the table above is how
+that was settled rather than by guessing which way the alias resolves. **The
+list is not the authority; the endpoint you actually call is.**
+
 ## Still open — needs a real API key
 
 Two questions are semantics rather than platform, and a local fake must not be
@@ -594,7 +635,17 @@ one that matters most:
   list that had been answering an hour earlier. Anything else, a 400 on our
   JSON or a 404 on a retired id, stays a failure: those are the questions the
   suite exists to ask.
-- **No request has ever reached OpenAI.** Every test of that client runs against
+- **OpenAI: the test exists now, and the account is exhausted too.**
+  `OpenAiOnDeviceTest` drives `OpenAiClient` against the live API, one question
+  per test, and skips on `429 insufficient_quota`. A real key **authenticates**
+  — a rejected key would 401, which the suite deliberately does not skip — and
+  every model in the picker is known to the API (§19). What is still unproven is
+  whether OpenAI accepts the request shape the client builds; `max_tokens` in
+  particular is the parameter OpenAI has been retiring in favour of
+  `max_completion_tokens`, and nothing here would notice. The paragraph below
+  described the state before that test existed:
+
+- **No request had ever reached OpenAI.** Every test of that client ran against
   `ScriptedProviderApi`, which proves the JSON matches *our reading of the spec*
   and nothing about whether the provider accepts it. One test modelled on
   `GeminiOnDeviceTest`, skipping without a key, is the cheapest way to close it.
