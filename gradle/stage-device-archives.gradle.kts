@@ -58,16 +58,6 @@ val stageDeviceArchives by tasks.registering {
         .split(File.pathSeparator)
         .filter { it.isNotBlank() }
     val adb = "${System.getenv("ANDROID_SDK_ROOT") ?: "$home/Android/Sdk"}/platform-tools/adb"
-    // An entry is either `name.tar`, or `local.tar=name-on-device.tar` where
-    // the two differ. `:engine:gradle` needs the second: the archive that works
-    // is the medium trim of build-tools, and the test asks for it as
-    // `sdk-extra.tar`.
-    val resolved: Map<String, String> = archives.associate { entry ->
-        val local = entry.substringBefore('=')
-        val onDevice = entry.substringAfter('=', local)
-        onDevice to searchPath.map { File(it, local) }
-            .firstOrNull { it.isFile }?.absolutePath.orEmpty()
-    }
     val searched = searchPath.joinToString(File.pathSeparator)
 
     description = "Pushes $archives to $devicePackage on the device."
@@ -79,6 +69,26 @@ val stageDeviceArchives by tasks.registering {
     outputs.upToDateWhen { false }
 
     doLast {
+        // **Resolved here, not at configuration time.** Most entries name a
+        // file that already exists on the search path, but one is produced by
+        // another task in this build -- an AAR's `classes.jar`, unpacked from a
+        // Maven artifact -- and at configuration time that file does not exist
+        // yet. Checking then would silently classify it as missing.
+        //
+        // An entry is `name.tar`, or `local=name-on-device` where the two
+        // differ, and the local half may be a bare name looked up on the search
+        // path or a path of its own.
+        val resolved: Map<String, String> = archives.associate { entry ->
+            val local = entry.substringBefore('=')
+            val onDevice = File(entry.substringAfter('=', local)).name
+            val source = if (local.contains('/')) {
+                File(local).takeIf { it.isFile }
+            } else {
+                searchPath.map { File(it, local) }.firstOrNull { it.isFile }
+            }
+            onDevice to source?.absolutePath.orEmpty()
+        }
+
         val missing = resolved.filterValues { it.isEmpty() }.keys
         if (!File(adb).isFile || missing.isNotEmpty()) {
             logger.warn(

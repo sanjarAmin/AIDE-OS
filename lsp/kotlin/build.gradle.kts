@@ -1,3 +1,4 @@
+import java.util.zip.ZipFile
 plugins {
     alias(libs.plugins.android.library)
 }
@@ -113,3 +114,80 @@ val stageKotlinAnalysisArchives by tasks.registering {
 tasks.matching { it.name == "connectedDebugAndroidTest" }.configureEach {
     dependsOn(stageKotlinAnalysisArchives)
 }
+
+/**
+ * A real AAR, for the tests that ask whether an AAR works.
+ *
+ * `tools/analysisapi/FINDINGS.md` §24 recorded that the `@kotlin.Metadata` scan
+ * had only ever run against `kotlin-stdlib`, and that a project's AARs were
+ * covered "by construction" -- the claim, not the evidence. `core-ktx` is the
+ * right subject: a small Kotlin library whose whole content is extension
+ * functions on platform types, carrying under `META-INF` the `.kotlin_module`
+ * the scan requires. (Written without the glob: a literal slash-star inside a
+ * KDoc opens a *nested* block comment, and Kotlin nests them -- the closing
+ * marker then ends the inner one and the rest of the file is silently comment.
+ * It cost an hour here, and `tools/analysisapi/FINDINGS.md` had already
+ * recorded it once.)
+ *
+ * Resolved through Gradle rather than read out of a developer's cache, so it
+ * reproduces on a clean machine, and `isTransitive = false` because only this
+ * one artifact is wanted -- not the graph beneath it.
+ */
+val aarFixture: Configuration by configurations.creating { isTransitive = false }
+
+dependencies {
+    aarFixture("androidx.core:core-ktx:1.16.0@aar")
+}
+
+val aarFixtureJar = layout.buildDirectory.file("aar-fixture/core-ktx.jar")
+
+val extractAarFixture by tasks.registering {
+    description = "Unpacks classes.jar out of the core-ktx AAR for the device tests."
+    // A `Configuration` itself cannot be serialized into the configuration
+    // cache; a FileCollection built from it can, so that is what doLast sees.
+    val aar = files(aarFixture)
+    val output = aarFixtureJar
+    inputs.files(aar)
+    outputs.file(output)
+    doLast {
+        val target = output.get().asFile
+        target.parentFile.mkdirs()
+        val archive = aar.singleFile
+        // `java.util.zip...` fully qualified does not resolve here: `java` is the
+        // Java plugin extension in a Kotlin DSL script. Hence the import.
+        ZipFile(archive).use { zip ->
+            val entry = requireNotNull(zip.getEntry("classes.jar")) {
+                "no classes.jar in $archive"
+            }
+            zip.getInputStream(entry).use { input ->
+                target.outputStream().use { input.copyTo(it) }
+            }
+        }
+    }
+}
+
+// The instrumented tests here need real toolchain archives on the device, and
+// without them they skip -- which reports as OK.
+extra["deviceTestPackage"] = "com.osamu.aide.lsp.kotlin.test"
+/**
+ * `android.jar` goes with it, because that is the classpath the app builds.
+ *
+ * `core-ktx`'s extensions hang off `android.view.View` and `android.content
+ * .Context`, so without the platform there is no receiver for them to apply to
+ * and the test would prove nothing about the AAR. `LanguageServices` puts the
+ * platform first for exactly this reason.
+ */
+val platformJar: String = File("${System.getenv("ANDROID_SDK_ROOT") ?: "${System.getProperty("user.home")}/Android/Sdk"}/platforms")
+    .listFiles()
+    ?.filter { File(it, "android.jar").isFile }
+    ?.maxByOrNull { it.name }
+    ?.let { File(it, "android.jar").absolutePath }
+    .orEmpty()
+
+extra["deviceArchives"] = listOf(
+    "${aarFixtureJar.get().asFile}=core-ktx.jar",
+    "$platformJar=android.jar",
+)
+apply(from = rootProject.file("gradle/stage-device-archives.gradle.kts"))
+
+tasks.named("stageDeviceArchives") { dependsOn(extractAarFixture) }

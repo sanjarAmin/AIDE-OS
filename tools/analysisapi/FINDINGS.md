@@ -1229,14 +1229,83 @@ Giving up costs nothing: a user who is already typing warms the session with
 their own queries, which is what happened before any of this existed. **The
 warm-up only ever spends time nobody was waiting on.**
 
+## 26. AARs work, cross-module works, and both were nearly missed by the harness
+
+§24 listed two things as untried: an **AAR** on the session's classpath, and a
+reference **across modules**. §21 had claimed AARs were covered "by
+construction" -- the scan takes whatever jars it is given, and an AAR's
+`classes.jar` is a jar -- and §24 was right to call that the claim rather than
+the evidence. `KotlinAarAndModulesTest` is the evidence, against
+`androidx.core:core-ktx` resolved by Gradle and unpacked into a fixture, with
+`android.jar` beside it because that is the classpath the app builds.
+
+**Both work.**
+
+| asked | answer |
+|---|---|
+| an extension declared in an AAR is offered | `doOnLayout((View) -> Unit)` |
+| an AAR extension property typechecks | `marginStart` is an `Int`, and assigning it to a `String` is an error |
+| an AAR extension that does not apply is withheld | `getSystemService` extends `Context`, and a `View` is not offered it |
+| a reference into another module resolves | `greet(String)`, from `lib`, completed in `app` |
+| a call across modules typechecks | no diagnostic |
+
+**Cross-module resolution works, and not because modules are supported.**
+`ensureOpen` looks for `src/main/java` and `src/main/kotlin` *directly under the
+project root*; a multi-module layout has neither, so it falls back to the root
+itself as one source root. Both modules' sources therefore land in a single
+module and every reference between them resolves -- including references Gradle
+would reject, because nothing here knows that `:app` depends on `:lib` rather
+than the reverse. For an editor that is the right trade, and the build still
+refuses an undeclared dependency. It is written down because a reader would
+otherwise assume module boundaries were being enforced.
+
+**An extension imported by name is not offered.** `indexedTopLevel` narrows the
+index to visible packages, and builds that list from Kotlin's default imports
+plus the file's `isAllUnder` directives. A single-name import names a callable,
+not a package, so it contributes nothing:
+
+```kotlin
+import androidx.core.view.*             // doOnLayout is offered
+import androidx.core.view.doOnLayout    // it resolves, and is not offered
+```
+
+The symbol is reachable either way -- the front end typechecks `marginStart`
+through the by-name import -- so this is completion alone. The fix is to take
+the parent package of a single-name import as visible too;
+`an_extension_imported_by_name_is_not_offered` pins the current behaviour and
+says to delete itself when that lands.
+
+**Two harness bugs surfaced, and both hid as something else.**
+
+*The test process had no `largeHeap`.* A session with `android.jar` on the
+classpath does not fit the default 192 MB, and the suite died with
+`Failed to allocate a 672244 byte allocation ... growth limit 201326592`. The
+damage did not land where the memory went: the tests that OOMed were the *next*
+ones, whose sessions then failed to open and answered every query with an empty
+list -- a legitimate answer under `LanguageService`, so nothing threw, and it
+read as extensions having stopped working. `:app` has always set `largeHeap`,
+so only the harness was affected, by being stricter than the environment the
+service actually runs in. `:engine:fast`'s test manifest carries the same fix,
+found the same way. **This is R3 in a new place**, and it says the Analysis API
+session is a 192 MB-class object once the platform is on its classpath.
+
+*A teardown could close the next session.* §25 moved `close()` off the caller's
+thread, which left the teardown and the next service's `open` racing for the
+process-wide lock; the lock says only that they do not overlap, not which goes
+first. Losing that race closes a session the new service has just opened.
+`close()` now sets a flag synchronously and either the teardown coroutine or
+`ensureOpen` settles it, whichever reaches the lock first, so ordering no longer
+depends on the race. **Both bugs produce empty answers rather than errors**,
+which is the failure mode this whole component is built to have, and the reason
+neither was noticed until a second test class started opening sessions.
+
 ## 24. What is still unknown
 
 Honest limits of what has been established. None of this is evidence yet.
 
-- **The metadata scan has only been run against kotlin-stdlib.** §21 covers a
-  project's AARs by construction -- the scan takes whatever jars the session is
-  given -- but no test has opened a session with an AAR on the classpath, so
-  "by construction" is the claim and not yet the evidence.
+- ~~The metadata scan has only been run against kotlin-stdlib.~~ **Done**: it
+  reads `androidx.core:core-ktx` out of an AAR and offers `doOnLayout` on a
+  `View`. §26.
 - ~~Kotlin completion is ~220 ms against a 200 ms budget.~~ **Resolved, and the
   premise was wrong**: 220 ms was the warm-up plateau, measured two to five
   calls after the session was built. At rest a completion is ~107 ms, and the
@@ -1244,10 +1313,11 @@ Honest limits of what has been established. None of this is evidence yet.
   near that rather than at 200 ms. §25. What remains true is that Java is
   faster at 76 ms, and that the cost is library resolution rather than
   extensions.
-- **AARs and cross-module references are still untried.** `android.jar` works
-  (§18) and so does kotlin-stdlib; a real dependency graph, with AARs unpacked
-  by `:engine:deps`, is wired through `LanguageServices` but has never been
-  exercised.
+- ~~AARs and cross-module references are still untried.~~ **Done**, §26 -- with
+  one part still outstanding: the AAR reaches the session as a `classes.jar`
+  staged by the build, not as one `:engine:deps` unpacked at runtime. The
+  resolver's own suite covers the unpacking; what remains unproven is the two
+  joined end to end through `LanguageServices` in `:app`.
 - **Session build time with `android.jar` is unmeasured.** §13's 1808 ms is a
   trivial module with no libraries. With the platform it is visibly several
   seconds. It is paid when the file opens -- diagnostics run then, and that is

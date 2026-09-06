@@ -248,7 +248,8 @@ class KotlinLanguageService(
         if (!opened && warmUp == null) return
         warmUp?.cancel()
         opened = false
-        scope.launch { lock.withLock { runCatching { closeMethod.invoke(null) } } }
+        teardownPending = true
+        scope.launch { lock.withLock { closeAbandonedSession() } }
     }
 
     private companion object {
@@ -275,6 +276,25 @@ class KotlinLanguageService(
          * teardown against the next session's first query.
          */
         val lock = Mutex()
+
+        /**
+         * A session has been abandoned and not yet closed.
+         *
+         * [close] does its work on a coroutine so the caller is not blocked,
+         * which means the teardown and the *next* service's open are two jobs
+         * racing for [lock] -- and the lock says only that they do not overlap,
+         * not which goes first. Losing that race closes the session the new
+         * service has just opened, and every query after it answers nothing.
+         * Three tests in the neighbouring suite started failing with empty
+         * results the moment a second test class began opening sessions.
+         *
+         * So the flag is set synchronously in [close], and whoever reaches the
+         * lock first settles it: the teardown coroutine if it wins, and
+         * [ensureOpen] itself if it does not. Ordering no longer depends on the
+         * race.
+         */
+        @Volatile
+        var teardownPending = false
 
         /**
          * Enough to reach the flat part of the curve above, and no more. The
@@ -314,6 +334,8 @@ class KotlinLanguageService(
     private fun ensureOpen(): Boolean {
         if (opened) return true
         openFailure?.let { return false }
+        // Before building one, finish closing any the last service left behind.
+        closeAbandonedSession()
         val roots = listOf(File(projectRoot, "src/main/java"), File(projectRoot, "src/main/kotlin"))
             .filter { it.isDirectory }
             .ifEmpty { listOf(projectRoot) }
@@ -336,6 +358,15 @@ class KotlinLanguageService(
         opened = true
         warmUp()
         return true
+    }
+
+    /**
+     * Closes a session abandoned by a previous service. **Call holding [lock].**
+     */
+    private fun closeAbandonedSession() {
+        if (!teardownPending) return
+        teardownPending = false
+        runCatching { closeMethod.invoke(null) }
     }
 
     /**
