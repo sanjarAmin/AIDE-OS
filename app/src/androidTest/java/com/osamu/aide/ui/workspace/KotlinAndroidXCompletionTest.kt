@@ -164,6 +164,85 @@ class KotlinAndroidXCompletionTest {
         )
     }
 
+    /**
+     * Two Kotlin files in one project, each answering about itself.
+     *
+     * `tools/analysisapi/FINDINGS.md` §24 has said since the module was written
+     * that only one file in one project had ever been exercised. The session is
+     * resident and shared, and each request builds a *dangling* file for the
+     * buffer it was given, so answering about the wrong one is a plausible
+     * failure -- and the sibling's declarations must still resolve, because
+     * they are in the same source root.
+     */
+    @Test
+    fun two_kotlin_files_each_answer_about_themselves() = runBlocking {
+        val service = services.serviceFor(sourceFile(), projectRoot!!, emptyList())
+        assumeTrue("no Kotlin service; components not installed", service != null)
+
+        val dir = File(projectRoot!!, "src/main/kotlin/com/example")
+        val first = File(dir, "First.kt")
+        val second = File(dir, "Second.kt")
+        first.writeText("package com.example\n\nfun declaredInFirst(): Int = 1\n")
+        second.writeText("package com.example\n\nfun declaredInSecond(): Int = 2\n")
+
+        val askFirst = "package com.example\n\nfun a() {\n    declaredIn\n}"
+        val askSecond = "package com.example\n\nfun b() {\n    declaredIn\n}"
+        val cursor = { t: String -> t.lastIndexOf("declaredIn") + "declaredIn".length }
+
+        val fromFirst = service!!.complete(first, askFirst, cursor(askFirst)).map { it.label }
+        val fromSecond = service.complete(second, askSecond, cursor(askSecond)).map { it.label }
+        // Back to the first, because a service that answered correctly once and
+        // then cached the wrong buffer would pass a one-way test.
+        val backToFirst = service.complete(first, askFirst, cursor(askFirst)).map { it.label }
+        Log.i(TAG, "first=$fromFirst second=$fromSecond back=$backToFirst")
+
+        for ((where, labels) in listOf("first" to fromFirst, "second" to fromSecond, "back" to backToFirst)) {
+            assertTrue(
+                "both siblings share a source root, so both declarations should be " +
+                    "visible from $where: $labels",
+                labels.any { it.startsWith("declaredInFirst") } &&
+                    labels.any { it.startsWith("declaredInSecond") },
+            )
+        }
+    }
+
+    /**
+     * A Kotlin tab and a Java tab, each routed to its own service.
+     *
+     * `LanguageServices` picks per *file*, and its own comment records why: a
+     * completion source that captured one service would answer for both tabs
+     * with whichever it happened to be handed. Both languages resolve against
+     * `android.jar`, so this also says the two services coexist -- javac warm in
+     * one and an Analysis API session in the other, in one process.
+     */
+    @Test
+    fun a_kotlin_tab_and_a_java_tab_get_different_services() = runBlocking {
+        val kotlinFile = File(projectRoot!!, "src/main/kotlin/com/example/Main.kt")
+            .apply { parentFile?.mkdirs(); writeText("package com.example\n") }
+        val javaFile = File(projectRoot!!, "src/main/java/com/example/Legacy.java")
+            .apply { parentFile?.mkdirs(); writeText("package com.example;\npublic class Legacy {}\n") }
+
+        val forKotlin = services.serviceFor(kotlinFile, projectRoot!!, emptyList())
+        val forJava = services.serviceFor(javaFile, projectRoot!!, emptyList())
+        assumeTrue("no Kotlin service; components not installed", forKotlin != null)
+        assumeTrue("no Java service; no platform", forJava != null)
+
+        Log.i(TAG, "kotlin -> ${forKotlin!!.javaClass.simpleName}, java -> ${forJava!!.javaClass.simpleName}")
+        assertTrue("the .kt file was not routed to the Kotlin service", forKotlin.handles(kotlinFile))
+        assertTrue("the .java file was not routed to the Java service", forJava.handles(javaFile))
+        assertTrue(
+            "one service answered for both tabs: ${forKotlin.javaClass.simpleName}",
+            forKotlin.javaClass != forJava.javaClass,
+        )
+
+        // And both still answer, in the same process, one after the other.
+        val kt = "package com.example\n\nfun f() {\n    val s: String = \"x\"\n    s.upperc\n}"
+        val ktLabels = forKotlin.complete(kotlinFile, kt, kt.lastIndexOf("s.upperc") + "s.upperc".length)
+            .map { it.label }
+        Log.i(TAG, "kotlin tab: $ktLabels")
+        assertTrue("the Kotlin tab stopped answering: $ktLabels", ktLabels.any { it.startsWith("uppercase") })
+    }
+
     private companion object {
         const val TAG = "KotlinAndroidXCompletion"
         const val CURSOR = "/*^*/"
