@@ -125,3 +125,17 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }
+
+// KotlinAndroidXCompletionTest drives the whole Kotlin path -- Maven to AAR to
+// session to completion -- and needs the two Kotlin components on the device to
+// do it. Without them it skips, and a skip reports as OK.
+// The **app** package, not `.test`. For a library module the two are the same
+// process and either works, but here the instrumentation's own context returns
+// null from getExternalFilesDir, so the only directory the test can read is the
+// one belonging to the app under test.
+extra["deviceTestPackage"] = "com.osamu.aide"
+extra["deviceArchives"] = listOf(
+    "kotlinc-archive.zip=kotlin-compiler-2.2.10.zip",
+    "kotlin-analysis-2.2.10.zip",
+)
+apply(from = rootProject.file("gradle/stage-device-archives.gradle.kts"))

@@ -53,7 +53,11 @@ val stageDeviceArchives by tasks.registering {
     val home: String = System.getProperty("user.home")
     val searchPath: List<String> = (
         System.getenv("DEVICE_ARCHIVES")
-            ?: "$home/aide-os-spikes/m9/stage:$home/aide-os-spikes/clang-x86_64"
+            ?: listOf(
+                "$home/aide-os-spikes/m9/stage",
+                "$home/aide-os-spikes/clang-x86_64",
+                "$home/aide-os-spikes/analysisapi",
+            ).joinToString(File.pathSeparator)
         )
         .split(File.pathSeparator)
         .filter { it.isNotBlank() }

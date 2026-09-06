@@ -1299,6 +1299,27 @@ reported `enter prefix='doOnL' receiver=androidx.core.view typeNull` and ended
 it in one run. That is worth remembering: the archive can be instrumented, and
 one static field plus reflection is enough.
 
+**And the whole path is joined up.** The tests above hand the session a
+`classes.jar` the build unpacked, which left the last link unproven: an AAR that
+`:engine:deps` resolves *at runtime*, reaching a session through
+`LanguageServices`, which is what happens when somebody opens a Kotlin file in a
+project with dependencies. `:app`'s `KotlinAndroidXCompletionTest` is that test,
+and it is the Kotlin twin of the `AndroidXCompletionTest` that asks the same of
+the Java service:
+
+```
+classpath: 23 jars
+kotlin androidx proposals: [doOnLayout((View) -> Unit)]
+```
+
+Staging it turned up one thing worth knowing: **the instrumentation's own
+context has no external files directory** in an app-under-test suite.
+`getInstrumentation().context.getExternalFilesDir(null)` returns null, so a
+fixture pushed to the `.test` package is unreachable and the assumption that
+guards it reads "not staged" for ever. Push to the package under test and read
+it through `targetContext`. A library module never meets this, because there the
+two contexts are the same process.
+
 **Handing the session from one project to the next is tested now.**
 `KotlinBackend` holds one session per process, so two `KotlinLanguageService`
 objects are not independent however much they look it, and
@@ -1315,7 +1336,28 @@ after switching projects: [uniqueToTheSecondProject()]
 The last line is the stronger half: the previous project's declaration is
 *absent*, so the session was rebuilt rather than reused.
 
-**Two harness bugs surfaced, and both hid as something else.****Handing the session from one project to the next is tested now.**
+**Two harness bugs surfaced, and both hid as something else.****And the whole path is joined up.** The tests above hand the session a
+`classes.jar` the build unpacked, which left the last link unproven: an AAR that
+`:engine:deps` resolves *at runtime*, reaching a session through
+`LanguageServices`, which is what happens when somebody opens a Kotlin file in a
+project with dependencies. `:app`'s `KotlinAndroidXCompletionTest` is that test,
+and it is the Kotlin twin of the `AndroidXCompletionTest` that asks the same of
+the Java service:
+
+```
+classpath: 23 jars
+kotlin androidx proposals: [doOnLayout((View) -> Unit)]
+```
+
+Staging it turned up one thing worth knowing: **the instrumentation's own
+context has no external files directory** in an app-under-test suite.
+`getInstrumentation().context.getExternalFilesDir(null)` returns null, so a
+fixture pushed to the `.test` package is unreachable and the assumption that
+guards it reads "not staged" for ever. Push to the package under test and read
+it through `targetContext`. A library module never meets this, because there the
+two contexts are the same process.
+
+**Handing the session from one project to the next is tested now.**
 `KotlinBackend` holds one session per process, so two `KotlinLanguageService`
 objects are not independent however much they look it, and
 `LanguageServices` replaces one whenever the project or classpath changes.
@@ -1369,17 +1411,20 @@ Honest limits of what has been established. None of this is evidence yet.
   near that rather than at 200 ms. §25. What remains true is that Java is
   faster at 76 ms, and that the cost is library resolution rather than
   extensions.
-- ~~AARs and cross-module references are still untried.~~ **Done**, §26 -- with
-  one part still outstanding: the AAR reaches the session as a `classes.jar`
-  staged by the build, not as one `:engine:deps` unpacked at runtime. The
-  resolver's own suite covers the unpacking; what remains unproven is the two
-  joined end to end through `LanguageServices` in `:app`.
-- **Session build time with `android.jar` is unmeasured.** §13's 1808 ms is a
-  trivial module with no libraries. With the platform it is visibly several
-  seconds. It is paid when the file opens -- diagnostics run then, and that is
-  what builds the session -- so it lands before the first answer rather than
-  before the first keystroke. §18 on why that distinction was nearly recorded
-  backwards.
+- ~~AARs and cross-module references are still untried.~~ **Done**, §26, and
+  now end to end: `:app`'s `KotlinAndroidXCompletionTest` lets `:engine:deps`
+  resolve `androidx.core:core-ktx` from Maven at runtime -- 23 jars -- unpack
+  the AARs, and reach a Kotlin session through `LanguageServices`, where
+  `doOnLayout` completes. Every step had a test; that one asserts they meet.
+- ~~Session build time with `android.jar` is unmeasured.~~ **Measured**, and it
+  is *seconds*: the emulator builds one in ~2.7 s and the phone in 1.9-3.0 s
+  across five runs, against §13's 1808 ms for a trivial module with no
+  libraries. §25's table has the numbers. It is paid when the file opens --
+  diagnostics run then, and that is what builds the session -- so it lands
+  before the first answer rather than before the first keystroke. §18 on why
+  that distinction was nearly recorded backwards. What is still open is whether
+  it can be moved off that path at all; the warm-up in §25 shortens the queries
+  after the build, not the build.
 - ~~Nothing has installed the component through the app.~~ Done: on a device
   with no components at all, opening a Kotlin file offered the compiler, then
   the Analysis API, and completion answered `uppercase()` and
