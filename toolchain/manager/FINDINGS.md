@@ -150,6 +150,15 @@ here -- rebuilding identical source twice gives the same byte count and a
 different sha1 -- so pinning a locally built archive and uploading a separately
 built one produces exactly this failure.
 
+**The gap was shaped exactly like the bug.** `ToolchainManagerTest` has a
+download test for every component -- platform, build tools, compiler, Gradle,
+the JDK, the native toolchain -- and all eleven pass against the real network.
+The one component with no such test is the one that was broken.
+`installs_the_kotlin_analysis_api_from_this_projects_releases` is the missing
+sibling; it fails today, for the right reason, and it checks the archive is
+*current* rather than merely valid, since the published one is a well-formed zip
+whose backend has no `definitionAt`.
+
 **The lesson worth keeping is about the test gap, not the number.** Every test
 of this component stages its archive, which is right for speed and for working
 offline, and means **nothing exercises the pin**. A test that fetches the real

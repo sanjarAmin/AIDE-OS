@@ -68,6 +68,55 @@ class ToolchainManagerTest {
     }
 
     /**
+     * The Analysis API component, which is the sibling this suite never had.
+     *
+     * **Its absence is why a broken release shipped.** Every other component
+     * has a download test here -- platform, build tools, compiler, Gradle, the
+     * JDK, the native toolchain -- and all of them pass. The one with no test
+     * was pinned at a size and digest that match no published artifact, so it
+     * could not be installed at all, and a 560-test sweep stayed green because
+     * every *other* test of this component stages its archive by hand.
+     * `FINDINGS.md` has the mechanism and the fix.
+     *
+     * **This test is expected to fail until the release asset is rebuilt and
+     * re-uploaded**, which is the honest state of the world rather than a
+     * defect in the test. It is behind the same opt-in flag as its siblings, so
+     * the default sweep is unaffected. When it passes, the component installs.
+     */
+    @Test
+    fun installs_the_kotlin_analysis_api_from_this_projects_releases() = runBlocking {
+        val component = ToolchainComponent.KOTLIN_ANALYSIS_API
+
+        val progress = manager.install(component).toList()
+
+        val last = progress.last()
+        assertTrue(
+            "install failed: $last -- if this says the download was corrupt, the " +
+                "published asset does not match the pin; see FINDINGS.md",
+            last is InstallProgress.Installed,
+        )
+
+        val api = manager.storage.fileFor(component, "analysis-api.jar")
+        val backend = manager.storage.fileFor(component, "analysis-backend.jar")
+        assertTrue("analysis-api.jar was not installed", api.isFile)
+        assertTrue("analysis-backend.jar was not installed", backend.isFile)
+
+        // Usable, not merely present, and specifically **current**: the archive
+        // that was published carries a backend with no `definitionAt`, so a
+        // present-and-valid zip is not enough to say the component works.
+        ZipFile(backend).use { zip ->
+            val dex = zip.entries().asSequence().firstOrNull { it.name.endsWith(".dex") }
+            assertTrue("analysis-backend.jar carries no dex", dex != null)
+            val bytes = zip.getInputStream(dex).readBytes().toString(Charsets.ISO_8859_1)
+            assertTrue(
+                "the published backend predates definitionAt, so go-to-definition " +
+                    "would fail at construction",
+                bytes.contains("definitionAt"),
+            )
+        }
+    }
+
+    /**
      * The Kotlin compiler, downloaded from this project's own releases.
      *
      * Unlike the platform this archive is ours, and the whole point of hosting
