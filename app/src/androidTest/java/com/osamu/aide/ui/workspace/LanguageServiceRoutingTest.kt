@@ -1,5 +1,6 @@
 package com.osamu.aide.ui.workspace
 
+import android.content.ContextWrapper
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import android.os.Build
 import androidx.test.platform.app.InstrumentationRegistry
@@ -174,14 +175,32 @@ class LanguageServiceRoutingTest {
      */
     @Test
     fun kotlin_gets_no_service_while_its_archives_are_not_installed() {
+        // **The absence is built, not assumed.** This used to skip when the
+        // archives happened to be installed, which came true the moment another
+        // suite in this module started staging them -- and a test that skips
+        // reports as OK. A toolchain rooted at an empty directory is the same
+        // device state the assumption was hoping for, without hoping.
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        assumeTrue(
-            "the Kotlin analysis archives are installed, so this no longer holds",
-            ToolchainManager(context, DefaultDispatcherProvider())
-                .kotlinAnalysisArchives() == null,
+        val dispatchers = DefaultDispatcherProvider()
+        val bare = object : ContextWrapper(context) {
+            private val empty = File(context.cacheDir, "no-toolchains-${System.nanoTime()}")
+                .apply { mkdirs() }
+
+            override fun getFilesDir(): File = empty
+        }
+        val withoutArchives = LanguageServices(
+            native = NativeToolchainProvider(bare, dispatchers),
+            toolchain = ToolchainManager(bare, dispatchers),
+            dispatchers = dispatchers,
+            buildOutputRoot = File(context.cacheDir, "builds-routing-bare"),
         )
 
-        assertNull(services.serviceFor(File(project, "src/main/kotlin/Main.kt"), project))
-        assertNull(services.serviceFor(File(project, "build.gradle.kts"), project))
+        assertNull(
+            "Kotlin was routed to a service despite no installed component",
+            withoutArchives.serviceFor(File(project, "src/main/kotlin/Main.kt"), project),
+        )
+        assertNull(
+            withoutArchives.serviceFor(File(project, "build.gradle.kts"), project),
+        )
     }
 }
