@@ -365,6 +365,105 @@ class KotlinAarAndModulesTest {
         )
     }
 
+    // -- handing the session from one project to the next --------------------
+
+    /**
+     * A second project answers immediately after the first is closed.
+     *
+     * `LanguageServices` closes the old service and builds a new one whenever
+     * the project or the classpath changes, and `KotlinBackend` holds **one
+     * session per process** -- so the two are not independent, however much the
+     * service objects look like they are. §25 moved the teardown off the
+     * caller's thread to keep `onCleared` from blocking the UI, which left the
+     * teardown and the next `open` racing for the process-wide lock; whoever
+     * lost, the result was a session closed underneath the service that had
+     * just opened it, and every query after it answering an empty list.
+     *
+     * Closed and reopened back to back here, with nothing in between, because
+     * a delay is what would hide it. §26.
+     */
+    @Test
+    fun a_new_project_answers_right_after_the_previous_one_closes() = runBlocking {
+        val first = File(context.cacheDir, "handoff-a-${System.nanoTime()}")
+        File(first, "src/main/kotlin").mkdirs()
+        val alpha = File(first, "src/main/kotlin/Alpha.kt")
+        alpha.writeText("package a\n\nfun alphaOnly(): Int = 1\n")
+
+        val second = File(context.cacheDir, "handoff-b-${System.nanoTime()}")
+        File(second, "src/main/kotlin").mkdirs()
+        val beta = File(second, "src/main/kotlin/Beta.kt")
+        beta.writeText("package b\n\nfun betaOnly(): Int = 2\n")
+        projectRoot = second
+
+        val callerA = "package a\n\nfun call() {\n    alphaOn\n}"
+        val serviceA = KotlinLanguageService(archives, first, dispatchers, classpath)
+        val fromA = serviceA.complete(alpha, callerA, cursorAfter(callerA, "alphaOn")).map { it.label }
+        Log.i(TAG, "handoff, first project: $fromA")
+        assertTrue("the first project did not answer: $fromA", fromA.any { it.startsWith("alphaOnly") })
+
+        // No delay: the teardown is in flight while the next session opens.
+        serviceA.close()
+
+        val serviceB = KotlinLanguageService(archives, second, dispatchers, classpath)
+        service = serviceB
+        val callerB = "package b\n\nfun call() {\n    betaOn\n}"
+        val fromB = serviceB.complete(beta, callerB, cursorAfter(callerB, "betaOn")).map { it.label }
+        Log.i(TAG, "handoff, second project: $fromB")
+
+        assertTrue(
+            "the second project answered nothing, which is what a session closed " +
+                "under it looks like: $fromB",
+            fromB.any { it.startsWith("betaOnly") },
+        )
+        first.deleteRecursively()
+        Unit
+    }
+
+    /**
+     * And the new session sees the new project only.
+     *
+     * The stronger half: not merely that something came back, but that it came
+     * from the project actually open. A session left over from the previous
+     * one would still answer -- with the wrong file's declarations.
+     */
+    @Test
+    fun the_new_session_does_not_answer_from_the_old_project() = runBlocking {
+        val first = File(context.cacheDir, "stale-a-${System.nanoTime()}")
+        File(first, "src/main/kotlin").mkdirs()
+        File(first, "src/main/kotlin/Alpha.kt")
+            .writeText("package p\n\nfun uniqueToTheFirstProject(): Int = 1\n")
+
+        val second = File(context.cacheDir, "stale-b-${System.nanoTime()}")
+        File(second, "src/main/kotlin").mkdirs()
+        val beta = File(second, "src/main/kotlin/Beta.kt")
+        beta.writeText("package p\n\nfun uniqueToTheSecondProject(): Int = 2\n")
+        projectRoot = second
+
+        KotlinLanguageService(archives, first, dispatchers, classpath).also {
+            val text = "package p\n\nfun call() {\n    uniqueTo\n}"
+            it.complete(File(first, "src/main/kotlin/Alpha.kt"), text, cursorAfter(text, "uniqueTo"))
+            it.close()
+        }
+
+        val serviceB = KotlinLanguageService(archives, second, dispatchers, classpath)
+        service = serviceB
+        val text = "package p\n\nfun call() {\n    uniqueTo\n}"
+        val labels = serviceB.complete(beta, text, cursorAfter(text, "uniqueTo")).map { it.label }
+        Log.i(TAG, "after switching projects: $labels")
+
+        assertTrue(
+            "the second project's own declaration is missing: $labels",
+            labels.any { it.startsWith("uniqueToTheSecondProject") },
+        )
+        assertTrue(
+            "the previous project's declaration is still visible, so the session " +
+                "was not rebuilt: $labels",
+            labels.none { it.startsWith("uniqueToTheFirstProject") },
+        )
+        first.deleteRecursively()
+        Unit
+    }
+
     private companion object {
         const val TAG = "KotlinAarAndModules"
     }

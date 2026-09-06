@@ -1299,7 +1299,39 @@ reported `enter prefix='doOnL' receiver=androidx.core.view typeNull` and ended
 it in one run. That is worth remembering: the archive can be instrumented, and
 one static field plus reflection is enough.
 
-**Two harness bugs surfaced, and both hid as something else.****Two harness bugs surfaced, and both hid as something else.**
+**Handing the session from one project to the next is tested now.**
+`KotlinBackend` holds one session per process, so two `KotlinLanguageService`
+objects are not independent however much they look it, and
+`LanguageServices` replaces one whenever the project or classpath changes.
+Closed and reopened back to back, with nothing in between because a delay is
+what would hide the race:
+
+```
+handoff, first project:  [alphaOnly()]
+handoff, second project: [betaOnly()]
+after switching projects: [uniqueToTheSecondProject()]
+```
+
+The last line is the stronger half: the previous project's declaration is
+*absent*, so the session was rebuilt rather than reused.
+
+**Two harness bugs surfaced, and both hid as something else.****Handing the session from one project to the next is tested now.**
+`KotlinBackend` holds one session per process, so two `KotlinLanguageService`
+objects are not independent however much they look it, and
+`LanguageServices` replaces one whenever the project or classpath changes.
+Closed and reopened back to back, with nothing in between because a delay is
+what would hide the race:
+
+```
+handoff, first project:  [alphaOnly()]
+handoff, second project: [betaOnly()]
+after switching projects: [uniqueToTheSecondProject()]
+```
+
+The last line is the stronger half: the previous project's declaration is
+*absent*, so the session was rebuilt rather than reused.
+
+**Two harness bugs surfaced, and both hid as something else.**
 
 *The test process had no `largeHeap`.* A session with `android.jar` on the
 classpath does not fit the default 192 MB, and the suite died with
@@ -1357,10 +1389,12 @@ Honest limits of what has been established. None of this is evidence yet.
   app's uid **and** `chcon` to the parent's *full* label, because `restorecon`
   restores `app_data_file:s0` without the per-app category set; §7 is the older
   half of that trap.
-- **Only one file, in one project, has been driven by hand.** §18 is what that
-  found. Nothing has opened a second Kotlin file, switched between them, or
-  changed projects while a session was warm -- and `LanguageServices` closes and
-  rebuilds the service on both.
+- **Only one file, in one project, has been driven *by hand*.** §18 is what that
+  found. Changing projects while a session was warm is no longer untested --
+  §26 closes and reopens back to back, and asserts the new session answers from
+  the new project and no longer from the old -- but nobody has switched between
+  two open Kotlin tabs in the running app, which is the case §18's kind of bug
+  lives in.
 - **The 1808 ms build is on an emulator, with a trivial module.** It will grow
   with the project, and it sits on the path to first completion after opening
   one. Whether it can be moved off that path -- built ahead of time, or in the
