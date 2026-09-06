@@ -320,7 +320,22 @@ The archives are looked for on a `:`-separated `DEVICE_ARCHIVES` path and a
 missing one warns rather than fails, so a fresh clone still runs everything
 else. **They hold Android ELF binaries, so the ABI is the caller's problem**: an
 aarch64 archive on an x86_64 emulator does not skip, it fails at `execve` some
-way from the cause.
+way from the cause. Keep one directory per ABI —
+`clang-x86_64`, `clang-aarch64`, `jvm-aarch64` — and order the path so the
+right one wins. Only `toolchain.tar` and `jvm.tar` need a variant;
+`gradle.tar` and `sdk36.tar` are Java and a jar, and `sdk-extra-med.tar`'s
+build-tools binaries are **Linux/glibc x86-64 on both paths** and cannot run on
+Android at all — AGP only checks that they are present, and `aapt2` is
+overridden to ours.
+
+**Verified on both.** The six staged modules pass on the x86_64 emulator and on
+a phone at API 36 / arm64-v8a: `spike:clang` 8/8, `lsp:native` 7/7,
+`toolchain:native` 17/17, `engine:fast` 39 of 40, and `engine:gradle` 24/24 —
+a real Gradle Android build, on the device, through the automated path rather
+than by hand. `spike:rootfs` still skips its AGP tests for want of
+`gradle.tar` in *its* package; that is deliberate, because those builds are
+what `:engine:gradle` now runs for real, and staging another 325 MB per sweep
+to duplicate them is not worth it.
 - **Golden project corpus** in `:build:fast` instrumentation tests — a fixture set (Java hello-world, Kotlin + AndroidX, Compose app, JNI project, multi-module) built end-to-end on a real device in CI, asserting APK validity and wall-clock build time. This is the regression net for the entire build engine.
 - **Build-time budgets as failing tests**, not aspirations: M2's "< 10s hello-world" is an assertion, and a PR that regresses it fails.
 - **`:lsp` correctness**: fixture files with expected completion/diagnostic positions.
