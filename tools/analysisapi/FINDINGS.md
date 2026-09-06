@@ -1248,6 +1248,7 @@ the evidence. `KotlinAarAndModulesTest` is the evidence, against
 | an AAR extension that does not apply is withheld | `getSystemService` extends `Context`, and a `View` is not offered it |
 | a reference into another module resolves | `greet(String)`, from `lib`, completed in `app` |
 | a call across modules typechecks | no diagnostic |
+| an extension imported by name is offered | yes, and see the retraction below |
 
 **Cross-module resolution works, and not because modules are supported.**
 `ensureOpen` looks for `src/main/java` and `src/main/kotlin` *directly under the
@@ -1259,23 +1260,46 @@ than the reverse. For an editor that is the right trade, and the build still
 refuses an undeclared dependency. It is written down because a reader would
 otherwise assume module boundaries were being enforced.
 
-**An extension imported by name is not offered.** `indexedTopLevel` narrows the
-index to visible packages, and builds that list from Kotlin's default imports
-plus the file's `isAllUnder` directives. A single-name import names a callable,
-not a package, so it contributes nothing:
+**A retracted finding, and the trap that produced it.** This section first
+reported that an extension imported *by name* resolved but was not offered,
+blaming `indexedTopLevel` for building its visible-package list from
+`isAllUnder` directives only. That was wrong, and a test asserting it was
+committed. Extensions imported by name are offered:
 
-```kotlin
-import androidx.core.view.*             // doOnLayout is offered
-import androidx.core.view.doOnLayout    // it resolves, and is not offered
+```
+by-name-import proposals: [doOnLayout((View) -> Unit)]
 ```
 
-The symbol is reachable either way -- the front end typechecks `marginStart`
-through the by-name import -- so this is completion alone. The fix is to take
-the parent package of a single-name import as visible too;
-`an_extension_imported_by_name_is_not_offered` pins the current behaviour and
-says to delete itself when that lands.
+**The cause was the test's own caret.** The offset came from
+`text.indexOf("view.doOnL")`, and the buffer contained
 
-**Two harness bugs surfaced, and both hid as something else.**
+```kotlin
+import androidx.core.view.doOnLayout     // <- contains "view.doOnL"
+...
+    view.doOnL
+```
+
+so the caret landed inside the *import*, where the receiver is
+`androidx.core.view` -- a package, whose `expressionType` is null -- and the
+backend correctly answered nothing. The star-import variant passed only because
+`androidx.core.view.*` does not contain that substring, which made the
+difference look like a rule about star imports.
+
+Two things follow. **A completion test must anchor its caret unambiguously**:
+`cursorAfter` now takes the *last* occurrence, since an import always precedes
+the use it enables. And **an empty completion list is not evidence of a missing
+symbol** -- it is what this component returns for a receiver it cannot type, a
+session that failed to open, and a genuine no-match alike. Three separate
+investigations in this file have started from an empty list and found a
+different cause each time.
+
+The diagnosis needed a channel out of the archive. A `lastVisible` string on
+the backend object, read by reflection through the service's own classloader,
+reported `enter prefix='doOnL' receiver=androidx.core.view typeNull` and ended
+it in one run. That is worth remembering: the archive can be instrumented, and
+one static field plus reflection is enough.
+
+**Two harness bugs surfaced, and both hid as something else.****Two harness bugs surfaced, and both hid as something else.**
 
 *The test process had no `largeHeap`.* A session with `android.jar` on the
 classpath does not fit the default 192 MB, and the suite died with

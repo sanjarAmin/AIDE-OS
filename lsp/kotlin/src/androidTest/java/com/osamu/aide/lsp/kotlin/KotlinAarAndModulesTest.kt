@@ -112,6 +112,21 @@ class KotlinAarAndModulesTest {
         return root
     }
 
+    /**
+     * The caret after the **last** occurrence of [snippet].
+     *
+     * `indexOf` is a trap here and cost real time: an import line contains the
+     * same text as the call it enables, so `indexOf("view.doOnL")` in a buffer
+     * that also says `import androidx.core.view.doOnLayout` puts the caret
+     * inside the import. The backend then sees a receiver of `androidx.core.view`
+     * -- a package, whose `expressionType` is null -- and correctly answers
+     * nothing, which reads exactly like completion being broken. The usage is
+     * always last in these buffers.
+     */
+    private fun cursorAfter(text: String, snippet: String): Int =
+        text.lastIndexOf(snippet).also { require(it >= 0) { "no '$snippet' in buffer" } } +
+            snippet.length
+
     private fun open(root: File): KotlinLanguageService =
         KotlinLanguageService(archives, root, dispatchers, classpath)
             .also { service = it }
@@ -143,7 +158,7 @@ class KotlinAarAndModulesTest {
                 view.doOnL
             }
         """.trimIndent()
-        val offset = text.indexOf("view.doOnL") + "view.doOnL".length
+        val offset = cursorAfter(text, "view.doOnL")
 
         val labels = service.complete(File(projectRoot!!, "src/main/kotlin/Sample.kt"), text, offset)
             .map { it.label }
@@ -174,7 +189,7 @@ class KotlinAarAndModulesTest {
                 view.getSystem
             }
         """.trimIndent()
-        val offset = text.indexOf("view.getSystem") + "view.getSystem".length
+        val offset = cursorAfter(text, "view.getSystem")
 
         val labels = service.complete(File(projectRoot!!, "src/main/kotlin/Sample.kt"), text, offset)
             .map { it.label }
@@ -208,7 +223,7 @@ class KotlinAarAndModulesTest {
      * which is a heavier change than this test.
      */
     @Test
-    fun an_extension_imported_by_name_is_not_offered() = runBlocking {
+    fun an_extension_imported_by_name_is_offered() = runBlocking {
         val service = open(singleModuleProject())
         val text = """
             package sample
@@ -220,16 +235,14 @@ class KotlinAarAndModulesTest {
                 view.doOnL
             }
         """.trimIndent()
-        val offset = text.indexOf("view.doOnL") + "view.doOnL".length
+        val offset = cursorAfter(text, "view.doOnL")
 
         val labels = service.complete(File(projectRoot!!, "src/main/kotlin/Sample.kt"), text, offset)
             .map { it.label }
         Log.i(TAG, "by-name-import proposals: $labels")
-
         assertTrue(
-            "this now works, which is good -- delete this test and its note in " +
-                "FINDINGS section 26: $labels",
-            labels.none { it.startsWith("doOnLayout") },
+            "doOnLayout was imported by name and still not offered: $labels",
+            labels.any { it.startsWith("doOnLayout") },
         )
     }
 
@@ -305,7 +318,7 @@ class KotlinAarAndModulesTest {
         caller.writeText(text)
 
         val service = open(root)
-        val offset = text.indexOf("greeter.gre") + "greeter.gre".length
+        val offset = cursorAfter(text, "greeter.gre")
         val labels = service.complete(caller, text, offset).map { it.label }
         Log.i(TAG, "cross-module proposals: $labels")
 
