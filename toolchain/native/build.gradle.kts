@@ -103,3 +103,10 @@ dependencies {
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.kotlinx.coroutines.test)
 }
+
+// The instrumented tests here need real toolchain archives on the device, and
+// without them they skip -- which reports as OK. See the script for why that
+// mattered enough to automate.
+extra["deviceTestPackage"] = "com.osamu.aide.toolchain.nativetools.test"
+extra["deviceArchives"] = listOf("toolchain.tar", "jvm.tar")
+apply(from = rootProject.file("gradle/stage-device-archives.gradle.kts"))

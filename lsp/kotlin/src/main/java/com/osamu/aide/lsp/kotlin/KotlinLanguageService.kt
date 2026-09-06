@@ -12,11 +12,9 @@ import dalvik.system.PathClassLoader
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -97,16 +95,6 @@ class KotlinLanguageService(
 
     private val stdlib: File = prepared.stdlib
 
-    /**
-     * One query at a time.
-     *
-     * The Analysis API is not thread-safe across sessions, and the editor asks
-     * on every keystroke -- so two requests overlap routinely, and the second
-     * would otherwise resolve against a half-built dangling file. A mutex
-     * rather than a single-threaded dispatcher because the expensive call is
-     * the first one and callers should be able to cancel while it runs.
-     */
-    private val lock = Mutex()
     private var opened = false
 
     /**
@@ -240,30 +228,53 @@ class KotlinLanguageService(
         }
 
     /**
-     * **Waits for the warm-up before it closes the session under it.**
+     * Stops the warm-up and closes the session, **without blocking the caller**.
      *
-     * `scope.cancel()` cancels the coroutine at its next suspension point, and
-     * a reflective call into the backend is not one -- so a warm-up query can
-     * still be running when this returns. Closing the session then hands an API
-     * this file already documents as not thread-safe a resolve and a close at
-     * the same time.
+     * Two constraints pull against each other here. The session may not be
+     * closed while a query is running -- cancelling the warm-up does not
+     * interrupt a reflective call, so one can still be in flight -- and this is
+     * called from `WorkspaceViewModel.onCleared()`, which is **the main
+     * thread**. An earlier version took the lock inline and got the first right
+     * by getting the second wrong: leaving a project could block the UI for a
+     * whole query, and the first query after a session build is measured in
+     * seconds.
      *
-     * Taking the lock is what actually waits, and it waits for at most one
-     * query.
-     *
-     * No measurement forced this; it was found while chasing an apparent
-     * outlier that turned out to be an artifact of sorting, and it is kept
-     * because the race is real whether or not it has been observed. Fixing it
-     * changed no number.
+     * So the wait happens on the compiler dispatcher instead. Ordering against
+     * the *next* session survives because the lock is process-wide: a new
+     * service's first query takes the same mutex and therefore lands after this
+     * teardown, without anything on the main thread waiting for it.
      */
     override fun close() {
-        scope.cancel()
-        runBlocking { lock.withLock { runCatching { closeMethod.invoke(null) } } }
+        if (!opened && warmUp == null) return
+        warmUp?.cancel()
         opened = false
+        scope.launch { lock.withLock { runCatching { closeMethod.invoke(null) } } }
     }
 
     private companion object {
         const val TAG = "KotlinLanguageService"
+
+        /**
+         * One query at a time, **across every instance**.
+         *
+         * The Analysis API is not thread-safe across sessions, and the editor
+         * asks on every keystroke -- so two requests overlap routinely, and the
+         * second would otherwise resolve against a half-built dangling file. A
+         * mutex rather than a single-threaded dispatcher because the expensive
+         * call is the first one and callers should be able to cancel while it
+         * runs.
+         *
+         * **It is `companion` because the thing it guards is `static`.**
+         * `KotlinBackend` holds one session per process -- every call here is
+         * `invoke(null, ...)` -- so a per-instance lock let two services
+         * believe they were excluding each other while both drove the same
+         * session. That window is real: `LanguageServices` closes the old
+         * service and builds a new one whenever the project or classpath
+         * changes, and [close] hands its teardown to a coroutine rather than
+         * blocking the caller. Sharing the lock is what actually orders a
+         * teardown against the next session's first query.
+         */
+        val lock = Mutex()
 
         /**
          * Enough to reach the flat part of the curve above, and no more. The

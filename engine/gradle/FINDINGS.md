@@ -167,6 +167,18 @@ reading AGP's source.
   `skins/`, `templates/`, `core-for-system-modules.jar` and the rest of
   `platforms/android-36/` deleted, the build succeeds. This is why the existing
   platform component — which installs one file — is reusable as-is.
+- **And the suite that proves it had never run.** Until 2026-09-06 the seven
+  tests here that need a JDK skipped in every sweep for want of a staged
+  `jvm.tar`, so M9 was marked met on a hand-driven run and nothing checked it
+  afterwards. `gradle/stage-device-archives.gradle.kts` now pushes what they
+  need. The first sweep that actually ran them failed three tests with
+  `Installed Build Tools revision 36.0.0 is corrupted` — **the exact error the
+  finding below predicts** — because the test asks for `sdk-extra.tar` and the
+  archive under that name was the over-trimmed 19 MB one rather than the 36 MB
+  medium trim this finding describes. The finding was right, was written down,
+  and was still shipped broken, because the test that would have caught it was
+  skipping. That is the whole argument for staging the artefacts.
+
 - **`build-tools/` must exist and be *complete*, not useful.** Trimmed to only
   the tools AGP runs, the build fails with `Installed Build Tools revision
   36.0.0 is corrupted`. Trimmed instead by dropping `lib64/`, `lld-bin/` and

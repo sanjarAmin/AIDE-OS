@@ -302,6 +302,25 @@ M0–M5 is the real v1.0. Everything from M6 on is expansion.
 
 ## Verification Strategy
 
+
+**A skip reports as OK, so the artefacts are staged by the build.** Six modules'
+instrumented tests need a toolchain archive on the device — clang, a JDK,
+Gradle, an SDK — and none of them is in git, because each is 0.3–0.6 GB. Until
+2026-09-06 they were pushed by hand, which meant that in a routine sweep
+`spike:clang` ran 0 of 8 tests, `lsp:native` 0 of 7, `spike:rootfs` 0 of 15, and
+`engine:gradle` skipped the seven that build anything: **M7 and M9 were both
+marked met while a green sweep proved nothing about either.**
+`gradle/stage-device-archives.gradle.kts` pushes them, the way
+`:lsp:kotlin` already did for its own. The first sweep that actually ran
+`:engine:gradle` failed three tests on an error `engine/gradle/FINDINGS.md` had
+already written down — the finding was right, and shipped broken anyway,
+because the test that would have caught it was skipping.
+
+The archives are looked for on a `:`-separated `DEVICE_ARCHIVES` path and a
+missing one warns rather than fails, so a fresh clone still runs everything
+else. **They hold Android ELF binaries, so the ABI is the caller's problem**: an
+aarch64 archive on an x86_64 emulator does not skip, it fails at `execve` some
+way from the cause.
 - **Golden project corpus** in `:build:fast` instrumentation tests — a fixture set (Java hello-world, Kotlin + AndroidX, Compose app, JNI project, multi-module) built end-to-end on a real device in CI, asserting APK validity and wall-clock build time. This is the regression net for the entire build engine.
 - **Build-time budgets as failing tests**, not aspirations: M2's "< 10s hello-world" is an assertion, and a PR that regresses it fails.
 - **`:lsp` correctness**: fixture files with expected completion/diagnostic positions.

@@ -102,3 +102,10 @@ dependencies {
     // laid out, not merely that the process survived launch.
     androidTestImplementation(libs.androidx.uiautomator)
 }
+
+// The instrumented tests here need real toolchain archives on the device, and
+// without them they skip -- which reports as OK. See the script for why that
+// mattered enough to automate.
+extra["deviceTestPackage"] = "com.osamu.aide.engine.fast.test"
+extra["deviceArchives"] = listOf("toolchain.tar")
+apply(from = rootProject.file("gradle/stage-device-archives.gradle.kts"))
