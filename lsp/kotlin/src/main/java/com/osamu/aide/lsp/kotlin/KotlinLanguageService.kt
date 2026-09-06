@@ -9,9 +9,16 @@ import com.osamu.aide.lsp.api.CompletionKind
 import com.osamu.aide.lsp.api.LanguageService
 import com.osamu.aide.lsp.api.SourceLocation
 import dalvik.system.PathClassLoader
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import java.io.File
 import java.lang.reflect.Method
 
@@ -99,6 +106,30 @@ class KotlinLanguageService(
      */
     private val lock = Mutex()
     private var opened = false
+
+    /**
+     * Where the warm-up runs. Cancelled by [close], so a service that is
+     * replaced does not keep resolving against a project nobody is editing.
+     */
+    private val scope = CoroutineScope(SupervisorJob() + dispatchers.compiler)
+
+    /**
+     * The warm-up, exposed so a test can wait for it instead of sleeping.
+     *
+     * Null until the session opens. Joining it is the only way to measure what
+     * a warmed session costs without a timing guess that is flaky on one
+     * machine and slow on every other.
+     */
+    internal var warmUp: Job? = null
+        private set
+
+    /**
+     * How many questions the *editor* has asked.
+     *
+     * The warm-up reads it to know when to get out of the way. See [warmUp].
+     */
+    @Volatile
+    private var queries = 0L
 
     /**
      * Why the session would not open, remembered so it is not retried.
@@ -207,12 +238,36 @@ class KotlinLanguageService(
         }
 
     override fun close() {
+        scope.cancel()
         runCatching { closeMethod.invoke(null) }
         opened = false
     }
 
     private companion object {
         const val TAG = "KotlinLanguageService"
+
+        /**
+         * Enough to reach the flat part of the curve above, and no more. The
+         * cost is background time on a session that is already up.
+         */
+        const val WARM_UP_QUERIES = 20
+
+        /**
+         * A receiver of a library type with a partial member name -- the shape
+         * that exercises the most of the query path: parsing a dangling file,
+         * resolving an expression's type, enumerating a library type's members
+         * and running the extension index against a prefix.
+         */
+        val WARM_UP_BUFFER = """
+            package aide.warmup
+
+            fun warmUp() {
+                val text: String = ""
+                text.le
+            }
+        """.trimIndent()
+
+        val WARM_UP_OFFSET = WARM_UP_BUFFER.indexOf("text.le") + "text.le".length
     }
 
     /**
@@ -246,7 +301,73 @@ class KotlinLanguageService(
             return false
         }
         opened = true
+        warmUp()
         return true
+    }
+
+    /**
+     * Answers a few questions nobody asked, so the user's first ones are fast.
+     *
+     * **A built session is not a warm one.** Measured on the emulator, the same
+     * completion repeated thirty times against one session:
+     *
+     * ```
+     * call 1        4064 ms   building the session
+     * calls 2-6     ~200 ms   over M3's 200 ms budget
+     * calls 7-16    ~130 ms
+     * calls 17-30   ~107 ms   steady state
+     * ```
+     *
+     * So the ~220 ms this project recorded as "warm completion" was measured
+     * two to five calls in, on the plateau -- not at rest.
+     * `tools/analysisapi/FINDINGS.md` §25.
+     *
+     * The warm-up is **global, not per query shape**, which is what makes this
+     * worth doing: running five different completion shapes in one order and
+     * then the reverse, the medians tracked the call count and not the query --
+     * the shape that cost 164 ms when it ran first cost 92 ms when it ran last.
+     * So questions about a buffer the user has never seen warm the ones they
+     * will actually ask.
+     *
+     * **In the background, one lock acquisition at a time.** The session build
+     * is already paid off the keystroke path -- diagnostics run when the file
+     * opens -- and this must not be added to it, or the first diagnostic would
+     * arrive three seconds later than it does now. Taking the lock per call
+     * rather than holding it for all of them means a real keystroke waits for
+     * at most one warm-up query, and those queries were going to cost the same
+     * whether they were the user's or ours.
+     */
+    private fun warmUp() {
+        if (warmUp != null) return
+        // The query that opened the session has already been counted, so
+        // anything past this is the editor asking something new.
+        val asOfOpen = queries
+        warmUp = scope.launch {
+            var done = 0
+            while (done < WARM_UP_QUERIES && isActive) {
+                // **Stops the moment the editor wants the session.** Warming
+                // and answering contend for the same lock, and a real query
+                // that queues behind a warm-up one pays for both: measured, a
+                // completion during the warm-up cost 371 ms against 188 ms
+                // without it. That is a regression at the exact moment latency
+                // is most visible -- a person typing.
+                //
+                // Giving up then costs nothing, because a user who is already
+                // typing warms the session with their own queries, which is
+                // what happened before any of this existed. The warm-up only
+                // ever spends time nobody was waiting on.
+                if (queries > asOfOpen) {
+                    Log.i(TAG, "warm-up yielded to the editor after $done queries")
+                    return@launch
+                }
+                lock.withLock {
+                    runCatching { completeMethod.invoke(null, WARM_UP_BUFFER, WARM_UP_OFFSET) }
+                }
+                done++
+                yield()
+            }
+            Log.i(TAG, "Kotlin session warmed with $done queries")
+        }
     }
 
     /**
@@ -257,8 +378,10 @@ class KotlinLanguageService(
      * editor's file reads and autosave. Putting analysis on `io` would do
      * exactly that, on every keystroke.
      */
-    private suspend fun <T> query(body: () -> T): T =
-        withContext(dispatchers.compiler) { lock.withLock { body() } }
+    private suspend fun <T> query(body: () -> T): T {
+        queries++
+        return withContext(dispatchers.compiler) { lock.withLock { body() } }
+    }
 
     /**
      * Splits the backend's records, dropping its error sentinel.

@@ -1134,6 +1134,62 @@ Mitigation, if it becomes frequent: stage somewhere that is not FUSE-backed. It
 has not been frequent enough to justify moving the staging, and a rerun has
 always worked.
 
+## 25. The 220 ms was a warm-up plateau, not the cost of a query
+
+**A built session is not a warm one.** Thirty repeats of one completion against
+a single session, on the emulator:
+
+| call | cost |
+|---|---|
+| 1 | 4064 ms — building the session |
+| 2–6 | ~200 ms |
+| 7–16 | ~130 ms |
+| 17–30 | **~107 ms** — at rest |
+
+`a_completion_with_extensions_stays_cheap` takes a cold call and four warm ones,
+so its "warm" median lands squarely on the 200 ms plateau. That is where §19's
+219 ms and §16's 229 ms came from, and it is why this project has been
+recording Kotlin completion as *over* M3's 200 ms budget when at rest it is
+comfortably **under** it. The number was not wrong; it was measured at the wrong
+point on a curve nobody had plotted.
+
+**The warm-up is global, not per query shape.** Five completion shapes were run
+in one order and then the reverse. The medians tracked the call count, not the
+query:
+
+| shape | run first→last | run last→first |
+|---|---|---|
+| local-class receiver | 164 ms | 92 ms |
+| stdlib receiver + extensions | 127 ms | 113 ms |
+| stdlib receiver, member prefix | 105 ms | 140 ms |
+| no receiver, index hit | 86 ms | 93 ms |
+| no receiver, no match | 73 ms | 110 ms |
+
+The shape that cost 164 ms going first cost 92 ms going last. Whatever is
+warming — JIT, the API's own caches — is shared, which is what makes it worth
+paying for out of band.
+
+**So the session now asks twenty questions of its own once it opens.**
+`KotlinLanguageService.warmUp` runs a completion against a buffer no user will
+ever see, in the background, after `open` succeeds. The session build itself is
+untouched: it is already off the keystroke path, paid by the diagnostics that
+run when a file opens, and adding four seconds to it would delay the first
+diagnostic instead. Measured, the same six calls:
+
+| | first six completions |
+|---|---|
+| before | 4064, 211, 196, 208, 196, 195 |
+| after | **119, 105, 106, 109, 131, 105** |
+
+**It yields to the editor, and that is not optional.** The first version held
+the lock for its own queries, and a real completion arriving during the warm-up
+queued behind one: 371 ms against 188 ms without it — a regression at the exact
+moment latency is visible, which is a person typing. The warm-up now counts the
+editor's queries and stops the moment one arrives after the session opened.
+Giving up costs nothing: a user who is already typing warms the session with
+their own queries, which is what happened before any of this existed. **The
+warm-up only ever spends time nobody was waiting on.**
+
 ## 24. What is still unknown
 
 Honest limits of what has been established. None of this is evidence yet.
@@ -1142,9 +1198,13 @@ Honest limits of what has been established. None of this is evidence yet.
   project's AARs by construction -- the scan takes whatever jars the session is
   given -- but no test has opened a session with an AAR on the classpath, so
   "by construction" is the claim and not yet the evidence.
-- **Kotlin completion is ~220 ms against a 200 ms budget** once the standard
-  library is in the session, where Java is 76 ms. The cost is library
-  resolution, not extensions (§19), and no attempt has been made to reduce it.
+- ~~Kotlin completion is ~220 ms against a 200 ms budget.~~ **Resolved, and the
+  premise was wrong**: 220 ms was the warm-up plateau, measured two to five
+  calls after the session was built. At rest a completion is ~107 ms, and the
+  session now warms itself in the background so the user's first queries start
+  near that rather than at 200 ms. §25. What remains true is that Java is
+  faster at 76 ms, and that the cost is library resolution rather than
+  extensions.
 - **AARs and cross-module references are still untried.** `android.jar` works
   (§18) and so does kotlin-stdlib; a real dependency graph, with AARs unpacked
   by `:engine:deps`, is wired through `LanguageServices` but has never been

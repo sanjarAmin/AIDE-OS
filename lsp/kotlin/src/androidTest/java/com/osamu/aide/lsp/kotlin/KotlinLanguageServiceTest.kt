@@ -466,6 +466,69 @@ class KotlinLanguageServiceTest {
         )
     }
 
+    /**
+     * The session warms itself, and the warm-up reaches the user's queries.
+     *
+     * **A built session is not a warm one**, and this project recorded the
+     * difference as if it were: ~220 ms went into FINDINGS as "warm
+     * completion", measured two to five calls after the session was built. The
+     * curve on this emulator, thirty repeats of one completion, is
+     *
+     * ```
+     * call 1        4064 ms   building the session
+     * calls 2-6     ~200 ms   at or over M3's 200 ms budget
+     * calls 17-30   ~107 ms   at rest
+     * ```
+     *
+     * so those first calls -- the ones a user types -- were the slow ones, and
+     * the number in the document was the plateau rather than the cost.
+     *
+     * [KotlinLanguageService.warmUp] moves that plateau off the keystroke path
+     * by asking twenty questions of its own once the session is up. Measured
+     * here, the same six calls that were `[4064, 211, 196, 208, 196, 195]`
+     * became `[184, 115, 137, 109, 109, 126]`.
+     *
+     * **The assertion is a ratio, not a millisecond count.** A threshold would
+     * fail on other hardware for a reason nobody could act on; that a warmed
+     * session answers faster than the session build it just paid for is true
+     * wherever this runs. The numbers go to logcat and to FINDINGS §25.
+     */
+    @Test
+    fun the_session_warms_itself_before_the_user_asks() = runBlocking {
+        val opening = """
+            package sample
+            fun edit() {
+                val local: String = "x"
+            }
+        """.trimIndent()
+
+        // What the editor does when a file opens, and what builds the session.
+        val build = measure { service.diagnostics(source, opening) }
+
+        // Joined rather than slept on: a timing guess is flaky on one machine
+        // and slow on every other.
+        service.warmUp?.join()
+
+        val text = """
+            package sample
+
+            fun edit() {
+                val local: String = "x"
+                local.upp
+            }
+        """.trimIndent()
+        val offset = text.indexOf("local.upp") + "local.upp".length
+        val first = (1..6).map { measure { service.complete(source, text, offset) } }
+        Log.i(TAG, "warmed session: build=${build}ms first six completions=$first")
+
+        assertTrue("the warm-up never ran", service.warmUp != null)
+        assertTrue(
+            "a warmed session's first completion (${first.first()}ms) cost as much as " +
+                "building the session (${build}ms)",
+            first.first() < build / 2,
+        )
+    }
+
     private suspend fun measure(body: suspend () -> Unit): Long {
         val started = System.nanoTime()
         body()
