@@ -456,9 +456,15 @@ class KotlinLanguageServiceTest {
         val offset = text.indexOf("local.upp") + "local.upp".length
 
         val cold = measure { service.complete(source, text, offset) }
-        val warm = (1..4).map { measure { service.complete(source, text, offset) } }.sorted()
-        val median = warm[warm.size / 2]
-        Log.i(TAG, "completion with extensions: cold=${cold}ms warm=${median}ms of $warm")
+
+        // **Reported in call order, not sorted.** Sorted, the first warm call --
+        // reliably the most expensive, because it is the one right after the
+        // session was built -- lands at the end of the list and reads as a
+        // mysterious outlier in the last position. It cost an hour of chasing
+        // a concurrency bug that was not there.
+        val inOrder = (1..4).map { measure { service.complete(source, text, offset) } }
+        val median = inOrder.sorted()[inOrder.size / 2]
+        report("completion with extensions: cold=${cold}ms median=${median}ms inOrder=$inOrder")
 
         assertTrue(
             "a warm completion (${median}ms) was no cheaper than the first (${cold}ms)",
@@ -519,7 +525,7 @@ class KotlinLanguageServiceTest {
         """.trimIndent()
         val offset = text.indexOf("local.upp") + "local.upp".length
         val first = (1..6).map { measure { service.complete(source, text, offset) } }
-        Log.i(TAG, "warmed session: build=${build}ms first six completions=$first")
+        report("warmed session: build=${build}ms first six completions=$first")
 
         assertTrue("the warm-up never ran", service.warmUp != null)
         assertTrue(
@@ -527,6 +533,30 @@ class KotlinLanguageServiceTest {
                 "building the session (${build}ms)",
             first.first() < build / 2,
         )
+    }
+
+    /**
+     * A measurement, to logcat **and** to a file the host can pull.
+     *
+     * **Some phones emit no app logcat at all**, and the one this project is
+     * developed against is one of them: `adb logcat` shows nothing from this
+     * process, on any tag, however it is filtered. That has already cost this
+     * project a diagnosis once -- `ai/core/FINDINGS.md` §16 records a granted-
+     * scopes readout being moved from a log line to a toast to the UI for
+     * exactly this reason.
+     *
+     * A number that only reaches logcat is therefore a number that cannot be
+     * read on hardware, which is the only place the interesting ones live. The
+     * external files directory is readable with `adb pull` even where the app's
+     * logs are not.
+     */
+    private fun report(line: String) {
+        Log.i(TAG, line)
+        runCatching {
+            val context = InstrumentationRegistry.getInstrumentation().targetContext
+            File(context.getExternalFilesDir(null), "measurements.txt")
+                .appendText(line + "\n")
+        }
     }
 
     private suspend fun measure(body: suspend () -> Unit): Long {

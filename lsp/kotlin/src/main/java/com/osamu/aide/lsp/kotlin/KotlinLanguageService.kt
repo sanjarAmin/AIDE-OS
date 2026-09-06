@@ -13,8 +13,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -237,9 +239,26 @@ class KotlinLanguageService(
             }
         }
 
+    /**
+     * **Waits for the warm-up before it closes the session under it.**
+     *
+     * `scope.cancel()` cancels the coroutine at its next suspension point, and
+     * a reflective call into the backend is not one -- so a warm-up query can
+     * still be running when this returns. Closing the session then hands an API
+     * this file already documents as not thread-safe a resolve and a close at
+     * the same time.
+     *
+     * Taking the lock is what actually waits, and it waits for at most one
+     * query.
+     *
+     * No measurement forced this; it was found while chasing an apparent
+     * outlier that turned out to be an artifact of sorting, and it is kept
+     * because the race is real whether or not it has been observed. Fixing it
+     * changed no number.
+     */
     override fun close() {
         scope.cancel()
-        runCatching { closeMethod.invoke(null) }
+        runBlocking { lock.withLock { runCatching { closeMethod.invoke(null) } } }
         opened = false
     }
 
@@ -251,6 +270,9 @@ class KotlinLanguageService(
          * cost is background time on a session that is already up.
          */
         const val WARM_UP_QUERIES = 20
+
+        /** Long enough for a keystroke already in flight to be counted. */
+        const val WARM_UP_START_DELAY_MS = 400L
 
         /**
          * A receiver of a library type with a partial member name -- the shape
@@ -343,6 +365,13 @@ class KotlinLanguageService(
         // anything past this is the editor asking something new.
         val asOfOpen = queries
         warmUp = scope.launch {
+            // **A beat before the first one, so a busy editor wins the race.**
+            // The check below only sees queries that have *started*; an editor
+            // typing the instant the session opens would otherwise queue behind
+            // warm-up query one and pay for both. Waiting costs nothing when
+            // nobody is typing, which is the only case this is for.
+            delay(WARM_UP_START_DELAY_MS)
+
             var done = 0
             while (done < WARM_UP_QUERIES && isActive) {
                 // **Stops the moment the editor wants the session.** Warming

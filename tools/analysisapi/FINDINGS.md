@@ -1181,6 +1181,45 @@ diagnostic instead. Measured, the same six calls:
 | before | 4064, 211, 196, 208, 196, 195 |
 | after | **119, 105, 106, 109, 131, 105** |
 
+**Confirmed on hardware, where it matters more.** The numbers above are the
+emulator; the phone is a NX809J on **API 36, arm64-v8a** — a different ABI and
+a real thermal envelope. Five runs, `am instrument` driving the suite directly:
+
+| | first completion after the session build | first six of a warmed session |
+|---|---|---|
+| run 1 | 227 ms | 124, 112, 111, 110, 106, 114 |
+| run 2 | 503 ms | 125, 114, 111, 109, 107, 106 |
+| run 3 | 470 ms | 132, 118, 117, 131, 112, 101 |
+| run 4 | 286 ms | 88, 116, 114, 128, 127, 127 |
+| run 5 | 483 ms | 142, 116, 114, 112, 104, 124 |
+
+Unwarmed, the median of the four calls after the build was 203, 221, 204, 104
+and 208 ms — **at or over the budget, on every run but one**. Warmed, the
+slowest of thirty measured completions was 142 ms. The phone is slightly faster
+than the emulator once warm and considerably slower on its first call, which is
+the shape the warm-up exists for. Session build ranged 1.7–3.0 s.
+
+**Two lessons about measuring this, both learned the expensive way.**
+
+*Do not sort before reporting.* The benchmark logged its four warm calls
+`sorted()`, which put the first one — reliably the most expensive, being the
+call right after the session was built — at the **end** of the list. Read in
+that position it looks like a mysterious slow fourth call, appearing in every
+run at 2–3× the median, and it cost an hour of hunting a concurrency bug that
+was not there. Reported in call order, `[483, 208, 196, 191]` is obviously just
+the curve. The one real thing that hunt turned up is genuine and was kept:
+`close()` cancelled the warm-up and then closed the session, but cancellation
+cannot interrupt a reflective call, so a query and a close could reach a
+not-thread-safe API together. Taking the lock in `close()` fixes it and changed
+no number.
+
+*Some phones emit no app logcat at all.* This one does not, on any tag, however
+filtered — the same wall `ai/core/FINDINGS.md` §16 hit when a granted-scopes
+readout had to move from a log line to a toast to the UI. A measurement that
+only reaches logcat therefore cannot be read on the hardware where it matters.
+The test writes to `getExternalFilesDir`, which `adb pull` reaches even on a
+ROM that suppresses the logs.
+
 **It yields to the editor, and that is not optional.** The first version held
 the lock for its own queries, and a real completion arriving during the warm-up
 queued behind one: 371 ms against 188 ms without it — a regression at the exact
