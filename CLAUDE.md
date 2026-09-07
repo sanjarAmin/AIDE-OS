@@ -55,7 +55,7 @@ tools/               Scripts that produce the toolchains, and their FINDINGS.
                      Bionic-linked binaries start here: clang, a JDK, node, mono
 ```
 
-`docs/PLAN.md` lists 22 modules. Nineteen exist, plus nine spikes. Do not
+`docs/PLAN.md` lists 22 modules. Nineteen exist, plus ten spikes. Do not
 create the rest speculatively — each arrives with the milestone that needs it.
 
 ## Conventions
