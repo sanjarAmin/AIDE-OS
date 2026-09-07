@@ -86,6 +86,7 @@ dependencies {
     implementation(project(":engine:fast"))
     implementation(project(":engine:gradle"))
     implementation(project(":engine:node"))
+    implementation(project(":engine:mono"))
     implementation(project(":lsp:java"))
     implementation(project(":lsp:native"))
     implementation(project(":lsp:kotlin"))
@@ -142,5 +143,6 @@ extra["deviceArchives"] = listOf(
     // download is offered -- which is the half of the feature that does not
     // start a program.
     "node.tar",
+    "mono.tar",
 )
 apply(from = rootProject.file("gradle/stage-device-archives.gradle.kts"))

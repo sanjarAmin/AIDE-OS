@@ -30,6 +30,12 @@ object ProjectTemplate {
             writeNodeProject(project)
             return
         }
+        // The same reasoning, for the same reason: a C# console app is not an
+        // Android app either.
+        if (project.language == SourceLanguage.CSHARP) {
+            writeCSharpProject(project)
+            return
+        }
 
         val layout = ProjectLayout.of(project)
         val packageDir = File(layout.javaDir, project.applicationId.replace('.', '/'))
@@ -81,16 +87,52 @@ object ProjectTemplate {
             console.log('Hello from ' + process.platform + ' on ' + process.arch);
             """.trimIndent() + "\n",
         )
-        // The only template that writes one, because it is the only one whose
-        // run leaves files behind: npm's home and cache sit beside the sources
-        // so that a project is self-contained, and the file tree hides them,
-        // but the Git panel would otherwise offer to commit a cache.
+        writeRunIgnores(project, extra = listOf("node_modules/"))
+    }
+
+    /**
+     * A C# console app: one source file, and nothing else.
+     *
+     * **No `.csproj`.** The MSBuild project format is what `dotnet` reads, and
+     * there is no `dotnet` here -- mono's `mcs` takes a list of source files
+     * and an output path, which is what `MonoRunSystem` gives it. Writing a
+     * project file this app cannot read would be writing a file that lies
+     * about how the project is built. `tools/mono/FINDINGS.md`, spike R14.
+     */
+    private fun writeCSharpProject(project: Project) {
+        project.rootDir.mkdirs()
+        File(project.rootDir, "Program.cs").writeText(
+            """
+            using System;
+
+            class Program
+            {
+                static void Main(string[] args)
+                {
+                    Console.WriteLine("Hello from " + Environment.OSVersion.Platform);
+                }
+            }
+            """.trimIndent() + "\n",
+        )
+        writeRunIgnores(project, extra = emptyList())
+    }
+
+    /**
+     * What a run leaves behind, and must not be committed.
+     *
+     * Shared by the two languages that run rather than build, because both put
+     * their working directories inside the project -- see [ProjectLayout.nodeHome].
+     * The file tree hides them; the Git panel would not.
+     */
+    private fun writeRunIgnores(project: Project, extra: List<String>) {
         File(project.rootDir, ".gitignore").writeText(
-            listOf(
-                "node_modules/",
-                "${ProjectLayout.NODE_HOME}/",
-                "${ProjectLayout.NODE_CACHE}/",
-            ).joinToString(separator = "\n", postfix = "\n"),
+            (
+                extra + listOf(
+                    "${ProjectLayout.NODE_HOME}/",
+                    "${ProjectLayout.NODE_CACHE}/",
+                    "${ProjectLayout.BUILD}/",
+                )
+                ).joinToString(separator = "\n", postfix = "\n"),
         )
     }
 

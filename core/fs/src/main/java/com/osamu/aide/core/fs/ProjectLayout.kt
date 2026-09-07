@@ -66,6 +66,36 @@ class ProjectLayout(val root: File) {
         }
 
     /**
+     * Every `.cs` in the project, in a stable order.
+     *
+     * From the project root and not `src/main/java`, because a C# project is
+     * not an Android one: `dotnet new console` puts `Program.cs` at the root
+     * and so does the template here. [BUILD] is skipped so that a rebuild does
+     * not try to compile whatever the last one left behind, and so are hidden
+     * directories -- a checked-out dependency under `.nuget` is not this
+     * project's source.
+     */
+    fun csharpSources(): List<File> = root
+        .walkTopDown()
+        .onEnter { it.name != BUILD && !it.name.startsWith(".") }
+        .filter { it.isFile && it.extension == "cs" }
+        .sortedBy { it.invariantSeparatorsPath }
+        .toList()
+
+    /**
+     * Where a compiled assembly and mono's rewritten config go.
+     *
+     * Inside the project for the reason [nodeHome] is, and hidden for the same
+     * one: the file tree does not show it and [ProjectTemplate] tells git to
+     * ignore it. A `.exe` in the file tree beside `Program.cs` would invite
+     * someone to open it.
+     */
+    val buildDir: File get() = File(root, BUILD)
+
+    /** The assembly [csharpSources] compiles to. */
+    val csharpAssembly: File get() = File(buildDir, "${root.name}.exe")
+
+    /**
      * Where a run puts npm's home and its cache.
      *
      * Inside the project rather than in app storage, so that deleting a
@@ -92,6 +122,7 @@ class ProjectLayout(val root: File) {
     companion object {
         const val NODE_HOME = ".aide-home"
         const val NODE_CACHE = ".aide-cache"
+        const val BUILD = ".aide-build"
 
         private val NATIVE_EXTENSIONS = setOf("c", "cc", "cpp", "cxx")
 

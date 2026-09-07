@@ -162,10 +162,15 @@ class WorkspaceViewModelTest {
      * unpack because the archive carries symlinks (`bin/npm`) and modes, both
      * of which a naive extractor drops.
      */
-    private fun stageNode() {
-        val root = File(context.filesDir, "toolchains/node-24")
-        if (File(root, "bin/node").isFile) return
-        val archive = File(context.getExternalFilesDir(null), "node.tar")
+    private fun stageNode() = stage("node.tar", into = "node-24", marker = "bin/node")
+
+    /** The same for mono, whose marker is the real file and not `bin/mono`. */
+    private fun stageMono() = stage("mono.tar", into = "mono-6", marker = "bin/mono-sgen")
+
+    private fun stage(archiveName: String, into: String, marker: String) {
+        val root = File(context.filesDir, "toolchains/$into")
+        if (File(root, marker).isFile) return
+        val archive = File(context.getExternalFilesDir(null), archiveName)
         if (!archive.isFile) return
         root.mkdirs()
         ProcessBuilder("/system/bin/tar", "-xf", archive.absolutePath, "-C", root.absolutePath)
@@ -180,8 +185,12 @@ class WorkspaceViewModelTest {
     /** ViewModel work runs on the main dispatcher; nothing observable happens off it. */
     private fun onMain(block: () -> Unit) = runBlocking(Dispatchers.Main) { block() }
 
-    private fun awaitState(what: String, predicate: (WorkspaceUiState) -> Boolean) = runBlocking {
-        val deadline = System.currentTimeMillis() + TIMEOUT_MILLIS
+    private fun awaitState(
+        what: String,
+        timeoutMillis: Long = TIMEOUT_MILLIS,
+        predicate: (WorkspaceUiState) -> Boolean,
+    ) = runBlocking {
+        val deadline = System.currentTimeMillis() + timeoutMillis
         while (System.currentTimeMillis() < deadline) {
             if (predicate(viewModel.state.value)) return@runBlocking
             withContext(Dispatchers.IO) { Thread.sleep(POLL_MILLIS) }
@@ -507,6 +516,61 @@ class WorkspaceViewModelTest {
             viewModel.state.value.build.succeeded,
         )
         assertTrue("the run panel stayed shut", viewModel.state.value.isBuildPanelOpen)
+    }
+
+    /**
+     * The other half of M10: ▶ on a C# project compiles it and runs the result.
+     *
+     * The same two branches as the JavaScript test and for the same reasons,
+     * with one assertion that language cannot make: the log has to hold the
+     * compiler's command *and* the program's output, because a C# run is two
+     * processes and a panel showing only the second would hide every `CS0103`
+     * the user needs.
+     */
+    @Test
+    fun running_a_csharp_project_compiles_it_and_runs_the_assembly() = runBlocking {
+        val console = (
+            repository.createProject(
+                name = "Hello Sharp",
+                applicationId = "com.example.sharp",
+                language = SourceLanguage.CSHARP,
+                engine = BuildEngine.FAST,
+            ) as AppResult.Success
+            ).value
+        assertTrue("the template wrote no Program.cs", File(console.rootDir, "Program.cs").isFile)
+        stageMono()
+
+        onMain { viewModel.open(console.rootDir) }
+        awaitState("the descriptor to be read") { it.projectName == "Hello Sharp" }
+        onMain { viewModel.build() }
+
+        if (ToolchainManager(context, dispatchers).monoRoot() == null) {
+            awaitState("the Mono prompt") { it.platform != null }
+            val prompt = viewModel.state.value.platform!!
+            assertEquals("the prompt is for something else", "mono-6", prompt.component.id)
+            assertFalse("Mono should need no SDK licence", prompt.component.requiresSdkLicense)
+            assertFalse("a build started anyway", viewModel.state.value.build.isRunning)
+            return@runBlocking
+        }
+
+        // Compiling is slower than starting node: mcs is itself an assembly, so
+        // the runtime starts twice before a line of the program is printed.
+        awaitState("the program's output", timeoutMillis = 120_000L) { state ->
+            state.build.log.any { "Hello from" in it }
+        }
+        awaitState("the run to finish", timeoutMillis = 60_000L) {
+            !it.build.isRunning && it.build.outcome != null
+        }
+        val log = viewModel.state.value.build.log
+        assertTrue("the compiler's command line is not in the log: $log", log.any { "mcs.exe" in it })
+        assertTrue(
+            "a clean program did not report success: ${viewModel.state.value.build.outcome}",
+            viewModel.state.value.build.succeeded,
+        )
+        assertTrue(
+            "the assembly was left out of the project's build directory",
+            File(console.rootDir, ".aide-build").listFiles().orEmpty().any { it.extension == "exe" },
+        )
     }
 
     private companion object {

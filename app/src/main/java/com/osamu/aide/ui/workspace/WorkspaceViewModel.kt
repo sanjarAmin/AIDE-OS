@@ -20,8 +20,10 @@ import com.osamu.aide.engine.api.BuildEvent
 import com.osamu.aide.engine.api.RunEvent
 import com.osamu.aide.engine.api.RunRequest
 import com.osamu.aide.engine.api.RunResult
+import com.osamu.aide.engine.mono.MonoRunSystem
 import com.osamu.aide.engine.node.NodeRunSystem
 import com.osamu.aide.toolchain.nativetools.LinkerLaunch
+import com.osamu.aide.toolchain.nativetools.MonoToolchain
 import com.osamu.aide.toolchain.nativetools.NodeToolchain
 import com.osamu.aide.engine.api.BuildResult
 import com.osamu.aide.engine.api.BuildStage
@@ -665,6 +667,10 @@ class WorkspaceViewModel(
                 runNodeProject(project)
                 return@launch
             }
+            if (project.language == SourceLanguage.CSHARP) {
+                runCSharpProject(project)
+                return@launch
+            }
             builder.missingNativeToolchain(project)?.let { component ->
                 // Offered before the build starts rather than after it fails,
                 // for the same reason the platform is: the refusal names a
@@ -717,7 +723,11 @@ class WorkspaceViewModel(
             return
         }
 
-        val launch = LinkerLaunch.forThisProcess() ?: run {
+        // `isAvailable`, not a null check: forThisProcess() always answers,
+        // and what can be missing is the linker it names -- which is how a
+        // device that cannot run any downloaded toolchain presents.
+        val launch = LinkerLaunch.forThisProcess()
+        if (!launch.isAvailable) {
             _events.send(WorkspaceEvent.Notice("This device has no linker Node can start through."))
             return
         }
@@ -736,6 +746,70 @@ class WorkspaceViewModel(
             }
             engine.run(RunRequest(projectDir = project.rootDir, entryPoint = entryPoint))
                 .collect(::onRunEvent)
+        } finally {
+            _state.update {
+                it.copy(
+                    build = it.build.copy(
+                        isRunning = false,
+                        stage = null,
+                        outcome = it.build.outcome ?: "Run stopped.",
+                    ),
+                )
+            }
+        }
+    }
+
+    /**
+     * Compiles and runs a C# project, into the same panel as everything else.
+     *
+     * Structurally identical to [runNodeProject] and deliberately not folded
+     * together with it: the two differ in the component they offer, the
+     * toolchain they build, and the directories they hand it, which is most of
+     * what either function does. A shared helper would take all three as
+     * parameters and be longer than both.
+     */
+    private suspend fun runCSharpProject(project: Project) {
+        val root = toolchain.monoRoot() ?: run {
+            toolchain.missingMonoComponent()?.let { component ->
+                val megabytes = component.archiveBytes / (1024 * 1024)
+                offerComponentInstall(
+                    component = component,
+                    rationale = "Running C# needs Mono, which is about " +
+                        "$megabytes MB to download and roughly " +
+                        "${component.installedBytes / (1024 * 1024)} MB once installed.",
+                )
+            } ?: _events.send(
+                WorkspaceEvent.Notice("Mono is not available for this device's ABI."),
+            )
+            return
+        }
+
+        val launch = LinkerLaunch.forThisProcess()
+        if (!launch.isAvailable) {
+            _events.send(WorkspaceEvent.Notice("This device has no linker Mono can start through."))
+            return
+        }
+        val layout = ProjectLayout.of(project)
+        val engine = MonoRunSystem(
+            mono = MonoToolchain(root, launch),
+            dispatchers = dispatchers,
+            workspace = layout.buildDir,
+        )
+
+        try {
+            _state.update {
+                it.copy(isBuildPanelOpen = true, build = BuildUiState(isRunning = true, isRun = true))
+            }
+            // The entry point is carried because the contract asks for one, and
+            // is not what mcs is pointed at: a C# program has a `Main` in some
+            // class the compiler finds for itself, so the request names the
+            // conventional file and the engine compiles every source there is.
+            engine.run(
+                RunRequest(
+                    projectDir = project.rootDir,
+                    entryPoint = File(project.rootDir, "Program.cs"),
+                ),
+            ).collect(::onRunEvent)
         } finally {
             _state.update {
                 it.copy(

@@ -71,6 +71,22 @@ class ToolchainManager(
         if (nodeRoot() != null) null else ToolchainComponent.node(Build.SUPPORTED_ABIS.first())
 
     /**
+     * Where mono is installed, or null when it is not.
+     *
+     * The marker is `bin/mono-sgen` and not `bin/mono`, which is a **symlink**
+     * to it: an unpack that stopped between the two leaves a link pointing at
+     * nothing, and a link that resolves nowhere is `isFile == false` anyway --
+     * so checking the real file is both the earlier and the honest test.
+     */
+    fun monoRoot(): File? = ToolchainComponent.mono(Build.SUPPORTED_ABIS.first())
+        ?.let { storage.directoryFor(it) }
+        ?.takeIf { File(it, "bin/mono-sgen").isFile }
+
+    /** The mono component this device needs, or null when it is installed. */
+    fun missingMonoComponent(): ToolchainComponent? =
+        if (monoRoot() != null) null else ToolchainComponent.mono(Build.SUPPORTED_ABIS.first())
+
+    /**
      * The archives Kotlin intelligence needs, or null if either is missing.
      *
      * Two components, not one: the Analysis API is built against the Kotlin

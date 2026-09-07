@@ -180,6 +180,7 @@ private fun ProjectRow(project: Project, onClick: () -> Unit) {
         val extension = when (project.language) {
             SourceLanguage.KOTLIN -> "kt"
             SourceLanguage.JAVASCRIPT -> "js"
+            SourceLanguage.CSHARP -> "cs"
             SourceLanguage.C -> "c"
             SourceLanguage.CPP -> "cpp"
             SourceLanguage.JAVA -> "java"
@@ -224,8 +225,9 @@ private fun ProjectRow(project: Project, onClick: () -> Unit) {
                 // ID -- it has neither an APK nor a package name -- so showing
                 // the two it was given at creation would be showing fields
                 // that mean nothing here.
-                text = if (project.language == SourceLanguage.JAVASCRIPT) {
-                    "${project.language.displayName}  ·  runs on Node"
+                text = if (project.language in RUN_ONLY) {
+                    val runtime = if (project.language == SourceLanguage.JAVASCRIPT) "Node" else "Mono"
+                    "${project.language.displayName}  ·  runs on $runtime"
                 } else {
                     "${project.language.displayName}  ·  ${project.engine.displayName} build  ·  ${project.applicationId}"
                 },
@@ -288,6 +290,7 @@ private fun CreateProjectDialog(
                         SourceLanguage.JAVA,
                         SourceLanguage.KOTLIN,
                         SourceLanguage.JAVASCRIPT,
+                        SourceLanguage.CSHARP,
                     ).forEach { option ->
                         FilterChip(
                             selected = language == option,
@@ -389,3 +392,12 @@ private fun CloneProgressDialog(status: String, onCancel: () -> Unit) {
         },
     )
 }
+
+/**
+ * The languages that run rather than build.
+ *
+ * Neither produces an APK, so neither has a build engine or an application ID
+ * to show. Kept here rather than on [SourceLanguage] because it is a fact about
+ * what this app can do with a project, not about the language.
+ */
+private val RUN_ONLY = setOf(SourceLanguage.JAVASCRIPT, SourceLanguage.CSHARP)

@@ -14,6 +14,9 @@
          surface, and far enough from file_json's amber to tell apart in a
          list where both appear side by side. -->
     <color name="file_js">#C8A000</color>
+    <!-- C#'s own purple, dark enough to read on a light surface and far from
+         file_kotlin's, which is the only other purple in the set. -->
+    <color name="file_cs">#68217A</color>
     <color name="file_generic">#757575</color>
     <color name="folder">#FFA000</color>
 </resources>

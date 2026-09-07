@@ -43,6 +43,8 @@ emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu host
 :engine:gradle       The other engine: the project's own Gradle, on a real JVM
 :engine:node         Runs a Node project. A sibling to the two above, not a
                      third of them: they produce an APK, this starts a program
+:engine:mono         The same, for C#: mcs and then the assembly, so a run is
+                     two processes and reports two starts
 :lsp:api             The LanguageService contract; both services implement it
 :lsp:java            nb-javac kept warm: completion, diagnostics, definitions
 :lsp:native          clangd over stdio, for C and C++
@@ -58,7 +60,7 @@ tools/               Scripts that produce the toolchains, and their FINDINGS.
                      Bionic-linked binaries start here: clang, a JDK, node, mono
 ```
 
-`docs/PLAN.md` lists 22 modules. Twenty exist, plus ten spikes. Do not
+`docs/PLAN.md` lists 22 modules. Twenty-one exist, plus ten spikes. Do not
 create the rest speculatively — each arrives with the milestone that needs it.
 
 ## Conventions

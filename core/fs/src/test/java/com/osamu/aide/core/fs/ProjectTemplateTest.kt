@@ -93,6 +93,72 @@ class ProjectTemplateTest {
         assertTrue("npm's cache is not ignored", lines.contains(".aide-cache/"))
     }
 
+    /** The same for C#, whose run writes a compiled assembly into the project. */
+    @Test
+    fun `a csharp project ignores the directory its build writes`() {
+        val project = project(language = SourceLanguage.CSHARP)
+        ProjectTemplate.write(project)
+
+        val lines = File(project.rootDir, ".gitignore").readLines()
+        assertTrue("the build directory is not ignored", lines.contains(".aide-build/"))
+        assertTrue("node_modules has no business here", !lines.contains("node_modules/"))
+    }
+
+    /**
+     * A C# project is a console app, not an Android one -- and has no `.csproj`.
+     *
+     * The absence is the assertion that matters. MSBuild's project format is
+     * what `dotnet` reads and there is no `dotnet` here; `mcs` takes a list of
+     * sources. A `.csproj` in the tree would describe a build this app cannot
+     * perform, which is worse than no file at all.
+     */
+    @Test
+    fun `a csharp project is a console app and not an android one`() {
+        val project = project(language = SourceLanguage.CSHARP)
+
+        ProjectTemplate.write(project)
+
+        val program = File(project.rootDir, "Program.cs")
+        assertTrue("no Program.cs", program.isFile)
+        assertTrue("the entry point is empty", program.readText().contains("static void Main"))
+        assertTrue(
+            "a .csproj was written for a build that cannot read one",
+            project.rootDir.listFiles().orEmpty().none { it.extension == "csproj" },
+        )
+
+        val layout = ProjectLayout.of(project)
+        assertTrue("an Android manifest was written", !layout.manifestFile.isFile)
+        assertTrue("a resource directory was written", !layout.resourceDir.isDirectory)
+        assertTrue("Java sources were written", layout.javaSources().isEmpty())
+        assertTrue("a C# project reported itself buildable as an APK", !layout.isBuildable())
+        assertEquals(listOf(program), layout.csharpSources())
+    }
+
+    /**
+     * The compiler must not be handed what the last run produced.
+     *
+     * `.aide-build` holds the assembly, and walking the project for `.cs` would
+     * otherwise pick up anything a user dropped there. It is also where mono's
+     * rewritten config goes, so it is never empty after a first run.
+     */
+    @Test
+    fun `the csharp source walk skips the build directory and dotfiles`() {
+        val project = project(language = SourceLanguage.CSHARP)
+        ProjectTemplate.write(project)
+        val layout = ProjectLayout.of(project)
+
+        File(project.rootDir, "Helper.cs").writeText("class Helper {}")
+        layout.buildDir.mkdirs()
+        File(layout.buildDir, "Stale.cs").writeText("class Stale {}")
+        File(project.rootDir, ".nuget").mkdirs()
+        File(project.rootDir, ".nuget/Vendored.cs").writeText("class Vendored {}")
+
+        assertEquals(
+            listOf("Helper.cs", "Program.cs"),
+            layout.csharpSources().map { it.name },
+        )
+    }
+
     /** The runner reads the entry point from `package.json`, not by convention. */
     @Test
     fun `the entry point comes from package json rather than a guess`() {

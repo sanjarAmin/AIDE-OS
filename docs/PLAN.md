@@ -278,7 +278,7 @@ Bring-your-own-key, no backend infrastructure, no per-user liability for you.
 | **M7** C/C++ | Termux clang/lld toolchain download, NDK sysroot, clangd | JNI project with a native `.so` builds — **met**, clangd included |
 | **M8** Git + Terminal | JGit, PTY terminal | Clone from GitHub, edit, commit, push |
 | **M9** Gradle path | ~~Rootfs bootstrap~~ → Termux's **Bionic-built OpenJDK 21**, a launcher of our own, and `:engine:gradle` | **Met.** An unmodified Android Studio project builds on device through the `BuildSystem` interface, on both ABIs and with more than one module. Every part installs itself: OpenJDK from this repo's releases, Gradle pinned to its own publisher, build-tools from Google, and an SDK root composed from the last two |
-| **M10** JS / C# | ~~QuickJS +~~ Node from Termux (R13) and **mono** rather than the .NET SDK, which Termux does not publish (R14). Both are **published and pinned** as installable components, and `NodeToolchain` / `MonoToolchain` drive them | **JavaScript is wired end to end**: the picker offers it, the template writes a real Node project, and ▶ runs it through `RunSystem`/`NodeRunSystem` into the build panel, offering the Node download when it is missing. **C# is still only a toolchain** — no template, no run action, no caller of `ToolchainComponent.mono` |
+| **M10** JS / C# | ~~QuickJS +~~ Node from Termux (R13) and **mono** rather than the .NET SDK, which Termux does not publish (R14). Both are **published and pinned** as installable components, and `NodeToolchain` / `MonoToolchain` drive them | **Met.** Both languages are wired end to end: the picker offers them, the template writes a real Node or C# project, and ▶ runs it through `RunSystem` — `:engine:node` starts a program, `:engine:mono` compiles with `mcs` and then starts what it produced — into the build panel, offering the download when the runtime is missing |
 | **M11** Kotlin intelligence | `:lsp:kotlin` — the Analysis API resident on device, behind the same `LanguageService` the editor already talks to | Completion, diagnostics and go-to-definition on a Kotlin buffer, inside the 200 ms budget — **met**, at ~107 ms warm |
 
 M0–M5 is the real v1.0. Everything from M6 on is expansion.
@@ -652,8 +652,8 @@ sharpest example so far of a bug no module's own test suite can see.
     re-pinned, and verified by driving a clean device through the download.
     `toolchain/manager/FINDINGS.md`.
 
-14. **M10 JS / C# — de-risked, published, and not yet wired.** Both halves run
-    on device and both are installable components: Node 24.18.0 with npm
+14. **M10 JS / C# — met.** Both halves run on device, both are installable
+    components, and both are reachable from the UI: Node 24.18.0 with npm
     (spike R13) and Mono 6.14.1 (spike R14), each per ABI, each pinned and
     checked against what is published. `NodeToolchain` and `MonoToolchain` hold
     what the spikes learned — `LD_LIBRARY_PATH`, the `process.execPath`
@@ -669,25 +669,35 @@ sharpest example so far of a bug no module's own test suite can see.
     the language before any of the APK checks: a Node project asked whether it
     has an `AndroidManifest.xml` gets a refusal that names the wrong thing.
 
-    One gap the UI cannot close on its own: **a `.js` buffer has no syntax
-    highlighting**, because `com.itsaky.androidide.treesitter` — the publisher
-    of every prebuilt grammar the editor uses — ships no JavaScript one. It
-    publishes java, kotlin, xml, json, c, cpp, python, aidl, log and
-    properties, and that is the whole list. Highlighting JavaScript means
-    building a grammar for four ABIs ourselves, which is a piece of work with
-    nothing to do with M10, so a Node project's sources render as plain text
-    for now.
+    One gap the UI cannot close on its own: **neither a `.js` nor a `.cs`
+    buffer has syntax highlighting**, because `com.itsaky.androidide.treesitter`
+    — the publisher of every prebuilt grammar the editor uses — ships neither.
+    It publishes java, kotlin, xml, json, c, cpp, python, aidl, log and
+    properties, and that is the whole list. Highlighting either means building
+    a grammar for four ABIs ourselves, which is a piece of work with nothing to
+    do with M10, so both render as plain text for now.
 
-    **The C# half is still only a toolchain.** Nothing calls
-    `ToolchainComponent.mono`, and there is no template or run action for it.
-    Compiling with `mcs` and running the assembly is a second `RunSystem`
-    implementation and a second template, which is now a known shape.
+    **The C# half is wired too**, and it is what justifies the contract having
+    been a contract rather than a class: `:engine:mono` implements the same
+    `RunSystem` with a shape Node has no equivalent of. Running C# is *two*
+    processes — `mcs` is itself an assembly, so the runtime starts once to
+    compile and once to run — so a run emits two `Started` events, and a
+    compile error ends it as `Failed` rather than `Exited(1)`. The second is
+    the distinction the contract was written around: `Exited(1)` would claim
+    the program ran and returned 1, which in a status line is indistinguishable
+    from a program that did.
+
+    The template writes **no `.csproj`**. MSBuild's format is what `dotnet`
+    reads, there is no `dotnet` here, and a project file describing a build
+    this app cannot perform is worse than no file at all.
 
     One correction to the milestone as written: **".NET SDK (experimental)" is
     not reachable by this route.** Termux publishes no `dotnet` and Microsoft's
     builds are glibc. It is mono or nothing, and mono is 45 MB compressed for a
     niche case — if M10 is ever trimmed, the C# half is the defensible cut, and
-    that is now an informed choice rather than a guess.
+    that is now an informed choice rather than a guess. It was built anyway,
+    because the second implementation is what proves `RunSystem` describes
+    something.
 
 
 ---

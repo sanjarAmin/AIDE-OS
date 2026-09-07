@@ -44,6 +44,7 @@ include(":engine:fast")
 // the rootfs this was planned to bridge into -- there is no guest, only a JDK.
 include(":engine:gradle")
 include(":engine:node")
+include(":engine:mono")
 
 // Maven resolution and AAR extraction. Spike R4 (tools/deps/FINDINGS.md) is
 // the design input; the resolver needs four workarounds to run on ART.
