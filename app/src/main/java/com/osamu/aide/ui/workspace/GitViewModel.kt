@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 
 data class GitUiState(
@@ -166,8 +168,42 @@ class GitViewModel(
         viewModelScope.launch { reload() }
     }
 
-    private suspend fun reload() {
-        val repo = repository ?: return
+    /** Serialises [reload]; see its comment for the inversion this prevents. */
+    private val reloadLock = Mutex()
+
+    /**
+     * Re-reads the repository into the panel. **One at a time.**
+     *
+     * Every operation here reloads when it finishes, and the user can refresh
+     * at any moment, so two reloads overlap routinely. Without the lock they
+     * read concurrently and write last-one-wins, which means *the older read
+     * can land after the newer* and the panel shows a repository state that has
+     * already been superseded -- until something else happens to reload.
+     *
+     * That is not theoretical. `initialise` publishes `isRepository = true`
+     * before its own reload finishes, so a caller that waits for the repository
+     * and then writes a file and refreshes has two reloads in flight: the one
+     * from `init`, which read an empty working tree, and the one from
+     * `refresh`, which read the new file. When `init`'s landed second the file
+     * vanished from the panel. It surfaced as an intermittent test failure --
+     * `untracked=[]` beside `notice="Repository created."` -- and was a real
+     * bug wearing a flake's clothes.
+     *
+     * The lock holds across the read *and* the write, which is what orders
+     * them: a reload that acquires later necessarily reads later, so the last
+     * write is the freshest read.
+     *
+     * **This fix is by inspection, and a regression test for it was tried and
+     * removed.** A stress test that starts a dozen refreshes on either side of
+     * a file write passes with the lock *and* without it: `viewModelScope` runs
+     * on the main dispatcher, so reloads interleave only at suspension points
+     * and an idle emulator resolves them in order. Keeping a test that cannot
+     * fail would have claimed cover it does not give. The single observed
+     * failure came from a sweep where a neighbouring suite was loading the
+     * process, which is exactly when the inversion becomes likely.
+     */
+    private suspend fun reload() = reloadLock.withLock {
+        val repo = repository ?: return@withLock
         // Read before the state is touched, so a failure leaves the panel
         // showing the last thing that was true rather than an empty one.
         val status = repo.status()

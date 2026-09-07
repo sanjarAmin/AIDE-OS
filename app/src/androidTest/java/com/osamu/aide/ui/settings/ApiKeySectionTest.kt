@@ -58,7 +58,14 @@ class ApiKeySectionTest {
      */
     private fun reset() {
         keys.clear()
+        // **`clear()` spares every endpoint on purpose**, so each has to go by
+        // hand. Missing the per-provider ones leaves a stored address that
+        // prefills the field in the next test, and `performTextInput` appends:
+        // the assertion then fails comparing one URL against two concatenated,
+        // which reads as a storage bug rather than a dirty fixture.
         keys.saveBaseUrl(Endpoint.Default)
+        keys.saveCustomBaseUrl(null)
+        keys.saveOpenAiBaseUrl(null)
         keys.setActiveProvider(AiProviderType.ANTHROPIC)
     }
 
@@ -282,6 +289,8 @@ class ApiKeySectionTest {
 
         compose.onNodeWithContentDescription("API endpoint")
             .performScrollTo()
+            .performTextClearance()
+        compose.onNodeWithContentDescription("API endpoint")
             .performTextInput("https://ollama.local")
         compose.onNodeWithText("Save endpoint").performScrollTo().performClick()
         compose.waitForIdle()
