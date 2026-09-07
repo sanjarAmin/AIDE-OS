@@ -315,14 +315,20 @@ fun BottomToolDock(
                             }
                         }
                     }
-                    // Both tabs are placeholders and say so. A mocked-up log
-                    // stream or shell prompt reads as a working feature, and
-                    // the first thing it teaches the user is that the UI lies
-                    // about what the app can do.
+                    // A placeholder that says so. A mocked-up log stream reads
+                    // as a working feature, and the first thing it teaches the
+                    // user is that the UI lies about what the app can do.
+                    //
+                    // The wording names the actual obstacle now that there is
+                    // one: an app sees only its own log lines until it holds
+                    // READ_LOGS, and holding it means every install can ask for
+                    // every log on the phone. `tools/logcat/FINDINGS.md` has
+                    // the evidence, including that the grant is one-time.
                     ToolTab.GIT -> GitPanel(state = gitState, actions = gitActions)
                     ToolTab.LOGCAT -> NotBuiltYet(
-                        "Reading the running app's log needs the installed build to be " +
-                            "attached to. Nothing here is wired up yet.",
+                        "An app can only read its own log lines. Showing the app you " +
+                            "built needs permission to read every log on the phone, " +
+                            "which is not a permission this app asks for yet.",
                     )
                     ToolTab.TERMINAL -> TerminalPanel(
                         state = terminalState,
