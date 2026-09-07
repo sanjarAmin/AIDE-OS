@@ -237,3 +237,38 @@ panel had never shown.
 one was found because the flow it prescribes is short enough to walk end to end;
 the same shape exists wherever a screen caches a decision made somewhere else.
 
+## Cloned repositories get `core.symlinks = false`, and that is the platform
+
+Found 2026-09-07 by cloning `github.com/octocat/Hello-World` from the running
+app and reading the config it wrote.
+
+```
+[core]
+	symlinks = false
+	filemode = true
+```
+
+JGit decides whether a filesystem supports symlinks by creating one and seeing
+what happens. The workspace lives on **external storage** —
+`/storage/emulated/0/Android/data/<pkg>/files/projects`, deliberately, so a
+project can be reached from a desktop over USB — and that is FUSE-backed. An
+untrusted app creating a symlink there is refused by SELinux, which shows up in
+logcat and nowhere else:
+
+```
+avc: denied { create } for name="tmplink" scontext=u:r:untrusted_app:s0:...
+     tcontext=u:object_r:fuse:s0:... tclass=lnk_file permissive=0
+```
+
+JGit handles the refusal correctly: it records `symlinks = false` and carries on.
+**The consequence is the part worth knowing.** A repository containing symlinks
+checks them out as ordinary files whose contents are the link target — standard
+git behaviour on a filesystem without symlink support — so a user who clones
+such a repository on the phone and commits from it can turn its symlinks into
+regular files without being told. Nothing here is broken; the trade was made
+when the workspace was put where a desktop can see it.
+
+Not observed for a repository with no symlinks, which is every repository this
+project has cloned in a test. It would take a fixture with one to see the
+checkout difference, and none exists yet.
+
