@@ -104,6 +104,12 @@ fun CodeEditorView(
             editor.setTextSize(settings.fontSizeSp)
             editor.setTabWidth(settings.tabWidth)
             editor.setLineNumberEnabled(settings.showLineNumbers)
+            // **Pinned**, which sora does not do by default. Word wrap is off
+            // unless the user turns it on, so scrolling sideways is the normal
+            // way to read a long line -- and unpinned, the gutter scrolls away
+            // with the text, so the further right you go the less able you are
+            // to tell which line a diagnostic was about.
+            editor.setPinLineNumber(true)
             editor.setWordwrap(settings.wordWrap)
             // Compared rather than assigned every frame: a new scheme object
             // makes the editor rebuild its styles, which on a 5,000-line file

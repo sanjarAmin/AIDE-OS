@@ -158,6 +158,18 @@ per composition from `isSystemInDarkTheme()` unless the user overrode it. The
 scheme is compared before being assigned: a new scheme object makes the editor
 rebuild its styles, which on a 5,000-line file is visible.
 
+## The line-number gutter scrolls away unless it is pinned
+
+sora's `setPinLineNumber` defaults to **false**, so the gutter scrolls
+horizontally with the text. Word wrap here is off unless the user turns it on —
+deliberately, because wrapping hides the indentation that shows a program's
+structure — which makes scrolling sideways the normal way to read a long line.
+Unpinned, the further right you scroll the less able you are to tell which line
+anything is on, and the gutter is what diagnostics point into.
+
+Found by typing at the end of a long line and watching the numbers slide off the
+left edge. It is one setter, in the same `update` block as the rest.
+
 ## Editor settings are applied in `update`, not in the factory
 
 Added 2026-09-07, when the four hardcoded appearance values became settings.
