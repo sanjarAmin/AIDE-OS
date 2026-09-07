@@ -77,6 +77,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.osamu.aide.core.fs.BuildEngine
 import com.osamu.aide.core.fs.FileNode
 import com.osamu.aide.core.fs.SourceLanguage
 import com.osamu.aide.ai.ui.ChatPanel
@@ -417,6 +418,7 @@ fun WorkspaceScreen(
                             onLaunchIntent = activityLauncher::launch,
                             onCloseDock = viewModel::closeBuildPanel,
                             onInstallDependencies = viewModel::installDependencies,
+                            onSelectEngine = viewModel::setEngine,
                             editorSettings = editorSettings,
                             // The wide layout already has a side tool pane; a
                             // dock as well would report the same build twice.
@@ -521,6 +523,7 @@ private fun EditorArea(
     onLaunchIntent: (Intent) -> Unit,
     onCloseDock: () -> Unit,
     onInstallDependencies: () -> Unit,
+    onSelectEngine: (BuildEngine) -> Unit,
     editorSettings: EditorSettings,
     showDock: Boolean,
     gitState: GitUiState,
@@ -618,6 +621,12 @@ private fun EditorArea(
                 // disabled is worse than no button.
                 onInstallDependencies = onInstallDependencies
                     .takeIf { state.projectLanguage == SourceLanguage.JAVASCRIPT },
+                // Null for the languages with no engine: JavaScript and C#
+                // run rather than build, and offering them a choice between
+                // two APK pipelines would be offering a choice that does
+                // nothing.
+                engine = state.projectEngine.takeIf { state.projectLanguage in BUILDS_AN_APK },
+                onSelectEngine = onSelectEngine,
             )
         }
 
@@ -1043,3 +1052,16 @@ private fun FileTreeRow(
         }
     }
 }
+
+/**
+ * The languages whose ▶ produces an APK, and so have a build engine at all.
+ *
+ * JavaScript and C# run rather than build; a choice between the fast pipeline
+ * and Gradle would be a choice between two things neither of them uses.
+ */
+private val BUILDS_AN_APK = setOf(
+    SourceLanguage.JAVA,
+    SourceLanguage.KOTLIN,
+    SourceLanguage.C,
+    SourceLanguage.CPP,
+)

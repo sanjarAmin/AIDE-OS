@@ -763,6 +763,43 @@ class WorkspaceViewModelTest {
         )
     }
 
+    /**
+     * The engine can be changed after the project exists, and it sticks.
+     *
+     * It was written once at creation and never again: a project made with the
+     * fast path and later needing AGP had to be recreated. The assertion that
+     * matters is the second one -- the state agreeing is easy, and a state that
+     * disagrees with the descriptor survives until the next open and then
+     * quietly reverts.
+     */
+    @Test
+    fun changing_the_build_engine_reaches_the_descriptor() = runBlocking {
+        onMain { viewModel.open(project.rootDir) }
+        awaitState("the descriptor to be read") { it.projectEngine == BuildEngine.FAST }
+
+        onMain { viewModel.setEngine(BuildEngine.GRADLE) }
+        awaitState("the panel to show the new engine") { it.projectEngine == BuildEngine.GRADLE }
+
+        val reopened = repository.openProject(project.rootDir) as AppResult.Success
+        assertEquals(BuildEngine.GRADLE, reopened.value.engine)
+    }
+
+    /** Choosing the engine it already has changes nothing and writes nothing. */
+    @Test
+    fun choosing_the_engine_it_already_has_is_a_no_op() = runBlocking {
+        onMain { viewModel.open(project.rootDir) }
+        awaitState("the descriptor to be read") { it.projectEngine == BuildEngine.FAST }
+        val before = File(project.rootDir, Project.DESCRIPTOR_NAME).lastModified()
+
+        onMain { viewModel.setEngine(BuildEngine.FAST) }
+
+        assertEquals(
+            "the descriptor was rewritten for nothing",
+            before,
+            File(project.rootDir, Project.DESCRIPTOR_NAME).lastModified(),
+        )
+    }
+
     private companion object {
         const val TIMEOUT_MILLIS = 10_000L
         const val POLL_MILLIS = 20L

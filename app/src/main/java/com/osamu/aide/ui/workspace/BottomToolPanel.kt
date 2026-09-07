@@ -39,6 +39,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import androidx.compose.material3.FilterChip
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import com.osamu.aide.core.fs.BuildEngine
 import com.osamu.aide.core.ui.theme.CodeTextStyle
 import com.osamu.aide.engine.api.Diagnostic
 
@@ -80,6 +84,10 @@ fun BottomToolDock(
     onClose: () -> Unit,
     /** Null for a project npm has nothing to do with, which is most of them. */
     onInstallDependencies: (() -> Unit)? = null,
+    /** Which engine builds this project, and how to change it. Null for the
+     *  languages that have no engine because they do not build an APK. */
+    engine: BuildEngine? = null,
+    onSelectEngine: (BuildEngine) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var selectedTab by remember { mutableStateOf(ToolTab.BUILD) }
@@ -246,6 +254,9 @@ fun BottomToolDock(
                                     modifier = Modifier.padding(bottom = 4.dp),
                                 )
                             }
+                            engine?.let { current ->
+                                EngineRow(current, onSelectEngine)
+                            }
                             if (onInstallDependencies != null) {
                                 TextButton(
                                     onClick = onInstallDependencies,
@@ -355,5 +366,39 @@ private fun NotBuiltYet(explanation: String) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 4.dp),
         )
+    }
+}
+
+/**
+ * Which engine builds this project.
+ *
+ * Here rather than in Settings because it is a property of the project, not of
+ * the app: two projects on one phone can want different engines, and the
+ * descriptor is where the answer lives. It was chosen once at creation and
+ * could never be changed, so a project made with the fast path and later
+ * needing AGP had to be made again from scratch.
+ */
+@Composable
+private fun EngineRow(engine: BuildEngine, onSelect: (BuildEngine) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = "Engine",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        BuildEngine.entries.forEach { option ->
+            FilterChip(
+                selected = engine == option,
+                onClick = { onSelect(option) },
+                label = { Text(option.displayName) },
+                modifier = Modifier.semantics {
+                    contentDescription = "Build with ${option.displayName}"
+                },
+            )
+        }
     }
 }

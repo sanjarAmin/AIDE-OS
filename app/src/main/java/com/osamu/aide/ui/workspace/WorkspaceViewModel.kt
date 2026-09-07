@@ -8,6 +8,7 @@ import com.osamu.aide.core.common.AppResult
 import com.osamu.aide.build.BuildRunner
 import com.osamu.aide.core.common.DispatcherProvider
 import com.osamu.aide.core.fs.FileNode
+import com.osamu.aide.core.fs.BuildEngine
 import com.osamu.aide.core.fs.Project
 import com.osamu.aide.core.fs.ProjectFiles
 import com.osamu.aide.core.fs.ProjectRepository
@@ -200,6 +201,8 @@ data class WorkspaceUiState(
      * the difference between a user expecting an install and getting output.
      */
     val projectLanguage: SourceLanguage? = null,
+    /** The engine that will build it, once the descriptor has been read. */
+    val projectEngine: BuildEngine? = null,
 ) {
     val active: OpenFile? get() = openFiles.firstOrNull { it.file == activeFile }
 
@@ -319,6 +322,7 @@ class WorkspaceViewModel(
                         it.copy(
                             projectName = result.value.name,
                             projectLanguage = result.value.language,
+                            projectEngine = result.value.engine,
                         )
                     }
                 }
@@ -961,6 +965,31 @@ class WorkspaceViewModel(
                         isRunning = false,
                         stage = null,
                         outcome = it.build.outcome ?: "Build stopped.",
+                    ),
+                )
+            }
+        }
+    }
+
+    /**
+     * Changes which engine builds this project.
+     *
+     * Written through the repository rather than held in state, because the
+     * descriptor is what the next open reads -- a change kept only here would
+     * survive until the screen closed and then quietly revert.
+     */
+    fun setEngine(engine: BuildEngine) {
+        val current = project ?: return
+        if (current.engine == engine) return
+        viewModelScope.launch {
+            when (val updated = projects.setEngine(current, engine)) {
+                is AppResult.Success -> {
+                    project = updated.value
+                    _state.update { it.copy(projectEngine = updated.value.engine) }
+                }
+                is AppResult.Failure -> _events.send(
+                    WorkspaceEvent.Notice(
+                        "Could not change the build engine: ${updated.error.message}",
                     ),
                 )
             }

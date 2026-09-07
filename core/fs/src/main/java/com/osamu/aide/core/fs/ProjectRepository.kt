@@ -33,6 +33,15 @@ interface ProjectRepository {
         engine: BuildEngine,
     ): AppResult<Project>
     suspend fun touch(project: Project): AppResult<Unit>
+
+    /**
+     * Changes which engine builds [project], and returns it as it now is.
+     *
+     * The engine was chosen once, at creation, and could never be changed
+     * again -- so a project made with the fast path and later needing AGP had
+     * to be recreated. It is one field in the descriptor and always was.
+     */
+    suspend fun setEngine(project: Project, engine: BuildEngine): AppResult<Project>
 }
 
 class FileProjectRepository(
@@ -111,6 +120,18 @@ class FileProjectRepository(
             // act on. Creating one means creating something that builds.
             ProjectTemplate.write(project)
             project
+        }
+    }
+
+    override suspend fun setEngine(
+        project: Project,
+        engine: BuildEngine,
+    ): AppResult<Project> = withContext(dispatchers.io) {
+        runCatchingResult {
+            // Written before it is returned: the caller puts this in its state,
+            // and a state that disagrees with the descriptor survives until the
+            // next open and then silently reverts.
+            project.copy(engine = engine).also { writeDescriptor(it) }
         }
     }
 

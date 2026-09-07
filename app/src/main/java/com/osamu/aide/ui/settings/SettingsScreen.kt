@@ -46,7 +46,11 @@ private data class SettingsSection(val title: String, val summary: String)
 @Composable
 fun SettingsScreen(onNavigateBack: () -> Unit) {
     val sections = listOf(
-        SettingsSection("Build", "Fast or Gradle engine, JDK level, signing keys."),
+        // The engine is no longer listed here: it is a property of a project
+        // rather than of the app -- two projects on one phone can want
+        // different ones -- so it lives in the workspace's Build tab beside the
+        // output it produces.
+        SettingsSection("Build", "JDK level, and the keys a release APK is signed with."),
     )
 
     val keys = koinInject<ApiKeyStore>()

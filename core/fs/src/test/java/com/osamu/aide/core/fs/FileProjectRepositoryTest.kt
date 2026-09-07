@@ -98,4 +98,34 @@ class FileProjectRepositoryTest {
         val listed = repository.listProjects() as AppResult.Success
         assertTrue(listed.value.isEmpty())
     }
+
+    /**
+     * The engine is changeable, and the change is on disk before it is returned.
+     *
+     * It was written once at creation and never again, so a project made with
+     * the fast path and later needing AGP had to be recreated. What makes this
+     * worth a test rather than a one-liner is the ordering: the caller puts the
+     * returned project in its state, and a state that disagrees with the
+     * descriptor survives until the next open and then silently reverts.
+     */
+    @Test
+    fun `the engine can be changed and the descriptor is what changed`() = runTest {
+        val repository = newRepository()
+        val created = (
+            repository.createProject(
+                name = "Switcher",
+                applicationId = "com.example.switcher",
+                language = SourceLanguage.JAVA,
+                engine = BuildEngine.FAST,
+            ) as AppResult.Success<Project>
+            ).value
+
+        val updated = repository.setEngine(created, BuildEngine.GRADLE)
+
+        assertEquals(BuildEngine.GRADLE, (updated as AppResult.Success<Project>).value.engine)
+        // Re-read rather than trusted: the returned copy proves nothing about
+        // what the next launch will see.
+        val reopened = repository.openProject(created.rootDir) as AppResult.Success<Project>
+        assertEquals(BuildEngine.GRADLE, reopened.value.engine)
+    }
 }
