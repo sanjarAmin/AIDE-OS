@@ -118,7 +118,33 @@ Three changes, and the third is the one that generalises:
 clause that matters today, so it was left alone; whoever generalises these
 scripts should take the fixed walker as the starting point.
 
-## 4. What this does not answer
+## 4. The spike has retired into a class
+
+`NodeToolchain` in `:toolchain:native` is where the two facts above now live, so
+that nothing above it has to know them: it supplies `LD_LIBRARY_PATH` from the
+installation it was given, exposes `runtime` as the thing a spawned child must
+be handed, and runs npm as `npm-cli.js` rather than through the shell wrapper
+that cannot work here. It also answers `hasNpm`, because an archive assembled
+from `nodejs-lts` alone has none and the failure otherwise arrives later as
+`Cannot find module`.
+
+`NodeToolchainOnDeviceTest` drives it through the real `NativeToolRunner`, which
+is the distinction worth having: the spike sets its own environment by hand, and
+the whole point of the class is that callers do not.
+
+```
+node -e        -> Success: 42
+script         -> Success: platform=android
+child          -> Success: child said 42
+npm --version  -> Success: 11.19.1
+```
+
+What is still missing before M10 can ship this is a `ToolchainComponent`, and
+that needs `node.tar` **published** — the JDK and clang components point at this
+project's own releases, per architecture. Nothing here invents a pin;
+`toolchain/manager/FINDINGS.md` records what happens when one does not match.
+
+## 5. What this does not answer
 
 - **Only x86_64 so far**, and only on the emulator. clang and the JDK both
   needed an arm64 run before they were believed; so does this.
