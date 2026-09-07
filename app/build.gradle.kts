@@ -89,6 +89,7 @@ dependencies {
     implementation(project(":engine:mono"))
     implementation(project(":lsp:java"))
     implementation(project(":lsp:native"))
+    implementation(project(":lsp:node"))
     implementation(project(":lsp:kotlin"))
     implementation(project(":toolchain:native"))
     implementation(project(":terminal"))

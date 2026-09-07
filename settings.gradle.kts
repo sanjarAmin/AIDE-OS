@@ -80,6 +80,7 @@ include(":lsp:java")
 // C and C++ intelligence, which is clangd over stdio rather than a compiler in
 // this process. It arrives with M7, which is the milestone that needs it.
 include(":lsp:native")
+include(":lsp:node")
 
 // Kotlin intelligence, which is neither of the shapes above: the Analysis API
 // runs in this process like javac, but in its own dex archive behind a

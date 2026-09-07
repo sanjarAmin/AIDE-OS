@@ -11,6 +11,9 @@ import com.osamu.aide.lsp.nativelsp.ClangdService
 import com.osamu.aide.lsp.java.JavaLanguageService
 import com.osamu.aide.lsp.kotlin.KotlinArchives
 import com.osamu.aide.lsp.kotlin.KotlinLanguageService
+import com.osamu.aide.lsp.node.NodeLanguageService
+import com.osamu.aide.toolchain.nativetools.LinkerLaunch
+import com.osamu.aide.toolchain.nativetools.NodeToolchain
 import kotlinx.coroutines.runBlocking
 import java.io.File
 
@@ -44,6 +47,9 @@ class LanguageServices(
     private var nativeCurrent: Pair<File, ClangdService>? = null
 
     private var kotlinCurrent: Pair<File, KotlinLanguageService>? = null
+
+    /** Not keyed by project: see [nodeFor]. */
+    private var nodeCurrent: NodeLanguageService? = null
 
     /**
      * Null when there is nothing to analyse with.
@@ -116,6 +122,9 @@ class LanguageServices(
 
         val kotlin = kotlinFor(projectRoot, classpath)
         if (kotlin != null && kotlin.handles(file)) return kotlin
+
+        val node = nodeFor()
+        if (node != null && node.handles(file)) return node
         return null
     }
 
@@ -203,6 +212,27 @@ class LanguageServices(
         return service
     }
 
+    /**
+     * The JavaScript service, or null when Node is not installed.
+     *
+     * Takes no project, unlike the other three: `node --check` parses one file
+     * and resolves nothing, so there is no classpath, no platform and nothing
+     * for a second project to invalidate. Held anyway rather than built per
+     * call, because [serviceFor] runs on keystrokes and an allocation there is
+     * an allocation on every one.
+     */
+    private fun nodeFor(): NodeLanguageService? {
+        nodeCurrent?.let { return it }
+        val root = toolchain.nodeRoot() ?: return null
+        val service = NodeLanguageService(
+            node = NodeToolchain(root, LinkerLaunch.forThisProcess()),
+            dispatchers = dispatchers,
+            scratch = File(buildOutputRoot.parentFile, "js-check"),
+        )
+        nodeCurrent = service
+        return service
+    }
+
     /** Drops the warm compiler and stops the language server. */
     @Synchronized
     fun release() {
@@ -212,6 +242,8 @@ class LanguageServices(
         kotlinCurrent = null
         nativeCurrent?.second?.close()
         nativeCurrent = null
+        nodeCurrent?.close()
+        nodeCurrent = null
     }
 }
 

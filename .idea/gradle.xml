@@ -23,11 +23,14 @@
             <option value="$PROJECT_DIR$/engine/deps" />
             <option value="$PROJECT_DIR$/engine/fast" />
             <option value="$PROJECT_DIR$/engine/gradle" />
+            <option value="$PROJECT_DIR$/engine/mono" />
+            <option value="$PROJECT_DIR$/engine/node" />
             <option value="$PROJECT_DIR$/lsp" />
             <option value="$PROJECT_DIR$/lsp/api" />
             <option value="$PROJECT_DIR$/lsp/java" />
             <option value="$PROJECT_DIR$/lsp/kotlin" />
             <option value="$PROJECT_DIR$/lsp/native" />
+            <option value="$PROJECT_DIR$/lsp/node" />
             <option value="$PROJECT_DIR$/spike" />
             <option value="$PROJECT_DIR$/spike/ai" />
             <option value="$PROJECT_DIR$/spike/clang" />

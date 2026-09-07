@@ -163,6 +163,7 @@ Convert `:app` into a thin Compose shell over a multi-module Gradle build. Add t
 :lsp:java               Java intelligence (javac/JDT-based, in-process)
 :lsp:kotlin             Kotlin Analysis API
 :lsp:clangd             clangd over pipe transport
+:lsp:node               node --check for JavaScript: syntax diagnostics only
 
 :engine:api             BuildSystem interface, BuildRequest/BuildResult, progress event stream
 :engine:fast            ECJ/kotlinc -> D8 -> aapt2 -> apksig -> PackageInstaller
@@ -679,6 +680,16 @@ sharpest example so far of a bug no module's own test suite can see.
     committed, which is more than the app's entire native payload today for the
     language the plan already names as the defensible cut. If it is wanted, it
     is a download beside mono's, not a file in git.
+
+    Diagnostics followed the same week. `:lsp:node` is the fourth
+    `LanguageService` and the thinnest: Node ships no language server, so it
+    runs `node --check`, which reports every early error V8 raises —
+    redeclaration included — and says nothing at all about a name that does not
+    resolve. **The silence is the contract**, asserted as such, and
+    `complete`/`definition`/`signatureAt` all answer nothing rather than
+    pretending with a keyword list. C# has no equivalent: `mcs` compiles a whole
+    assembly rather than checking a file, which is a build and not a keystroke.
+    `lsp/node/FINDINGS.md`.
 
     **The C# half is wired too**, and it is what justifies the contract having
     been a contract rather than a class: `:engine:mono` implements the same

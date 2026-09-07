@@ -48,6 +48,8 @@ emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu host
 :lsp:api             The LanguageService contract; both services implement it
 :lsp:java            nb-javac kept warm: completion, diagnostics, definitions
 :lsp:native          clangd over stdio, for C and C++
+:lsp:node            `node --check` for JavaScript: syntax diagnostics only,
+                     and the FINDINGS say why that is the whole promise
 :toolchain:native    aapt2, a JVM launcher and jspawnhelper in jniLibs, and the
                      harnesses that drive them -- plus the linker64 route for
                      toolchains it did not bundle
@@ -61,7 +63,7 @@ tools/               Scripts that produce the toolchains and the one grammar
                      Bionic-linked binaries start here: clang, a JDK, node, mono
 ```
 
-`docs/PLAN.md` lists 22 modules. Twenty-one exist, plus ten spikes. Do not
+`docs/PLAN.md` lists 22 modules. Twenty-two exist, plus ten spikes. Do not
 create the rest speculatively — each arrives with the milestone that needs it.
 
 ## Conventions

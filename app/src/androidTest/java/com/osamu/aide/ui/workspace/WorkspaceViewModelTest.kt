@@ -519,6 +519,54 @@ class WorkspaceViewModelTest {
     }
 
     /**
+     * Typing a syntax error into a `.js` buffer reaches the gutter.
+     *
+     * The JavaScript twin of
+     * [typing_a_broken_line_puts_a_diagnostic_in_the_state], and it exists for
+     * the reason that one does: `:lsp:node` has its own suite proving it parses,
+     * and none of it proves this screen ever calls it. The bug a unit test
+     * never catches is a service that works perfectly and is never asked.
+     */
+    @Test
+    fun typing_a_broken_line_into_javascript_reaches_the_gutter() = runBlocking {
+        val script = (
+            repository.createProject(
+                name = "Broken Script",
+                applicationId = "com.example.broken",
+                language = SourceLanguage.JAVASCRIPT,
+                engine = BuildEngine.FAST,
+            ) as AppResult.Success
+            ).value
+        stageNode()
+        assumeTrue(
+            "no Node staged; there is nothing to check with",
+            ToolchainManager(context, dispatchers).nodeRoot() != null,
+        )
+        val entry = File(script.rootDir, "index.js")
+
+        onMain { viewModel.open(script.rootDir) }
+        onMain { viewModel.openDocument(entry) }
+        awaitState("the document to load") { it.active != null }
+
+        onMain { viewModel.onTextChanged("const a = 1;\nfunction f( {\n  return a;\n}\n") }
+        awaitState("the syntax error to be reported", timeoutMillis = 30_000L) { state ->
+            state.analysis.file == entry &&
+                state.analysis.diagnostics.any { "SyntaxError" in it.message }
+        }
+        assertTrue(
+            "the diagnostic did not reach the gutter",
+            viewModel.state.value.editorDiagnostics.any { "SyntaxError" in it.message },
+        )
+
+        // And it clears, or the gutter lies. A .js file has no `R` to be
+        // legitimately unresolved, so silence here is the whole answer.
+        onMain { viewModel.onTextChanged("const a = 1;\nconsole.log(a);\n") }
+        awaitState("the error to clear", timeoutMillis = 30_000L) { state ->
+            state.analysis.file == entry && state.analysis.diagnostics.isEmpty()
+        }
+    }
+
+    /**
      * "Install dependencies" reaches npm, and the tree shows what it wrote.
      *
      * A local `file:` dependency, so the test needs no registry: what is being
