@@ -105,6 +105,7 @@ include(":spike:clang")
 // Spike R11 -- PRoot and a Linux rootfs on a current Android, which is what
 // risk R4 is about and what M9 rests on. Not part of the app.
 include(":spike:rootfs")
+include(":spike:nodejs")
 
 // Spike R12: can the Kotlin Analysis API answer on ART? The compiler already
 // runs there (R2); this asks whether the API that reads code rather than

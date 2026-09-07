@@ -51,9 +51,11 @@ emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu host
 :terminal            forkpty, plus Termux's emulator vendored verbatim. FINDINGS.
 :vcs:git             JGit, plus the identity and token stores a device needs. FINDINGS.
 tools/               Scripts that produce the toolchains, and their FINDINGS.
+                     Several assemble from Termux's package repo, because only
+                     Bionic-linked binaries start here: clang, a JDK, and node
 ```
 
-`docs/PLAN.md` lists 22 modules. Nineteen exist, plus seven spikes. Do not
+`docs/PLAN.md` lists 22 modules. Nineteen exist, plus eight spikes. Do not
 create the rest speculatively — each arrives with the milestone that needs it.
 
 ## Conventions
