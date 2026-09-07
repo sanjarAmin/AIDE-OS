@@ -51,7 +51,28 @@ class ProjectLayout(val root: File) {
         .sortedBy { it.invariantSeparatorsPath }
         .toList()
 
-    /** True when there is enough here to attempt a build. */
+    /** A Node project's entry point, whatever `package.json` calls `main`. */
+    val nodeEntryPoint: File
+        get() {
+            val manifest = File(root, "package.json").takeIf { it.isFile }
+                ?: return File(root, "index.js")
+            // Deliberately a regex and not a JSON parser: this module has no
+            // JSON dependency, and the field is written by the template. A
+            // hand-edited `package.json` that this cannot read falls back to
+            // the conventional name rather than failing to find anything.
+            val main = Regex("\"main\"\\s*:\\s*\"([^\"]+)\"")
+                .find(manifest.readText())?.groupValues?.get(1)
+            return File(root, main ?: "index.js")
+        }
+
+    /**
+     * True when there is enough here to attempt a build.
+     *
+     * **An APK build**, which is the only kind this asks about. A Node project
+     * has no manifest and is never buildable in this sense; it is *runnable*,
+     * which is a different question and deliberately not conflated with it --
+     * answering true here would send it into the aapt2 pipeline.
+     */
     fun isBuildable(): Boolean = manifestFile.isFile
 
     companion object {

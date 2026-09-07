@@ -624,6 +624,54 @@ sharpest example so far of a bug no module's own test suite can see.
     a real opportunity that is deliberately not taken blind, since `llvm-ar` and
     `llvm-strip` are wanted the moment static libraries are.
 
+12. **M9 Gradle path — met, on both ABIs, and it installs itself.** An
+    unmodified Android Studio project builds on the device through the
+    `BuildSystem` interface, on Termux's Bionic-built OpenJDK started by a
+    launcher of ours. Nothing is staged by hand any more: the JDK, Gradle and
+    build-tools each download and install, and the SDK root is composed from
+    them. The tests that prove it had been **skipping in every sweep** for want
+    of a staged `jvm.tar` until 2026-09-06, so the milestone was met on a
+    hand-driven run and unchecked afterwards;
+    `gradle/stage-device-archives.gradle.kts` now stages what they need and
+    `:engine:gradle` runs 24 of 24.
+
+13. **M11 Kotlin intelligence — closed, and the component finally installs.**
+    `:lsp:kotlin` answers about a Kotlin buffer on device: placed diagnostics,
+    completion filtered by the typed prefix, extensions from the standard
+    library and from a project's **AARs**, cross-module references, and
+    go-to-definition. Warm completion is ~107 ms at rest against M3's 200 ms
+    budget; the ~220 ms this document used to carry was a warm-up plateau
+    measured two to five calls in, and the session now warms itself in the
+    background.
+
+    **The shipped component could not be installed by anyone until
+    2026-09-07.** It was pinned at a size and digest matching no published
+    artifact, which made the download fail as "the connection was lost" and then
+    HTTP 416 for ever; and the archive behind that URL predated `definitionAt`,
+    so it would not have worked had it installed. Rebuilt, re-uploaded,
+    re-pinned, and verified by driving a clean device through the download.
+    `toolchain/manager/FINDINGS.md`.
+
+14. **M10 JS / C# — de-risked, published, and not yet wired.** Both halves run
+    on device and both are installable components: Node 24.18.0 with npm
+    (spike R13) and Mono 6.14.1 (spike R14), each per ABI, each pinned and
+    checked against what is published. `NodeToolchain` and `MonoToolchain` hold
+    what the spikes learned — `LD_LIBRARY_PATH`, the `process.execPath`
+    deception, npm as `npm-cli.js`, and mono's `$mono_libdir` rewrite without
+    which every `System.IO` call fails.
+
+    **What is missing is everything above them.** Nothing calls
+    `ToolchainComponent.node` or `.mono`; `SourceLanguage` knows only Java and
+    Kotlin; there is no project template for either language and no run action.
+    That is the next work, and unlike the last two milestones it is ordinary
+    plumbing rather than a question about the platform.
+
+    One correction to the milestone as written: **".NET SDK (experimental)" is
+    not reachable by this route.** Termux publishes no `dotnet` and Microsoft's
+    builds are glibc. It is mono or nothing, and mono is 45 MB compressed for a
+    niche case — if M10 is ever trimmed, the C# half is the defensible cut, and
+    that is now an informed choice rather than a guess.
+
 
 ---
 

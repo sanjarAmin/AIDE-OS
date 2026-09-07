@@ -25,6 +25,71 @@ class ProjectTemplateTest {
         lastOpenedAt = 0L,
     )
 
+    /**
+     * A JavaScript project is a Node project, not an Android one.
+     *
+     * It reached the `else ->` branch and got a `MainActivity.java` under a
+     * package directory, plus a manifest and resources -- harmless only because
+     * the picker offers Java and Kotlin alone. The assertion that matters most
+     * is the absence: an Android skeleton here would be silently wrong the day
+     * a chip is added for it.
+     */
+    @Test
+    fun `a javascript project is a node project and not an android one`() {
+        val project = project(language = SourceLanguage.JAVASCRIPT)
+
+        ProjectTemplate.write(project)
+
+        val entry = File(project.rootDir, "index.js")
+        val manifestJson = File(project.rootDir, "package.json")
+        assertTrue("no entry point", entry.isFile)
+        assertTrue("no package.json", manifestJson.isFile)
+        assertTrue("the entry point is empty", entry.readText().contains("console.log"))
+        assertTrue("package.json does not name the entry point", manifestJson.readText().contains("\"main\""))
+
+        val layout = ProjectLayout.of(project)
+        assertTrue("an Android manifest was written for a Node project", !layout.manifestFile.isFile)
+        assertTrue("a resource directory was written", !layout.resourceDir.isDirectory)
+        assertTrue("Java sources were written", layout.javaSources().isEmpty())
+    }
+
+    /**
+     * And it must never enter the APK pipeline.
+     *
+     * `isBuildable` is the gate `WorkspaceViewModel` consults before running
+     * the aapt2/ECJ/D8 chain. A Node project answering true would be handed to
+     * a build that cannot possibly succeed, and the error would name a missing
+     * manifest rather than the fact that this is not that kind of project.
+     */
+    @Test
+    fun `a javascript project is not buildable as an apk`() {
+        val project = project(language = SourceLanguage.JAVASCRIPT)
+        ProjectTemplate.write(project)
+
+        assertTrue(
+            "a Node project reported itself buildable as an APK",
+            !ProjectLayout.of(project).isBuildable(),
+        )
+    }
+
+    /** The runner reads the entry point from `package.json`, not by convention. */
+    @Test
+    fun `the entry point comes from package json rather than a guess`() {
+        val project = project(language = SourceLanguage.JAVASCRIPT)
+        ProjectTemplate.write(project)
+        val layout = ProjectLayout.of(project)
+
+        assertEquals("index.js", layout.nodeEntryPoint.name)
+
+        // Renamed the way a user would, and the answer has to follow.
+        File(project.rootDir, "package.json").writeText("""{"main":"server.js"}""")
+        assertEquals("server.js", layout.nodeEntryPoint.name)
+
+        // And a package.json this cannot read falls back rather than failing.
+        File(project.rootDir, "package.json").writeText("{ not json at all")
+        assertEquals("index.js", layout.nodeEntryPoint.name)
+    }
+
     @Test
     fun `writes a buildable project`() {
         val project = project()
