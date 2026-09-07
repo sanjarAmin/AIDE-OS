@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -257,8 +259,9 @@ private fun EmptyProjects(modifier: Modifier = Modifier) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun CreateProjectDialog(
+internal fun CreateProjectDialog(
     onDismiss: () -> Unit,
     onCreate: (String, SourceLanguage) -> Unit,
 ) {
@@ -277,9 +280,22 @@ private fun CreateProjectDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Row(
+                // FlowRow, not Row. Four chips do not fit the width of a
+                // dialog on a phone, and a Row does not wrap -- it clips. The
+                // C# chip shipped hanging off the right edge, half a pixel of
+                // it visible and unreachable, and every test passed because a
+                // test asks the ViewModel for the language rather than tapping
+                // the chip. Driving the app is what found it.
+                // FlowRow, not Row. Four chips do not fit the width of a
+                // dialog on a phone, and a Row does not overflow -- it
+                // *squeezes*: C# shipped 19 dp wide against JavaScript's 99,
+                // its label wrapped inside it, and it was unreadable. Every
+                // test passed, because a test that wants a C# project asks the
+                // repository for one rather than tapping a chip.
+                FlowRow(
                     modifier = Modifier.padding(top = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     // Java and Kotlin build an APK; JavaScript does not build
                     // at all, it runs. The picker does not say so, because the

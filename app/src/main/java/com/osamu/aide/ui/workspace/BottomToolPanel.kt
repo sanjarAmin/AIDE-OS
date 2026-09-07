@@ -228,6 +228,24 @@ fun BottomToolDock(
                                     }
                                 }
                             }
+                            // How it ended, which the dock showed nowhere.
+                            // The side pane has always had it as a heading;
+                            // this is the phone layout, where a run that
+                            // exited 3 said so in no place a user could see --
+                            // a build at least leaves stage lines in the log,
+                            // and a program leaves only its own output.
+                            buildState.outcome?.let { outcome ->
+                                Text(
+                                    text = outcome,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = if (buildState.succeeded) {
+                                        MaterialTheme.colorScheme.onSurface
+                                    } else {
+                                        MaterialTheme.colorScheme.error
+                                    },
+                                    modifier = Modifier.padding(bottom = 4.dp),
+                                )
+                            }
                             if (onInstallDependencies != null) {
                                 TextButton(
                                     onClick = onInstallDependencies,

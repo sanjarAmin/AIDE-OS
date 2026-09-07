@@ -883,7 +883,9 @@ private fun PlatformInstallDialog(
                     )
                 }
 
-                state.progress?.let { InstallProgressRow(it, megabytes) }
+                state.progress?.let {
+                    InstallProgressRow(it, megabytes, state.component.displayName)
+                }
             }
         },
         confirmButton = {
@@ -904,13 +906,22 @@ private fun PlatformInstallDialog(
 }
 
 @Composable
-private fun InstallProgressRow(progress: InstallProgress, megabytes: Long) {
+private fun InstallProgressRow(
+    progress: InstallProgress,
+    megabytes: Long,
+    // The component being installed. This row said "Extracting android.jar"
+    // whatever was extracting, which was true only of the first component this
+    // dialog ever had -- and read, while Node unpacked, as the app doing
+    // something nobody asked for. The title above says the right thing; there
+    // is no reason for the line under it to disagree.
+    componentName: String,
+) {
     Column(Modifier.padding(top = 16.dp)) {
         val label = when (progress) {
             is InstallProgress.Downloading ->
                 "Downloading — ${progress.bytes / (1024 * 1024)} of $megabytes MB"
             InstallProgress.Verifying -> "Verifying the download"
-            InstallProgress.Extracting -> "Extracting android.jar"
+            InstallProgress.Extracting -> "Extracting $componentName"
             is InstallProgress.Installed -> "Installed"
             is InstallProgress.Failed -> progress.message
         }
