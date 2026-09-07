@@ -57,7 +57,24 @@ diagnostic on a file the editor has no tab for.
 `NodeSyntaxCheckTest`'s fixtures are captured output, not invented. A parser
 tested against output somebody imagined is tested against nothing.
 
-## 4. A process per keystroke, which the other three services avoid
+## 4. The path it reports is the user's, twice over
+
+`node --check` runs against a **scratch copy of the buffer**, so what node
+prints is a file under the app's cache that the editor has no tab for. The
+diagnostic names the user's file instead.
+
+That was not enough. The user's file is still an absolute path, and on a phone
+`/storage/emulated/0/Android/data/com.osamu.aide/files/projects/Diag-Test/index.js`
+is three wrapped lines before the message starts. `Diagnostic`'s own KDoc says
+paths should be project-relative and says why; this service shipped ignoring
+it, and only opening the Problems tab showed what that costs.
+
+The relativising helper existed twice already — privately in `:engine:fast` and
+again, identically, in `:lsp:java` — so it now lives in `:engine:api` beside the
+contract it enforces. Both sides are canonicalised, because `/data/user/0/<pkg>`
+is a symlink to `/data/data/<pkg>` and a plain prefix match silently fails.
+
+## 5. A process per keystroke, which the other three services avoid
 
 `:lsp:java` holds a warm javac, `:lsp:kotlin` a resident Analysis API session,
 `:lsp:native` a running clangd. This starts a process per check, which is

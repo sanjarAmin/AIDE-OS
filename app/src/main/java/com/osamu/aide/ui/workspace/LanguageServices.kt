@@ -48,8 +48,7 @@ class LanguageServices(
 
     private var kotlinCurrent: Pair<File, KotlinLanguageService>? = null
 
-    /** Not keyed by project: see [nodeFor]. */
-    private var nodeCurrent: NodeLanguageService? = null
+    private var nodeCurrent: Pair<File, NodeLanguageService>? = null
 
     /**
      * Null when there is nothing to analyse with.
@@ -123,7 +122,7 @@ class LanguageServices(
         val kotlin = kotlinFor(projectRoot, classpath)
         if (kotlin != null && kotlin.handles(file)) return kotlin
 
-        val node = nodeFor()
+        val node = nodeFor(projectRoot)
         if (node != null && node.handles(file)) return node
         return null
     }
@@ -215,21 +214,26 @@ class LanguageServices(
     /**
      * The JavaScript service, or null when Node is not installed.
      *
-     * Takes no project, unlike the other three: `node --check` parses one file
-     * and resolves nothing, so there is no classpath, no platform and nothing
-     * for a second project to invalidate. Held anyway rather than built per
-     * call, because [serviceFor] runs on keystrokes and an allocation there is
-     * an allocation on every one.
+     * Keyed by project only so diagnostics can be reported relative to it.
+     * `node --check` parses one file and resolves nothing, so unlike the other
+     * three there is no classpath and no session a second project could
+     * invalidate -- but a diagnostic naming an absolute path is unreadable on a
+     * phone, and the root is what makes it short.
      */
-    private fun nodeFor(): NodeLanguageService? {
-        nodeCurrent?.let { return it }
-        val root = toolchain.nodeRoot() ?: return null
+    private fun nodeFor(projectRoot: File): NodeLanguageService? {
+        nodeCurrent?.let { (root, service) ->
+            if (root == projectRoot) return service
+            service.close()
+            nodeCurrent = null
+        }
+        val installed = toolchain.nodeRoot() ?: return null
         val service = NodeLanguageService(
-            node = NodeToolchain(root, LinkerLaunch.forThisProcess()),
+            node = NodeToolchain(installed, LinkerLaunch.forThisProcess()),
             dispatchers = dispatchers,
             scratch = File(buildOutputRoot.parentFile, "js-check"),
+            projectRoot = projectRoot,
         )
-        nodeCurrent = service
+        nodeCurrent = projectRoot to service
         return service
     }
 
@@ -242,7 +246,7 @@ class LanguageServices(
         kotlinCurrent = null
         nativeCurrent?.second?.close()
         nativeCurrent = null
-        nodeCurrent?.close()
+        nodeCurrent?.second?.close()
         nodeCurrent = null
     }
 }

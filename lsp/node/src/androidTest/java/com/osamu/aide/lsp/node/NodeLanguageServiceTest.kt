@@ -49,6 +49,7 @@ class NodeLanguageServiceTest {
             node = NodeToolchain(root, LinkerLaunch.forThisProcess()),
             dispatchers = DefaultDispatcherProvider(),
             scratch = File(context.cacheDir, "js-check").apply { mkdirs() },
+            projectRoot = File(context.filesDir, "js-project"),
         )
         project = File(context.filesDir, "js-project").apply { deleteRecursively(); mkdirs() }
     }
@@ -86,7 +87,10 @@ class NodeLanguageServiceTest {
         assertEquals("expected exactly one diagnostic", 1, diagnostics.size)
         val only = diagnostics.single()
         assertEquals(DiagnosticSeverity.ERROR, only.severity)
-        assertEquals(entry, only.file)
+        // Relative to the project, not the absolute path node was handed: a
+        // diagnostic naming /storage/emulated/0/Android/data/... is three
+        // wrapped lines on a phone, which is what Diagnostic's contract is for.
+        assertEquals(File("index.js"), only.file)
         assertEquals(3, only.line)
         assertTrue("no position: $only", only.column > 0)
         assertTrue("the message says nothing: $only", only.message.startsWith("SyntaxError"))
@@ -111,6 +115,23 @@ class NodeLanguageServiceTest {
         // And the reverse: a clean buffer over a broken file is clean.
         entry.writeText("function f( {\n")
         assertEquals(emptyList<Any>(), service.diagnostics(entry, "const fine = 1;\n"))
+    }
+
+    /**
+     * A file outside the project keeps the path it was reported with.
+     *
+     * The relativising is a prefix cut, and anything the cut does not apply to
+     * has to survive it unchanged -- rewriting a path outside the project would
+     * present a file the user cannot open as one they wrote.
+     */
+    @Test
+    fun a_file_outside_the_project_is_left_alone() = runBlocking {
+        val stray = File(context.cacheDir, "stray.js")
+
+        val only = service.diagnostics(stray, "const = ;\n").single()
+        Log.i(TAG, "outside -> $only")
+
+        assertEquals(stray, only.file)
     }
 
     /** Redeclaration is an early error, so this service catches it. */

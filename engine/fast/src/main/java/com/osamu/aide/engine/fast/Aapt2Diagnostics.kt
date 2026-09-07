@@ -1,6 +1,7 @@
 package com.osamu.aide.engine.fast
 
 import com.osamu.aide.engine.api.Diagnostic
+import com.osamu.aide.engine.api.ProjectPaths
 import com.osamu.aide.engine.api.DiagnosticSeverity
 import java.io.File
 

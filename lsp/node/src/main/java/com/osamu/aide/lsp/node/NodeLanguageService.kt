@@ -2,6 +2,7 @@ package com.osamu.aide.lsp.node
 
 import com.osamu.aide.core.common.DispatcherProvider
 import com.osamu.aide.engine.api.Diagnostic
+import com.osamu.aide.engine.api.ProjectPaths
 import com.osamu.aide.lsp.api.CompletionItem
 import com.osamu.aide.lsp.api.LanguageService
 import com.osamu.aide.lsp.api.SourceLocation
@@ -34,6 +35,17 @@ class NodeLanguageService(
      * is looking at and it has usually not been saved.
      */
     private val scratch: File,
+    /**
+     * Only so diagnostics can name a path a user recognises.
+     *
+     * `node --check` resolves nothing, so unlike the other three services this
+     * has no classpath and no session to invalidate -- the root is here for
+     * presentation alone. Without it the Problems tab showed
+     * `/storage/emulated/0/Android/data/com.osamu.aide/files/projects/...`,
+     * three wrapped lines of a phone screen, which is exactly the outcome
+     * [Diagnostic] documents and asks producers to avoid.
+     */
+    private val projectRoot: File,
 ) : LanguageService {
 
     override fun handles(file: File): Boolean = file.extension.lowercase() in EXTENSIONS
@@ -74,7 +86,7 @@ class NodeLanguageService(
                 } else if (process.exitValue() == 0) {
                     emptyList()
                 } else {
-                    NodeSyntaxCheck.parse(output, file)
+                    NodeSyntaxCheck.parse(output, ProjectPaths.relativise(file, projectRoot))
                 }
             } catch (interrupted: Exception) {
                 // The read was cut short, which here means the caller lost
