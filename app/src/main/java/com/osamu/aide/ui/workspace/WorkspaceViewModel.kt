@@ -608,6 +608,14 @@ class WorkspaceViewModel(
     }
 
     /** Writes every modified tab. Used before a build, which reads the disk. */
+    /**
+     * Writes every modified buffer, and waits.
+     *
+     * Public for the fix affordance, which must not ask the assistant about a
+     * diagnostic the file on disk cannot show. See [FixRequest].
+     */
+    suspend fun saveAllNow() = saveAll()
+
     private suspend fun saveAll() {
         _state.value.openFiles.filter { it.isDirty }.forEach { saveIfDirty(it.file) }
     }

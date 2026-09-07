@@ -735,6 +735,34 @@ class WorkspaceViewModelTest {
         )
     }
 
+    /**
+     * What "fix this error" depends on: the file matches the buffer first.
+     *
+     * The diagnostic describes the buffer and the assistant's `read_file` reads
+     * the disk. Driving the app showed what happens when they disagree -- the
+     * assistant read a file with no error in it, said so, and refused to guess.
+     * `askToFix` calls this before sending; if it stops writing, the assistant
+     * goes back to answering the wrong question.
+     */
+    @Test
+    fun saving_for_a_fix_writes_every_dirty_buffer() = runBlocking {
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(mainActivitySource) }
+        awaitState("the document to load") { it.active != null }
+
+        val edited = viewModel.state.value.active!!.document.text + "\n// asked about this\n"
+        onMain { viewModel.onTextChanged(edited) }
+        assertTrue("the edit was not noticed", viewModel.state.value.isDocumentDirty)
+
+        viewModel.saveAllNow()
+
+        assertEquals(
+            "the assistant would have read the file without the edit",
+            edited,
+            mainActivitySource.readText(),
+        )
+    }
+
     private companion object {
         const val TIMEOUT_MILLIS = 10_000L
         const val POLL_MILLIS = 20L

@@ -67,6 +67,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
@@ -134,9 +135,19 @@ fun WorkspaceScreen(
     // user to retype an error they are looking at. The message is built where
     // the project root is known -- see fixRequest, and why the path it puts in
     // must be relative.
+    // **Saved before asked.** The diagnostic describes the *buffer*; the
+    // assistant's `read_file` reads the *file*. With an unsaved edit the two
+    // disagree, and the assistant is asked to explain an error that is not in
+    // what it can see. Driving this found exactly that: it read the file, found
+    // one line and no `{` anywhere, and correctly refused to guess -- which is
+    // the right answer to the wrong question.
+    val fixScope = rememberCoroutineScope()
     val askToFix: (Diagnostic) -> Unit = { diagnostic ->
         isChatOpen = true
-        assistant.send(fixRequest(diagnostic, projectDir))
+        fixScope.launch {
+            viewModel.saveAllNow()
+            assistant.send(fixRequest(diagnostic, projectDir))
+        }
     }
 
     val gitActions = remember(git) {

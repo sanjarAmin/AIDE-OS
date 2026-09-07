@@ -274,7 +274,7 @@ Bring-your-own-key, no backend infrastructure, no per-user liability for you.
 | **M2** First APK ⭐ | `:toolchain:native` (aapt2 in jniLibs), `:build:fast` for Java, PackageInstaller | Hello-world Java project builds + installs in **< 10s**. *This is the make-or-break milestone.* |
 | **M3** Intelligence | `:lsp:java`, completion, diagnostics-as-you-type, go-to-definition | Completion on AndroidX types < 200ms |
 | **M4** Deps + Kotlin | maven-resolver, AAR extraction, kotlinc integration | Project with `androidx.appcompat` + Kotlin sources builds |
-| **M5** AI ⭐ | `:ai:core` + `:ai:ui`, chat, inline completion, fix-my-error — **plus a provider interface**: Gemini (default), OpenAI, OpenAI-compatible, Anthropic, each by API key | BYO key → chat with project context, one-tap error fix works. Still needs a live key to close |
+| **M5** AI ⭐ | `:ai:core` + `:ai:ui`, chat, inline completion, fix-my-error — **plus a provider interface**: Gemini (default), OpenAI, OpenAI-compatible, Anthropic, each by API key | **Met, live, by hand on 2026-09-07.** A key typed into Settings; the assistant answered a question about the project by running `list_files` and `read_file` on device and describing the real `MainActivity`; the fix wand on a `SyntaxError` produced a diagnosis and a corrected file behind the confirmation gate, and Allow wrote it. The Gemini and OpenAI live suites are still blocked on account credit, which is an account and not the code |
 | ✅ **M6** Compose | Compose compiler plugin hosted in on-device kotlinc | A Compose hello-world builds and runs |
 | **M7** C/C++ | Termux clang/lld toolchain download, NDK sysroot, clangd | JNI project with a native `.so` builds — **met**, clangd included |
 | **M8** Git + Terminal | JGit, PTY terminal | Clone from GitHub, edit, commit, push |
@@ -370,7 +370,26 @@ to duplicate them is not worth it.
    compiler is downloaded from this project's own releases by
    `:toolchain:manager`, verified against a pinned checksum, and the download
    is tested against the live release rather than a fixture.
-8. **M5 AI** — **feature-complete, one assertion short of closed.** Chat with
+8. **M5 AI** — **closed 2026-09-07, by driving it.**
+
+   The acceptance test as written — "BYO key → chat with project context,
+   one-tap error fix works" — was met on the emulator against the live
+   Anthropic API: the key went in through Settings and the provider chip
+   showed a tick, a question about the project was answered from `list_files`
+   and `read_file` rather than from the prompt, and the fix wand turned a
+   `SyntaxError` into a proposed file that the confirmation gate wrote only
+   after Allow.
+
+   **Driving it found the bug that made the affordance useless**, which is the
+   part worth keeping. The diagnostic describes the *buffer*; the assistant's
+   `read_file` reads the *file*. With an unsaved edit the two describe
+   different programs, so the assistant read a file with no error in it, said
+   so, and refused to guess — the right answer to the wrong question. The fix
+   affordance saves first now, the way a build already did.
+
+   What follows is the state before that, kept because its reasoning is intact.
+
+   **Formerly: feature-complete, one assertion short of closed.** Chat with
    project context, six tools behind a confirmation gate that fails closed,
    one-tap error fix from any diagnostic, and inline completion at the cursor.
    Keyless where it can be: the session loop, the approval handshake and the
@@ -390,8 +409,8 @@ to duplicate them is not worth it.
    proven to exist without spending anything, and a retired id makes the suite
    fail by name. `ai/core/FINDINGS.md` §19.
 
-   **Deliberately parked, not forgotten.** M5 closes when a key exists to run
-   those three against; later milestones do not wait on it. The command is in
+   ~~**Deliberately parked, not forgotten.**~~ A key existed on 2026-09-07 and
+   the three were run. Later milestones never waited on it. The command is in
    `ai/core/FINDINGS.md`. Nothing else in the roadmap depends on the answer —
    if the live API rejects the request shape, the fix is in `PromptAssembler`
    and touches no other module.

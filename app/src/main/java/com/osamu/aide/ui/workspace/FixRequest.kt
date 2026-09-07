@@ -20,14 +20,25 @@ import java.io.File
  * The source line is not included. The assistant has `read_file` and will use
  * it, and a line quoted here is a line that can already be stale by the time it
  * is read -- the user may have edited the file since the build ran.
+ *
+ * **That reasoning only holds if the file has been written.** A diagnostic from
+ * the language service describes the buffer, and `read_file` reads the disk, so
+ * an unsaved edit makes the two describe different programs -- the assistant
+ * reads a file with no error in it and is asked what is causing one. The caller
+ * saves first; `WorkspaceScreen.askToFix`.
  */
 fun fixRequest(diagnostic: Diagnostic, projectRoot: File): String {
     val where = diagnostic.file?.relativeToProject(projectRoot)
 
     return buildString {
-        append("The build reported this ")
+        // Not "the build reported": most of these come from the language
+        // service as the user types, and a message that names the wrong source
+        // invites the assistant to go looking in the wrong place -- which one
+        // of them did, running a build to check and reporting that the build
+        // said something else entirely.
+        append("This ")
         append(diagnostic.severity.name.lowercase())
-        append(":\n\n")
+        append(" was reported:\n\n")
 
         if (where != null) {
             append(where)
