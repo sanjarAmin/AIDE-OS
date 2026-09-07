@@ -17,6 +17,7 @@ import com.osamu.aide.engine.fast.KotlinToolchainProvider
 import com.osamu.aide.engine.fast.NativeToolchainProvider
 import com.osamu.aide.engine.gradle.GradleToolchainProvider
 import com.osamu.aide.engine.fast.ApkInstaller
+import com.osamu.aide.toolchain.manager.ToolchainComponent
 import com.osamu.aide.toolchain.manager.ToolchainManager
 import com.osamu.aide.toolchain.nativetools.NativeToolRunner
 import com.osamu.aide.toolchain.nativetools.NativeToolchain
@@ -624,6 +625,59 @@ class WorkspaceViewModelTest {
         awaitState("the tree to show the lock file npm wrote") { state ->
             state.visibleNodes.any { it.file.name == "package-lock.json" }
         }
+    }
+
+    /**
+     * A download accepted for npm installs dependencies, not the program.
+     *
+     * The install flow was written for the platform, where finishing the
+     * download and starting the build is right. Every borrower since has
+     * wanted something else, and the intent cannot be recovered afterwards --
+     * so it is carried. This asserts the carrying, at the seam where the bug
+     * lived: the two lines that decide what a finished download leads to.
+     *
+     * The install itself is not exercised. It is 37 MB over the network and
+     * has nothing to do with the question.
+     */
+    @Test
+    fun a_node_download_accepted_for_npm_does_not_run_the_program_instead()  = runBlocking {
+        val script = (
+            repository.createProject(
+                name = "Toll Paid",
+                applicationId = "com.example.toll",
+                language = SourceLanguage.JAVASCRIPT,
+                engine = BuildEngine.FAST,
+            ) as AppResult.Success
+            ).value
+        stageNode()
+        assumeTrue(
+            "no Node staged; both branches would refuse for the same reason",
+            ToolchainManager(context, dispatchers).nodeRoot() != null,
+        )
+        // Something npm will report on, so its output is distinguishable from
+        // the program's -- which prints "Hello from ..." and must not appear.
+        File(script.rootDir, "package.json").writeText(
+            """{"name":"toll-paid","version":"1.0.0","main":"index.js"}""",
+        )
+
+        onMain { viewModel.open(script.rootDir) }
+        awaitState("the descriptor to be read") { it.projectName == "Toll Paid" }
+
+        onMain {
+            viewModel.offerComponentInstall(
+                component = ToolchainComponent.node("x86_64")!!,
+                rationale = "test",
+                then = AfterInstall.INSTALL_DEPENDENCIES,
+            )
+            viewModel.resumeAfterInstall()
+        }
+
+        awaitState("npm to finish", timeoutMillis = 120_000L) {
+            !it.build.isRunning && it.build.outcome != null
+        }
+        val log = viewModel.state.value.build.log
+        assertTrue("npm was not what resumed: $log", log.any { "npm-cli.js" in it })
+        assertTrue("the program was run instead: $log", log.none { "Hello from" in it })
     }
 
     /**

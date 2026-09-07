@@ -59,6 +59,23 @@ import java.io.File
 data class InstallUiState(val message: String, val settings: Intent? = null)
 
 /** How the last (or current) build is going. */
+/**
+ * What a finished download should lead to.
+ *
+ * One value per thing that can ask for a component, because every one of them
+ * has a different next step and none of them can be told apart afterwards.
+ */
+enum class AfterInstall {
+    /** The user tapped ▶. Build or run, whichever their project means. */
+    BUILD,
+
+    /** The user opened a Kotlin file and accepted a download for completion. */
+    ANALYSE,
+
+    /** The user tapped "Install dependencies" and needed Node first. */
+    INSTALL_DEPENDENCIES,
+}
+
 data class BuildUiState(
     val isRunning: Boolean = false,
     /** What it is doing right now, or null when it is not running. */
@@ -252,16 +269,19 @@ class WorkspaceViewModel(
     private var kotlinInstallOffered = false
 
     /**
-     * Whether the download in flight was asked for by completion, not by Build.
+     * What to do when the download in flight lands.
      *
      * The install flow was written for the platform, where finishing the
      * download and starting the build is exactly right -- the user tapped
-     * Build and the download was the toll. Kotlin intelligence borrows the same
-     * flow and wants the opposite: somebody who opened a file and accepted a
-     * download for *completion* did not ask to compile anything, and starting a
-     * build for them is a surprise, not a convenience.
+     * Build and the download was the toll. Every borrower of the flow since
+     * has wanted something else: somebody who opened a file and accepted a
+     * download for *completion* did not ask to compile anything, and somebody
+     * who tapped "Install dependencies" and was told they needed Node did not
+     * ask to run their program. **Carried, not inferred** -- what the user
+     * asked for is not recoverable from the state the install is about to
+     * change, which is the same lesson [offerComponentInstall] records.
      */
-    private var installForIntelligence = false
+    private var afterInstall = AfterInstall.BUILD
     private var analysisJob: Job? = null
     private var signatureJob: Job? = null
 
@@ -781,6 +801,7 @@ class WorkspaceViewModel(
                         component = component,
                         rationale = "Installing dependencies needs Node.js, which is about " +
                             "${component.archiveBytes / (1024 * 1024)} MB to download.",
+                        then = AfterInstall.INSTALL_DEPENDENCIES,
                     )
                 }
                 return@launch
@@ -1077,7 +1098,7 @@ class WorkspaceViewModel(
             rationale = "Completion and errors for Kotlin need " +
                 "${component.displayName}, which is about $megabytes MB to " +
                 "download. Editing works without it.",
-            forIntelligence = true,
+            then = AfterInstall.ANALYSE,
         )
     }
 
@@ -1105,9 +1126,9 @@ class WorkspaceViewModel(
         // clobbered the value that had just been set, so a download accepted
         // for completion still kicked off a build. A caller's intent is not
         // recoverable from the state it is about to change.
-        forIntelligence: Boolean = false,
+        then: AfterInstall = AfterInstall.BUILD,
     ) {
-        installForIntelligence = forIntelligence
+        afterInstall = then
         if (_state.value.platform != null) return
         viewModelScope.launch {
             val text = if (component.requiresSdkLicense) {
@@ -1153,30 +1174,50 @@ class WorkspaceViewModel(
                     _state.update { it.copy(platform = null) }
                     _events.send(WorkspaceEvent.Notice("${platform.component.displayName} installed."))
 
-                    if (installForIntelligence) {
-                        // **Kotlin needs two components, so one install is
-                        // rarely the end.** The compiler is the prerequisite
-                        // and the Analysis API follows it; offering only the
-                        // first and stopping leaves a user who accepted a 53 MB
-                        // download still without completion, and nothing to say
-                        // why. Clearing the guard lets the next one be offered.
-                        kotlinInstallOffered = false
-                        installForIntelligence = false
-                        _state.value.activeFile?.let { active ->
-                            offerKotlinIntelligence(active)
-                            // Nothing re-analyses on its own: the service is
-                            // resolved per request, so the file on screen keeps
-                            // its old (empty) diagnostics until something asks
-                            // again.
-                            analyse(active, pendingText[active] ?: return@let)
-                        }
-                    } else {
-                        // What the user asked for was a build; the download was
-                        // the toll. Starting it saves them tapping Build again.
-                        build()
-                    }
+                    resumeAfterInstall()
                 }
             }
+        }
+    }
+
+    /**
+     * What a finished download leads to, kept apart so it can be tested.
+     *
+     * The dispatch, not the install: the install is 37--150 MB over the
+     * network and the bug this is about lives entirely in the two lines that
+     * decide what happens next. Separating them is what lets a test assert
+     * that a Node download accepted for "Install dependencies" installs
+     * dependencies rather than running the program.
+     */
+    internal fun resumeAfterInstall() {
+        when (afterInstall) {
+            // **Kotlin needs two components, so one install is rarely the
+            // end.** The compiler is the prerequisite and the Analysis API
+            // follows it; offering only the first and stopping leaves a user
+            // who accepted a 53 MB download still without completion, and
+            // nothing to say why. Clearing the guard lets the next be offered.
+            AfterInstall.ANALYSE -> {
+                kotlinInstallOffered = false
+                afterInstall = AfterInstall.BUILD
+                _state.value.activeFile?.let { active ->
+                    offerKotlinIntelligence(active)
+                    // Nothing re-analyses on its own: the service is resolved
+                    // per request, so the file on screen keeps its old (empty)
+                    // diagnostics until something asks again.
+                    analyse(active, pendingText[active] ?: return@let)
+                }
+            }
+
+            // The download was the toll on the way to npm, and running the
+            // program instead would be answering a question nobody asked.
+            AfterInstall.INSTALL_DEPENDENCIES -> {
+                afterInstall = AfterInstall.BUILD
+                installDependencies()
+            }
+
+            // What the user asked for was a build; the download was the toll.
+            // Starting it saves them tapping Build again.
+            AfterInstall.BUILD -> build()
         }
     }
 
