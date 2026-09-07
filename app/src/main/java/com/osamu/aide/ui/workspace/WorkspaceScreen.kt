@@ -57,6 +57,8 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
+import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -377,12 +379,16 @@ fun WorkspaceScreen(
                         )
                     },
                     toolPane = {
-                        // Stacked rather than tabbed, unlike the phone dock.
-                        // This pane is tall and narrow, and the two things it
-                        // shows are the two a user alternates between while
-                        // finishing a change: what the build said, and what is
-                        // about to be committed. Tabbing them would hide one
-                        // behind the other for no gain in space.
+                        // The build stays visible; everything else shares the
+                        // half below it.
+                        //
+                        // It was Build over Git, stacked, on the reasoning that
+                        // those are the two a user alternates between while
+                        // finishing a change. True, and it left the **terminal
+                        // unreachable on a tablet** -- a shipped feature with no
+                        // way in on a whole class of device, which is worse than
+                        // a tab. The build keeps the top half because it is the
+                        // thing you glance at rather than work in.
                         Column(Modifier.fillMaxSize()) {
                             Box(Modifier.weight(1f)) {
                                 BuildPane(
@@ -395,8 +401,16 @@ fun WorkspaceScreen(
                                 )
                             }
                             HorizontalDivider()
-                            Box(Modifier.weight(1f).padding(8.dp)) {
-                                GitPanel(state = gitState, actions = gitActions)
+                            Box(Modifier.weight(1f)) {
+                                SideToolTabs(
+                                    problems = state.analysis.diagnostics + state.build.diagnostics,
+                                    gitState = gitState,
+                                    gitActions = gitActions,
+                                    terminalState = terminalState,
+                                    terminalActions = terminalActions,
+                                    onDiagnosticClick = viewModel::openDiagnostic,
+                                    onFixDiagnostic = askToFix,
+                                )
                             }
                         }
                     },
@@ -1065,3 +1079,56 @@ private val BUILDS_AN_APK = setOf(
     SourceLanguage.C,
     SourceLanguage.CPP,
 )
+
+/**
+ * The tools that share the lower half of a tablet's side pane.
+ *
+ * A tab row rather than another stack: three panes in a column would leave each
+ * one too short to use, and the terminal in particular needs the height. Build
+ * is deliberately absent — it owns the half above this and is never hidden.
+ */
+@Composable
+private fun SideToolTabs(
+    problems: List<Diagnostic>,
+    gitState: GitUiState,
+    gitActions: GitActions,
+    terminalState: TerminalUiState,
+    terminalActions: TerminalActions,
+    onDiagnosticClick: (Diagnostic) -> Unit,
+    onFixDiagnostic: (Diagnostic) -> Unit,
+) {
+    var selected by remember { mutableStateOf(SideTool.GIT) }
+
+    Column(Modifier.fillMaxSize()) {
+        PrimaryTabRow(selectedTabIndex = SideTool.entries.indexOf(selected)) {
+            SideTool.entries.forEach { tool ->
+                Tab(
+                    selected = selected == tool,
+                    onClick = { selected = tool },
+                    text = { Text(tool.title, style = MaterialTheme.typography.labelMedium) },
+                )
+            }
+        }
+        Box(Modifier.weight(1f).padding(8.dp)) {
+            when (selected) {
+                SideTool.GIT -> GitPanel(state = gitState, actions = gitActions)
+                SideTool.PROBLEMS -> ProblemsList(problems, onDiagnosticClick, onFixDiagnostic)
+                SideTool.TERMINAL -> TerminalPanel(
+                    state = terminalState,
+                    actions = terminalActions,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Logcat is deliberately absent: it is not built, and `tools/logcat/FINDINGS.md`
+ * records why. A tab that only ever says "not built yet" is a tab that costs
+ * width on the one layout where width is already the scarce thing.
+ */
+private enum class SideTool(val title: String) {
+    GIT("Git"),
+    PROBLEMS("Problems"),
+    TERMINAL("Terminal"),
+}

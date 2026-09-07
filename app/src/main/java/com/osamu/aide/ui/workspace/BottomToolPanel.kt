@@ -286,46 +286,12 @@ fun BottomToolDock(
                             }
                         }
                     }
-                    ToolTab.PROBLEMS -> {
-                        if (problems.isEmpty()) {
-                            Text(
-                                text = "No problems found in project.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(8.dp),
-                            )
-                        } else {
-                            LazyColumn(Modifier.fillMaxWidth()) {
-                                items(problems) { diagnostic ->
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(
-                                            text = diagnostic.describe(),
-                                            style = CodeTextStyle,
-                                            color = MaterialTheme.colorScheme.error,
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .clickable(enabled = diagnostic.hasLocation) {
-                                                    onDiagnosticClick(diagnostic)
-                                                }
-                                                .padding(vertical = 4.dp),
-                                        )
-                                        IconButton(
-                                            onClick = { onFixDiagnostic(diagnostic) },
-                                            modifier = Modifier.size(32.dp),
-                                        ) {
-                                            Icon(
-                                                Icons.Default.AutoFixHigh,
-                                                contentDescription =
-                                                    "Ask the assistant to fix this",
-                                                tint = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.size(18.dp),
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    ToolTab.PROBLEMS -> ProblemsList(
+                        problems = problems,
+                        onDiagnosticClick = onDiagnosticClick,
+                        onFixDiagnostic = onFixDiagnostic,
+                    )
+
                     // A placeholder that says so. A mocked-up log stream reads
                     // as a working feature, and the first thing it teaches the
                     // user is that the UI lies about what the app can do.
@@ -399,6 +365,58 @@ private fun EngineRow(engine: BuildEngine, onSelect: (BuildEngine) -> Unit) {
                     contentDescription = "Build with ${option.displayName}"
                 },
             )
+        }
+    }
+}
+
+/**
+ * The Problems list, shared by the phone dock and the tablet's tool pane.
+ *
+ * Extracted when the tablet layout gained tabs of its own. It had exactly one
+ * caller for a long time and inlining it was right then; a second caller is
+ * what makes it a component.
+ */
+@Composable
+internal fun ProblemsList(
+    problems: List<Diagnostic>,
+    onDiagnosticClick: (Diagnostic) -> Unit,
+    onFixDiagnostic: (Diagnostic) -> Unit,
+) {
+    if (problems.isEmpty()) {
+        Text(
+            text = "No problems found in project.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(8.dp),
+        )
+        return
+    }
+    LazyColumn(Modifier.fillMaxWidth()) {
+        items(problems) { diagnostic ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = diagnostic.describe(),
+                    style = CodeTextStyle,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable(enabled = diagnostic.hasLocation) {
+                            onDiagnosticClick(diagnostic)
+                        }
+                        .padding(vertical = 4.dp),
+                )
+                IconButton(
+                    onClick = { onFixDiagnostic(diagnostic) },
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        Icons.Default.AutoFixHigh,
+                        contentDescription = "Ask the assistant to fix this",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
         }
     }
 }
