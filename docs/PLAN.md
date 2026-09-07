@@ -778,3 +778,39 @@ Made 2026-09-02:
     price is a second tool loop with its own copy of every rule the first one
     learned. Read as a warning it still reads correctly; read as a prohibition
     it was overtaken.
+
+---
+
+## What driving the app found, 2026-09-07
+
+Every milestone is met, so the useful question stopped being "what is missing"
+and became "what is wrong". One session of opening the app and using it found
+eleven defects, **each of them behind a passing test suite**. They are listed
+because the pattern is more useful than any one of them.
+
+| What a user saw | What was true |
+|---|---|
+| The C# chip was a sliver | Four `FilterChip`s in a `Row` do not overflow, they *squeeze*: 19 dp against a neighbour's 99. Three different assertions all reported the layout as fine; only chip **height** separates the two layouts, because a squeezed chip wraps its label |
+| "Extracting android.jar" while Node unpacked | The progress row was written when the platform was the only component |
+| A run's exit code appeared nowhere on a phone | The side pane had the outcome as a heading; the dock, which is what a phone shows, had it nowhere |
+| Three wrapped lines of `/storage/emulated/0/...` in Problems | `Diagnostic` asks producers for project-relative paths; `:lsp:node` shipped ignoring it. The helper existed **twice** privately already |
+| Node listed at 184 MB where `du` said 119 | `File.walkTopDown()` follows symlinks, and every toolchain here is built out of them. Caught only by running `du` beside the app |
+| A white editor inside a dark app | Nothing ever set sora's colour scheme. `EditorTheme`'s KDoc said colours "resolve to the app's theme", which was aspirational |
+| `abcdef` reached the shell as `aababcabcdeef` | A constant `TextFieldValue("")` never tells the IME anything changed, so it re-sends its whole buffer every keystroke |
+| A prompt running off the right edge | `TerminalViewModel.resize` existed since the terminal landed, its KDoc said it was "driven by the view", and nothing drove it |
+| "Set a name and email", after setting a name and email | `hasIdentity` is read when the panel loads and after its own operations. Following the panel's own instructions is neither |
+| The assistant refusing to fix an error | The diagnostic describes the *buffer*; `read_file` reads the *file*. An unsaved edit makes them different programs |
+| The engine chosen once and never again | One field in the descriptor, written at creation, with no way to change it |
+
+**None of these would have been found by more tests**, and several had tests
+asserting the exact behaviour that was wrong — a slot rather than a colour, a
+message rather than the file it names, a wand that calls a callback. The
+project's own convention already says instrumented tests should assert the
+observable effect; this is the same rule one level up, where the observable
+effect is what is on the screen.
+
+The cheapest tool was `adb exec-out screencap` and actually looking at the
+result. The second cheapest was asking the device rather than the app: `du`
+against a size the app reported, `stty size` against a terminal's dimensions,
+`cat aide.json` against a setting that claimed to persist.
+
