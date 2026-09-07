@@ -99,6 +99,21 @@ between two builds is not a cache miss a user would forgive.
 
 ## The Kotlin Analysis API component cannot be installed, and this is why
 
+> **Resolved 2026-09-07** by rebuilding the archive and re-uploading it to the
+> same release tag, then pinning to what is actually served. The component now
+> installs on a device that has never had it: `gh release upload
+> kotlin-analysis-2.2.10 ... --clobber`, then `archiveSha1` set to
+> `9d1d1ae724af7afa4de325b622c5a806294d29eb` (the bytes were already right).
+> `PinnedReleaseTest` passes for all five components, the download suite passes
+> 12 of 12, and driving the app end to end puts `analysis-api.jar` and
+> `analysis-backend.jar` into `files/toolchains/kotlin-analysis-api/`.
+>
+> The rebuilt archive was checked **before** upload for the thing that made a
+> re-pin insufficient — `definitionAt` present in the backend dex — and the
+> served bytes were downloaded and hashed **after** upload to confirm the pin
+> describes what users get, rather than what was built locally. The account
+> below is kept because the failure shape is the lesson, not the number.
+
 **Found by driving the app**, on 2026-09-06, with everything else green: a full
 sweep of 560 tests said nothing was wrong, because every test that uses this
 component stages the archive by hand and never downloads it.
