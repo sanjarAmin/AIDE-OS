@@ -75,6 +75,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.osamu.aide.core.fs.FileNode
 import com.osamu.aide.core.fs.SourceLanguage
@@ -129,6 +130,18 @@ fun WorkspaceScreen(
     val gitState by git.state.collectAsStateWithLifecycle()
     val terminalState by terminal.state.collectAsStateWithLifecycle()
     val editorSettings by editorPreferences.settings.collectAsStateWithLifecycle()
+
+    // **Re-read git when the screen comes back.** The panel's own empty state
+    // sends the user to Settings to set a name and email, and until this
+    // existed they came back to the same message and a disabled Commit --
+    // hasIdentity was read when the panel loaded and never again. The identity
+    // is not the only thing that can change while the app is away: a file
+    // edited from a desktop over USB, or a commit made in the terminal, are
+    // both invisible to a panel that only reloads after its own operations.
+    LifecycleResumeEffect(git) {
+        git.refresh()
+        onPauseOrDispose { }
+    }
     var isChatOpen by remember { mutableStateOf(false) }
 
     // One tap: open the panel and ask, rather than opening it and leaving the

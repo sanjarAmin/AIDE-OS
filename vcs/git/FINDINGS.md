@@ -214,3 +214,26 @@ the caller meeting the limit as an `OutOfMemoryError`.
   same-named branch on `origin` and reports a rejection. It cannot set an
   upstream, force-push, or push a branch that does not exist on the remote yet
   under a different name.
+
+## The panel that tells you to fix something must notice when you have
+
+Found 2026-09-07 by following the panel's own instructions.
+
+With no identity stored, the Git panel says "Set a name and email before
+committing" and offers a **Settings** link. Follow it, fill in the name and
+email, save — the settings screen confirms "Commits are signed as Osamu" — come
+back, and the panel still says to set a name and email, with Commit still
+disabled. `hasIdentity` is read in `reload()`, `reload()` runs when the panel
+opens and after each of its own operations, and setting an identity is neither.
+
+The fix is a `LifecycleResumeEffect` in `WorkspaceScreen` that refreshes when
+the screen comes back. The identity is not the only thing that can change while
+the app is away — a file edited from a desktop over USB, or a commit made in the
+terminal tab, are equally invisible to a panel that only reloads after its own
+work. The first refresh after the fix picked up a fourth changed file the stale
+panel had never shown.
+
+**Every affordance that says "go and do X" needs to notice X being done.** This
+one was found because the flow it prescribes is short enough to walk end to end;
+the same shape exists wherever a screen caches a decision made somewhere else.
+

@@ -226,6 +226,30 @@ class GitViewModelTest {
     }
 
     /**
+     * An identity set *after* the panel loaded has to reach it.
+     *
+     * The panel's own empty state sends the user to Settings to set a name and
+     * email. Driving that flow showed what happens when nothing re-reads:
+     * they come back to the same red message and a disabled Commit, having
+     * done exactly what they were told. `WorkspaceScreen` refreshes when the
+     * screen resumes; this is the half of that which can be asserted.
+     */
+    @Test
+    fun an_identity_set_after_the_panel_loaded_reaches_it_on_refresh() = runTest(timeout = 2.minutes) {
+        seed()
+        identities.clear()
+        viewModel.open(moduleDir)
+        await("the repository to open") { viewModel.state.value.isRepository == true }
+        assertFalse("it started with an identity", viewModel.state.value.hasIdentity)
+
+        // What Settings does while the panel is off screen.
+        identify()
+        viewModel.refresh()
+
+        await("the panel to notice") { viewModel.state.value.hasIdentity }
+    }
+
+    /**
      * No identity means no commit, and the panel knows before the button is
      * tapped -- so it can say why rather than showing a failure afterwards.
      */
