@@ -122,6 +122,23 @@ PREFIX=root/data/data/com.termux/files/usr
 [ -x "$PREFIX/bin/mono" ] || { echo "no mono runtime in the closure" >&2; exit 1; }
 [ -f "$PREFIX/bin/mcs" ] || { echo "no mcs compiler in the closure" >&2; exit 1; }
 
+# **Trimmed, and only of what is genuinely redundant.** The closure unpacks to
+# 227 MB, most of it assemblies nobody here compiles against: `lib/mono/*-api`
+# holds reference assemblies for targeting older frameworks, 109 MB across a
+# dozen profiles, and none of it is used to build or run against 4.5.
+#
+# `lib/mono/gac` looks like the same kind of duplication and **is not**.
+# `lib/mono/4.5` is largely a farm of symlinks *into* the GAC, so removing it
+# leaves the profile full of dangling links and mcs dies with
+# `Could not load file or assembly 'System.Core'` -- which reads as a missing
+# dependency rather than a deleted one. That was tried; it is why this list is
+# as short as it is.
+#
+# 227 MB -> 117 MB, with `:toolchain:native`'s tests still compiling and running
+# a console app. `tools/mono/FINDINGS.md`.
+echo "==> trimming"
+rm -rf "$PREFIX"/lib/mono/*-api "$PREFIX/include" "$PREFIX/share" "$PREFIX/var"
+
 echo "==> mono.tar"
 tar cf mono.tar -C "$PREFIX" .
 

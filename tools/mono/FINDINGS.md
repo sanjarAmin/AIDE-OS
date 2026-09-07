@@ -11,8 +11,9 @@ is `mono` 6.14.1, built against Bionic, so `bin/mono-sgen` is an ordinary
 Android ELF with `/system/bin/linker64` as its interpreter.
 
 It is not 9 MB. The base package's `Installed-Size` suggests that; the closure
-is fourteen packages and **222 MB packed**, because it drags in the whole class
-library, krb5, ncurses, readline and openssl.
+is fourteen packages and unpacks to **227 MB**, because it drags in the whole
+class library, krb5, ncurses, readline and openssl. `fetch-mono.sh` trims it to
+**117 MB**, which is §5.
 
 Two things about the archive shape every invocation:
 
@@ -130,17 +131,42 @@ expected `AppResult.Failure`. **A non-zero exit is a successful run.** `Failure`
 means the tool could not be started; a compiler that rejected its input did
 exactly what it was asked to.
 
-## 5. What this does not answer
+## 5. Trimmed to half, and the half that cannot go
+
+227 MB unpacked is too much to ask for C# support. `lib/mono/*-api` is
+**109 MB** of reference assemblies for *targeting* older frameworks — a dozen
+profiles, none of them used to compile or run against 4.5 — and `include`,
+`share` and `var` are another 8 MB of headers and documentation. Dropping those
+gives **117 MB**, with `:toolchain:native`'s tests still compiling and running a
+console app, and `:spike:mono`'s too.
+
+**`lib/mono/gac` looks like more of the same and is not.** It is 56 MB, and the
+obvious reading is that it duplicates the profile beside it. It does the
+opposite: `lib/mono/4.5` is largely a farm of **symlinks into the GAC**, so
+removing the GAC leaves the profile full of dangling links and mcs dies with
+
+```
+Could not load file or assembly 'System.Core, Version=4.0.0.0, ...'
+```
+
+which reads as a missing dependency rather than a deleted one. That was tried
+first, and the error names the assembly rather than the directory that was
+removed — so the trim list is short on purpose, and this is why.
+
+The trim is in `fetch-mono.sh` rather than left to whoever builds the component,
+because a size reduction nobody can reproduce is a number in a document.
+
+## 6. What this does not answer
 
 - **x86_64 on the emulator only.** clang, the JDK and Node all needed an arm64
   run before they were believed; so does this.
 - **Nothing but `mcs` has been run.** `xbuild`, NuGet and anything that spawns
   are untried, and `bin/mcs` being a shell script hardcoding Termux's prefix
   suggests every other wrapper in `bin/` is too.
-- **222 MB, not 9.** The base package's `Installed-Size` is misleading; the
-  closure is fourteen packages and drags in the whole class library, krb5,
-  ncurses, readline and openssl. Whether a smaller set compiles and runs C# has
-  not been explored, and it matters for a component users download.
+- **117 MB is still large** for a component users download, and the remaining
+  bulk is the GAC and the 4.5 profile, which §5 establishes cannot simply be
+  deleted. Whether a *narrower* set of assemblies — the ones a console app
+  actually binds — can be selected has not been explored.
 - **`bin/mono` is a symlink** to `mono-sgen`, so the linker is handed the target
   directly. Symlinks survive only because the archive moves as a tar and is
   unpacked on the device; `adb push` of a tree drops all of them
