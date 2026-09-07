@@ -55,7 +55,8 @@ emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu host
                      FINDINGS.
 :terminal            forkpty, plus Termux's emulator vendored verbatim. FINDINGS.
 :vcs:git             JGit, plus the identity and token stores a device needs. FINDINGS.
-tools/               Scripts that produce the toolchains, and their FINDINGS.
+tools/               Scripts that produce the toolchains and the one grammar
+                     nobody publishes, and their FINDINGS.
                      Several assemble from Termux's package repo, because only
                      Bionic-linked binaries start here: clang, a JDK, node, mono
 ```

@@ -669,13 +669,16 @@ sharpest example so far of a bug no module's own test suite can see.
     the language before any of the APK checks: a Node project asked whether it
     has an `AndroidManifest.xml` gets a refusal that names the wrong thing.
 
-    One gap the UI cannot close on its own: **neither a `.js` nor a `.cs`
-    buffer has syntax highlighting**, because `com.itsaky.androidide.treesitter`
-    — the publisher of every prebuilt grammar the editor uses — ships neither.
-    It publishes java, kotlin, xml, json, c, cpp, python, aidl, log and
-    properties, and that is the whole list. Highlighting either means building
-    a grammar for four ABIs ourselves, which is a piece of work with nothing to
-    do with M10, so both render as plain text for now.
+    One gap the UI could not close on its own, now half closed:
+    `com.itsaky.androidide.treesitter` — the publisher of every prebuilt grammar
+    the editor uses — ships neither a JavaScript nor a C# one (java, kotlin,
+    xml, json, c, cpp, python, aidl, log and properties is the whole list). So
+    **`:editor` builds the JavaScript grammar itself**, 371 KB per ABI from a
+    pinned upstream release; `tools/treesitter/`. **C# is measured and
+    deliberately not built**: the same script would produce 5.9 MB per ABI, 12 MB
+    committed, which is more than the app's entire native payload today for the
+    language the plan already names as the defensible cut. If it is wanted, it
+    is a download beside mono's, not a file in git.
 
     **The C# half is wired too**, and it is what justifies the contract having
     been a contract rather than a class: `:engine:mono` implements the same

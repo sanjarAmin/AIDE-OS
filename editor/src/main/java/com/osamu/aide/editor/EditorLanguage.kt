@@ -6,6 +6,7 @@ import com.itsaky.androidide.treesitter.java.TSLanguageJava
 import com.itsaky.androidide.treesitter.json.TSLanguageJson
 import com.itsaky.androidide.treesitter.kotlin.TSLanguageKotlin
 import com.itsaky.androidide.treesitter.xml.TSLanguageXml
+import com.osamu.aide.editor.treesitter.JavaScriptGrammar
 import io.github.rosemoe.sora.editor.ts.TsLanguageSpec
 import io.github.rosemoe.sora.lang.EmptyLanguage
 import io.github.rosemoe.sora.lang.Language
@@ -29,7 +30,23 @@ enum class EditorLanguage(
     JAVA("Java", setOf("java"), "java", { TSLanguageJava.getInstance() }),
     KOTLIN("Kotlin", setOf("kt", "kts"), "kotlin", { TSLanguageKotlin.getInstance() }),
     XML("XML", setOf("xml"), "xml", { TSLanguageXml.getInstance() }),
-    JSON("JSON", setOf("json"), "json", { TSLanguageJson.getInstance() });
+    JSON("JSON", setOf("json"), "json", { TSLanguageJson.getInstance() }),
+
+    /**
+     * The one grammar this project builds itself; see [JavaScriptGrammar].
+     *
+     * `.mjs` and `.cjs` are the same language — a Node project can hold either
+     * the moment it declares a module type — and both parse with this grammar.
+     * `.jsx` deliberately does not: upstream ships a separate
+     * `highlights-jsx.scm`, and claiming the extension without it would
+     * highlight JSX as if the tags were syntax errors.
+     */
+    JAVASCRIPT(
+        "JavaScript",
+        setOf("js", "mjs", "cjs"),
+        "javascript",
+        { JavaScriptGrammar.language() },
+    );
 
     fun language(): TSLanguage = grammar()
 

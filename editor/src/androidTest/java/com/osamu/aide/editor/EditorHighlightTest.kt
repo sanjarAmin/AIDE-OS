@@ -178,6 +178,50 @@ class EditorHighlightTest {
         )
     }
 
+    /**
+     * The grammar this project builds itself parses a real `.js` buffer.
+     *
+     * [TreeSitterQueryTest] proves the library loads and the query compiles;
+     * neither says the parser produces a tree. A grammar whose ABI the runtime
+     * rejects still loads, still answers `TSLanguage.create`, and then colours
+     * nothing -- which is indistinguishable from the plain text this replaced.
+     * `tools/treesitter/FINDINGS.md`.
+     */
+    @Test
+    fun a_javascript_file_is_highlighted_by_the_grammar_we_build() {
+        val script = buildString {
+            appendLine("// A Node entry point.")
+            appendLine("const greeting = 'hello';")
+            appendLine("function greet(name) {")
+            appendLine("    return greeting + name;")
+            appendLine("}")
+        }
+        instrumentation.runOnMainSync {
+            editor.setEditorLanguage(languages.languageFor(File("index.js")))
+            editor.setText(script)
+        }
+
+        // Line 1 is `const greeting = ...`, which carries both a keyword and a
+        // string: two different capture families from one line.
+        val deadline = System.currentTimeMillis() + ANALYSIS_TIMEOUT_MILLIS
+        while (System.currentTimeMillis() < deadline && colorsOn(1).size <= 1) {
+            Thread.sleep(POLL_INTERVAL_MILLIS)
+        }
+
+        assertTrue(
+            "`const` is not coloured as a keyword: ${colorsOn(1)}",
+            EditorColorScheme.KEYWORD in colorsOn(1),
+        )
+        assertTrue(
+            "a string literal is not coloured: ${colorsOn(1)}",
+            EditorColorScheme.LITERAL in colorsOn(1),
+        )
+        assertTrue(
+            "a comment is not coloured as one: ${colorsOn(0)}",
+            EditorColorScheme.COMMENT in colorsOn(0),
+        )
+    }
+
     @Test
     fun an_unknown_file_type_opens_as_plain_text_rather_than_failing() {
         instrumentation.runOnMainSync {
