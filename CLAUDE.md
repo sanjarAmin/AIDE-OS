@@ -162,3 +162,11 @@ failed to load still produces a clean compile.
   milestone before anyone noticed. `AppModuleTest` resolves the workspace graph
   from the real module on a bare device; add to it when something joins the
   graph. `ai/core/FINDINGS.md` §1.
+
+- **`ls a* b*` in zsh aborts on the first pattern that matches nothing**, and
+  `2>/dev/null` hides the reason. `ls LICENSE* NOTICE*` printed nothing at all
+  in a repo that has had a `LICENSE` since its second commit, because `NOTICE*`
+  matched none — which read as "there is no LICENSE" and led to a commit
+  message asserting exactly that. Check one glob at a time, or use
+  `setopt NO_NOMATCH` / `git ls-files`, and treat empty output from a globbing
+  command as *unknown* rather than as *absent*.

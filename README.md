@@ -66,6 +66,6 @@ which are GPL-3.0.
 
 Third-party components keep their own licences. [`NOTICE.md`](NOTICE.md) lists
 every one the app ships or downloads and where in this repository that licence
-is recorded — including the two the README used to name from memory, `aapt2`
-(Apache-2.0, from AOSP) and the Kotlin compiler (Apache-2.0), and `sora-editor`
-(LGPL-2.1), which is consumed unmodified as a Maven dependency.
+is recorded — `aapt2` (Apache-2.0, from AOSP), the Kotlin compiler (Apache-2.0),
+and `sora-editor` (LGPL-2.1), which is consumed unmodified as a Maven
+dependency, among a dozen others.
