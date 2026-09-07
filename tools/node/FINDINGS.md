@@ -160,6 +160,13 @@ and `:engine:node` drives the result. Nothing here invents a pin;
   and `:engine:node` 5/5 on an NX809J (Android 16, arm64-v8a), staged from
   `node-aarch64/node.tar`. Nothing differed from the emulator — no ABI-specific
   finding on this page needed changing.
+- ~~**npm is proven but not offered.**~~ The workspace has an "Install
+  dependencies" action as of 2026-09-07: `NodeRunSystem.npm` runs `npm-cli.js`
+  through the same linker plan a run uses, into the same panel, and the file
+  tree is read again afterwards so the lock file appears. It is a separate
+  action and not something ▶ does on a failed `require`, because an install
+  reaches the network and writes hundreds of megabytes.
+
 - **Nothing has been done about `execPath`.** The spike records the deception
   and does not correct it.
 - ~~**The C# half of M10 is a separate question.**~~ Answered by spike R14 and

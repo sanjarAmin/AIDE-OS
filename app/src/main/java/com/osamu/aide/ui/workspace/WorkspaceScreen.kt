@@ -358,6 +358,8 @@ fun WorkspaceScreen(
                                     onDiagnosticClick = viewModel::openDiagnostic,
                                     onFixDiagnostic = askToFix,
                                     onLaunchIntent = activityLauncher::launch,
+                                    onInstallDependencies = viewModel::installDependencies
+                                        .takeIf { state.projectLanguage == SourceLanguage.JAVASCRIPT },
                                 )
                             }
                             HorizontalDivider()
@@ -383,6 +385,7 @@ fun WorkspaceScreen(
                             isCompleting = isCompleting,
                             onLaunchIntent = activityLauncher::launch,
                             onCloseDock = viewModel::closeBuildPanel,
+                            onInstallDependencies = viewModel::installDependencies,
                             // The wide layout already has a side tool pane; a
                             // dock as well would report the same build twice.
                             showDock = state.isBuildPanelOpen && !mode.showsToolPane,
@@ -485,6 +488,7 @@ private fun EditorArea(
     isCompleting: Boolean,
     onLaunchIntent: (Intent) -> Unit,
     onCloseDock: () -> Unit,
+    onInstallDependencies: () -> Unit,
     showDock: Boolean,
     gitState: GitUiState,
     gitActions: GitActions,
@@ -575,6 +579,11 @@ private fun EditorArea(
                 onFixDiagnostic = onFixDiagnostic,
                 onLaunchIntent = onLaunchIntent,
                 onClose = onCloseDock,
+                // Null for every other language: npm is not a thing a Java
+                // project can be offered, and a disabled button that is always
+                // disabled is worse than no button.
+                onInstallDependencies = onInstallDependencies
+                    .takeIf { state.projectLanguage == SourceLanguage.JAVASCRIPT },
             )
         }
 
@@ -707,6 +716,7 @@ private fun BuildPane(
     onDiagnosticClick: (Diagnostic) -> Unit,
     onFixDiagnostic: (Diagnostic) -> Unit,
     onLaunchIntent: (Intent) -> Unit,
+    onInstallDependencies: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     Surface(color = MaterialTheme.colorScheme.surface) {
@@ -729,6 +739,13 @@ private fun BuildPane(
                         MaterialTheme.colorScheme.onSurface
                     },
                 )
+            }
+
+            if (onInstallDependencies != null) {
+                TextButton(
+                    onClick = onInstallDependencies,
+                    enabled = !state.isRunning,
+                ) { Text("Install dependencies") }
             }
 
             if (state.log.isEmpty() && state.diagnostics.isEmpty()) {

@@ -760,6 +760,67 @@ class WorkspaceViewModel(
     }
 
     /**
+     * Installs a Node project's dependencies, reporting where a run reports.
+     *
+     * A separate action rather than something the run does for itself: `npm
+     * install` reaches the network, writes hundreds of megabytes into the
+     * project, and takes as long as it takes. Doing that behind a ▶ because a
+     * `require` failed would be spending someone's data on a guess about what
+     * they meant.
+     */
+    fun installDependencies() {
+        if (_state.value.build.isRunning) return
+        buildJob = viewModelScope.launch {
+            descriptorJob?.join()
+            val project = project ?: return@launch
+            if (project.language != SourceLanguage.JAVASCRIPT) return@launch
+
+            val root = toolchain.nodeRoot() ?: run {
+                toolchain.missingNodeComponent()?.let { component ->
+                    offerComponentInstall(
+                        component = component,
+                        rationale = "Installing dependencies needs Node.js, which is about " +
+                            "${component.archiveBytes / (1024 * 1024)} MB to download.",
+                    )
+                }
+                return@launch
+            }
+            val layout = ProjectLayout.of(project)
+            val engine = NodeRunSystem(
+                node = NodeToolchain(root, LinkerLaunch.forThisProcess()),
+                dispatchers = dispatchers,
+                home = layout.nodeHome,
+                cache = layout.nodeCache,
+            )
+
+            try {
+                _state.update {
+                    it.copy(
+                        isBuildPanelOpen = true,
+                        build = BuildUiState(isRunning = true, isRun = true),
+                    )
+                }
+                engine.npm(project.rootDir, listOf("install")).collect(::onRunEvent)
+            } finally {
+                _state.update {
+                    it.copy(
+                        build = it.build.copy(
+                            isRunning = false,
+                            stage = null,
+                            outcome = it.build.outcome ?: "Install stopped.",
+                        ),
+                    )
+                }
+                // An install writes into the project -- `package-lock.json`
+                // above all -- and the tree is stale until it is read again.
+                // Not `node_modules`, which `ProjectFiles` ignores by name and
+                // should: it is thousands of files nobody browses.
+                rebuildTree()
+            }
+        }
+    }
+
+    /**
      * Compiles and runs a C# project, into the same panel as everything else.
      *
      * Structurally identical to [runNodeProject] and deliberately not folded

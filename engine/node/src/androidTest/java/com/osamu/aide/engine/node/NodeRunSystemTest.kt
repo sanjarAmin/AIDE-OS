@@ -35,6 +35,7 @@ import java.util.concurrent.TimeUnit
 class NodeRunSystemTest {
 
     private lateinit var context: Context
+    private lateinit var node: NodeToolchain
     private lateinit var engine: NodeRunSystem
     private lateinit var project: File
 
@@ -49,10 +50,11 @@ class NodeRunSystemTest {
             File(root, "bin/node").isFile,
         )
         val launch = LinkerLaunch.forThisProcess()
-        assumeTrue("no dynamic linker for this ABI", launch != null)
+        assumeTrue("no dynamic linker for this ABI", launch.isAvailable)
 
+        node = NodeToolchain(root, launch)
         engine = NodeRunSystem(
-            node = NodeToolchain(root, launch!!),
+            node = node,
             dispatchers = DefaultDispatcherProvider(),
             home = File(context.filesDir, "node-home").apply { mkdirs() },
             cache = context.cacheDir,
@@ -172,6 +174,48 @@ class NodeRunSystemTest {
             "the program outlived the collection that started it",
             lastSeen,
             marker.readText(),
+        )
+    }
+
+    /**
+     * npm installs into the project, and its output arrives like a run's.
+     *
+     * A **local** dependency, so the test needs no network and no registry:
+     * what is being asserted is that npm starts at all through the linker and
+     * writes `node_modules` where the project can see it. Whether npmjs.com is
+     * reachable is not this suite's question -- and a test that asked it would
+     * fail on a machine behind a proxy for a reason having nothing to do with
+     * this code. `tools/node/FINDINGS.md` §3 proved the same shape by hand.
+     */
+    @Test
+    fun npm_installs_a_dependency_into_the_project() = runBlocking {
+        assumeTrue("this Node archive has no npm", node.hasNpm)
+
+        val dependency = File(project, "vendor/greeter").apply { mkdirs() }
+        File(dependency, "package.json").writeText(
+            """{"name":"greeter","version":"1.0.0","main":"index.js"}""",
+        )
+        File(dependency, "index.js").writeText("module.exports = () => 'hi';")
+        File(project, "package.json").writeText(
+            """{"name":"host","version":"1.0.0","dependencies":{"greeter":"file:vendor/greeter"}}""",
+        )
+
+        val events = engine.npm(project, listOf("install", "--offline")).toList()
+        val said = events.filterIsInstance<RunEvent.Output>().map { it.line }
+        Log.i(TAG, "npm install -> ${events.last()}, said $said")
+
+        assertTrue("npm was not reported as started", events.first() is RunEvent.Started)
+        // Through npm-cli.js, not bin/npm: the shell wrapper execs node off
+        // PATH, which cannot work when node starts only through the linker.
+        assertTrue(
+            "npm was invoked through the shell wrapper",
+            (events.first() as RunEvent.Started).commandLine.contains("npm-cli.js"),
+        )
+        val result = (events.last() as RunEvent.Finished).result
+        assertTrue("npm did not exit cleanly: $result, said $said", result is RunResult.Exited && result.succeeded)
+        assertTrue(
+            "nothing was installed",
+            File(project, "node_modules/greeter/index.js").exists(),
         )
     }
 

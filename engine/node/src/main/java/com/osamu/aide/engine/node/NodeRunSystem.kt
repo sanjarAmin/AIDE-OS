@@ -6,6 +6,7 @@ import com.osamu.aide.engine.api.RunRequest
 import com.osamu.aide.engine.api.RunResult
 import com.osamu.aide.engine.api.RunStream
 import com.osamu.aide.engine.api.RunSystem
+import com.osamu.aide.toolchain.nativetools.LaunchPlan
 import com.osamu.aide.toolchain.nativetools.NodeToolchain
 import kotlinx.coroutines.channels.ProducerScope
 import kotlinx.coroutines.channels.awaitClose
@@ -62,21 +63,83 @@ class NodeRunSystem(
             return@callbackFlow
         }
 
-        val plan = node.planScript(
-            script = request.entryPoint,
-            arguments = request.arguments,
-            environment = node.prepareEnvironment(home, cache) + request.environment,
+        spawn(
+            plan = node.planScript(
+                script = request.entryPoint,
+                arguments = request.arguments,
+                environment = node.prepareEnvironment(home, cache) + request.environment,
+            ),
+            directory = request.projectDir,
+            started = started,
+            whenItCannotStart = "Node could not start.",
         )
+    }.flowOn(dispatchers.io)
 
+    /**
+     * Runs npm in [projectDir], streaming its output the way a run streams a
+     * program's.
+     *
+     * **Not part of [RunSystem].** Installing dependencies is not running the
+     * project, and the contract describes the second; a `RunSystem` with an
+     * `install` on it would be a contract with one implementation's package
+     * manager in it. It is here rather than in a class of its own because
+     * everything it needs -- the linker plan, `HOME`, the npm cache, the drain
+     * loop -- already exists here for the run.
+     *
+     * npm is invoked as `npm-cli.js` and not through `bin/npm`, which is a
+     * shell script that execs `node` off `PATH`: that cannot work when the
+     * runtime can only be started through the linker. `tools/node/FINDINGS.md`
+     * §3.
+     */
+    fun npm(projectDir: File, arguments: List<String>): Flow<RunEvent> = callbackFlow {
+        val started = System.currentTimeMillis()
+
+        if (!node.isInstalled) {
+            trySend(RunEvent.Finished(failed("Node is not installed.", started)))
+            close()
+            return@callbackFlow
+        }
+        val plan = node.planNpm(
+            arguments = arguments,
+            environment = node.prepareEnvironment(home, cache),
+        )
+        if (plan == null) {
+            // A real shape, not a hypothetical: Termux ships the runtime and
+            // npm as separate packages, so an archive assembled from the
+            // runtime's closure alone has no npm in it at all.
+            trySend(RunEvent.Finished(failed("This Node has no npm.", started)))
+            close()
+            return@callbackFlow
+        }
+
+        spawn(
+            plan = plan,
+            directory = projectDir,
+            started = started,
+            whenItCannotStart = "npm could not start.",
+        )
+    }.flowOn(dispatchers.io)
+
+    /**
+     * Starts one process and turns it into the rest of the flow.
+     *
+     * Ends with `awaitClose`, so it must be the last thing its caller does.
+     */
+    private suspend fun ProducerScope<RunEvent>.spawn(
+        plan: LaunchPlan,
+        directory: File,
+        started: Long,
+        whenItCannotStart: String,
+    ) {
         val process = try {
             ProcessBuilder(plan.command)
-                .directory(request.projectDir)
+                .directory(directory)
                 .apply { environment().putAll(plan.environment) }
                 .start()
         } catch (failure: Exception) {
-            trySend(RunEvent.Finished(failed(failure.message ?: "Node could not start.", started)))
+            trySend(RunEvent.Finished(failed(failure.message ?: whenItCannotStart, started)))
             close()
-            return@callbackFlow
+            return
         }
 
         // The command, not the plan: a reader looking at the log needs to see
@@ -106,7 +169,7 @@ class NodeRunSystem(
         // stopped run leaves a process holding whatever it opened, and the next
         // run of a server fails on a port that nothing visible is using.
         awaitClose { process.destroyForcibly() }
-    }.flowOn(dispatchers.io)
+    }
 
     /**
      * Forwards one stream until it ends **or the process is killed under it**.

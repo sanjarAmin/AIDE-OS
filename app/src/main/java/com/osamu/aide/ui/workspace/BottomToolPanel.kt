@@ -78,6 +78,8 @@ fun BottomToolDock(
     onFixDiagnostic: (Diagnostic) -> Unit,
     onLaunchIntent: (Intent) -> Unit,
     onClose: () -> Unit,
+    /** Null for a project npm has nothing to do with, which is most of them. */
+    onInstallDependencies: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var selectedTab by remember { mutableStateOf(ToolTab.BUILD) }
@@ -225,6 +227,12 @@ fun BottomToolDock(
                                         }
                                     }
                                 }
+                            }
+                            if (onInstallDependencies != null) {
+                                TextButton(
+                                    onClick = onInstallDependencies,
+                                    enabled = !buildState.isRunning,
+                                ) { Text("Install dependencies") }
                             }
                             if (buildState.log.isEmpty() && buildState.install == null) {
                                 Text(

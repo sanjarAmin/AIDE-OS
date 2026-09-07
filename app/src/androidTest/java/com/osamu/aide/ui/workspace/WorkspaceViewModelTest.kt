@@ -519,6 +519,66 @@ class WorkspaceViewModelTest {
     }
 
     /**
+     * "Install dependencies" reaches npm, and the tree shows what it wrote.
+     *
+     * A local `file:` dependency, so the test needs no registry: what is being
+     * asserted is that the button reaches npm through the linker and that the
+     * file tree is read again afterwards. A dependency the user cannot see in
+     * the tree reads as an install that did nothing.
+     */
+    @Test
+    fun installing_dependencies_runs_npm_and_shows_what_it_wrote() = runBlocking {
+        val script = (
+            repository.createProject(
+                name = "Needs Deps",
+                applicationId = "com.example.deps",
+                language = SourceLanguage.JAVASCRIPT,
+                engine = BuildEngine.FAST,
+            ) as AppResult.Success
+            ).value
+        stageNode()
+        assumeTrue(
+            "no Node staged; nothing can install anything",
+            ToolchainManager(context, dispatchers).nodeRoot() != null,
+        )
+
+        val dependency = File(script.rootDir, "vendor/greeter").apply { mkdirs() }
+        File(dependency, "package.json").writeText(
+            """{"name":"greeter","version":"1.0.0","main":"index.js"}""",
+        )
+        File(dependency, "index.js").writeText("module.exports = () => 'hi';")
+        File(script.rootDir, "package.json").writeText(
+            """{"name":"needs-deps","version":"1.0.0","main":"index.js",""" +
+                """"dependencies":{"greeter":"file:vendor/greeter"}}""",
+        )
+
+        onMain { viewModel.open(script.rootDir) }
+        awaitState("the descriptor to be read") { it.projectName == "Needs Deps" }
+        onMain { viewModel.installDependencies() }
+
+        awaitState("the install to finish", timeoutMillis = 120_000L) {
+            !it.build.isRunning && it.build.outcome != null
+        }
+        val log = viewModel.state.value.build.log
+        assertTrue("npm was not invoked as npm-cli.js: $log", log.any { "npm-cli.js" in it })
+        assertTrue(
+            "npm did not report success: ${viewModel.state.value.build.outcome}",
+            viewModel.state.value.build.succeeded,
+        )
+        assertTrue(
+            "nothing was installed",
+            File(script.rootDir, "node_modules/greeter/index.js").exists(),
+        )
+        // `package-lock.json` and not `node_modules`: the tree ignores that
+        // directory by name, which is right -- it is thousands of files nobody
+        // browses. The lock file is what an install adds that the user should
+        // see, and it did not exist before this ran.
+        awaitState("the tree to show the lock file npm wrote") { state ->
+            state.visibleNodes.any { it.file.name == "package-lock.json" }
+        }
+    }
+
+    /**
      * The other half of M10: ▶ on a C# project compiles it and runs the result.
      *
      * The same two branches as the JavaScript test and for the same reasons,
