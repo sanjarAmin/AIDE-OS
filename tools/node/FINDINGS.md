@@ -77,12 +77,51 @@ So M10 needs Node told where it really is. `execPath` is not writable, but
 all open; which of them is right is a design question for the milestone, not a
 question about whether the platform allows it.
 
-## 3. What this does not answer
+## 3. npm works, and getting it needed two fixes to the fetch
+
+```
+npm --version -> exit=0 in 362 ms: 11.19.1
+npm install   -> exit=0 in 837 ms: added 1 package in 589ms
+```
+
+The second is npm doing real work: resolving a local `file:` dependency and
+writing `node_modules`, offline. `bin/npm` is a shell script that execs `node`
+off `PATH`, which cannot work here, so npm is invoked the way the app will have
+to invoke it -- the runtime, through the linker, on `npm-cli.js`.
+
+**`nodejs-lts` does not contain npm.** Termux ships the runtime and `corepack`
+in one package and npm in another, so a closure walked from the runtime alone
+gives a `bin/` holding exactly `node` and `corepack`. Two roots, then.
+
+**And that is where the closure walker broke.** npm declares
+`Depends: nodejs | nodejs-lts`; the walker takes the first alternative, so
+asking for the LTS fetched `nodejs` 26.4.0 as well -- a package `nodejs-lts`
+names in `Conflicts`, so the two can never be installed together -- and
+whichever extracted last became `bin/node`. The archive said LTS and held
+**v26.4.0**. Nothing noticed, because the test asserted only that a version came
+back at all.
+
+Three changes, and the third is the one that generalises:
+
+1. an alternative resolves in favour of a package already asked for, so
+   `nodejs | nodejs-lts` picks the root the caller named;
+2. the closure is rejected outright if it contains two packages that declare
+   each other in `Conflicts` -- **unversioned conflicts only**, since npm's
+   `Conflicts: nodejs-lts (<= 24.13.0)` is a lower bound the repo already
+   satisfies and treating it as absolute rejects a sound closure;
+3. the test asserts the **line**, not merely that a version exists. A pin that
+   nothing checks is a pin that drifts, which is the same lesson
+   `toolchain/manager/FINDINGS.md` learned from a component that could not be
+   installed at all.
+
+`tools/rootfs/fetch-jvm.sh` shares the first-alternative walker. It has no `|`
+clause that matters today, so it was left alone; whoever generalises these
+scripts should take the fixed walker as the starting point.
+
+## 4. What this does not answer
 
 - **Only x86_64 so far**, and only on the emulator. clang and the JDK both
   needed an arm64 run before they were believed; so does this.
-- **npm has not been run.** Spawning works and npm is a Node script, so there is
-  no known obstacle, but "no known obstacle" is not evidence.
 - **Nothing has been done about `execPath`.** The spike records the deception
   and does not correct it.
 - **The C# half of M10 is a separate question.** Termux publishes `mono`

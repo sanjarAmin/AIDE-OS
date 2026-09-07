@@ -28,10 +28,14 @@ cd "$STAGING"
 echo "==> package index"
 curl -fsSL "$REPO/dists/stable/main/binary-$ARCH/Packages" -o Packages
 
-# The dependency closure is walked from this one package; Termux's node pulls
-# in libc++, openssl, c-ares, icu and libuv, none of which are named here.
+# **Two roots, because `nodejs-lts` does not contain npm.** Termux ships the
+# runtime and `corepack` in one package and npm in another; a closure walked
+# from the runtime alone gives a `bin/` holding exactly `node` and `corepack`,
+# and every `npm install` in every project fails with "not found" for a reason
+# that has nothing to do with this app. The rest of the closure -- libc++,
+# openssl, c-ares, icu, libuv -- is pulled in by the walk and named nowhere.
 echo "==> dependency closure"
-python3 - nodejs-lts << 'PYTHON_EOF'
+python3 - nodejs-lts npm << 'PYTHON_EOF'
 import re, sys
 
 packages = {}
@@ -43,19 +47,31 @@ for block in open("Packages", encoding="utf-8").read().split("\n\n"):
         "depends": (re.search(r"^Depends: (.+)$", block, re.M) or type("", (), {"group": lambda s, n: ""})()).group(1),
         "file": (re.search(r"^Filename: (.+)$", block, re.M) or type("", (), {"group": lambda s, n: None})()).group(1),
         "sha": (re.search(r"^SHA256: (.+)$", block, re.M) or type("", (), {"group": lambda s, n: None})()).group(1),
+        "conflicts": (re.search(r"^Conflicts: (.+)$", block, re.M) or type("", (), {"group": lambda s, n: ""})()).group(1),
     }
 
-def dependencies(name):
+def dependencies(name, roots):
+    """Direct dependencies, resolving `a | b` in favour of a requested root.
+
+    Taking the first alternative blindly is what produced an archive holding
+    two mutually exclusive packages: npm declares `nodejs | nodejs-lts`, so a
+    build asking for the LTS got `nodejs` as well, and whichever extracted
+    last won. Preferring a root keeps the choice the caller already made.
+    """
     entry = packages.get(name)
     if not entry or not entry["depends"]:
         return []
     out = []
     for clause in entry["depends"].split(","):
         clause = clause.strip()
-        if clause:
-            out.append(re.split(r"[ (|]", clause.split("|")[0].strip())[0])
+        if not clause:
+            continue
+        options = [re.split(r"[ (]", part.strip())[0] for part in clause.split("|")]
+        chosen = next((o for o in options if o in roots), options[0])
+        out.append(chosen)
     return out
 
+roots = set(sys.argv[1:])
 seen, order, queue = set(), [], list(sys.argv[1:])
 while queue:
     name = queue.pop(0)
@@ -63,7 +79,25 @@ while queue:
         continue
     seen.add(name)
     order.append(name)
-    queue.extend(dependencies(name))
+    queue.extend(dependencies(name, roots))
+
+# **A closure that contradicts itself must not be packed.** Two packages that
+# declare each other in `Conflicts` cannot both be installed, and a tar holding
+# both is decided by extraction order -- which is how a build asking for the
+# LTS runtime produced a 26.x one.
+#
+# Only *unversioned* conflicts count. `nodejs-lts` says plainly `Conflicts:
+# nodejs`, which is absolute; `npm` says `Conflicts: nodejs-lts (<= 24.13.0)`,
+# which is a lower bound the repo's own consistency already satisfies, and
+# treating it as absolute rejects a closure that is perfectly sound.
+for name in order:
+    for clause in packages[name]["conflicts"].split(","):
+        clause = clause.strip()
+        if not clause or "(" in clause:
+            continue
+        other = clause.split()[0]
+        if other in seen:
+            sys.exit(f"    {name} conflicts with {other}; the closure is incoherent")
 
 with open("closure.txt", "w", encoding="utf-8") as out:
     for name in order:
@@ -91,6 +125,7 @@ done < closure.txt
 PREFIX=root/data/data/com.termux/files/usr
 [ -d "$PREFIX" ] || { echo "unexpected package layout" >&2; exit 1; }
 [ -x "$PREFIX/bin/node" ] || { echo "no node binary in the closure" >&2; exit 1; }
+[ -f "$PREFIX/lib/node_modules/npm/bin/npm-cli.js" ] || { echo "no npm in the closure" >&2; exit 1; }
 
 echo "==> node.tar"
 tar cf node.tar -C "$PREFIX" .

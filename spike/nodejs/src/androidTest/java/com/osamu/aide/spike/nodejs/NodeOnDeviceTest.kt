@@ -107,6 +107,17 @@ class NodeOnDeviceTest {
 
         assertEquals("node did not start: ${run.output}", 0, run.exit)
         assertTrue("no version in '${run.output}'", run.output.startsWith("v"))
+        // **The line, not just any version.** `fetch-node.sh` asks for
+        // `nodejs-lts` and npm depends on `nodejs | nodejs-lts`; taking the
+        // first alternative pulled in the 26.x package alongside the LTS -- two
+        // packages that declare each other in Conflicts -- and whichever
+        // extracted last became `bin/node`. The archive said LTS and held
+        // v26.4.0, and nothing noticed because the assertion above is all there
+        // was. If the pin moves deliberately, move it here too.
+        assertTrue(
+            "expected the $LTS_MAJOR.x LTS line, got ${run.output}; see tools/node/FINDINGS.md",
+            run.output.startsWith("v$LTS_MAJOR."),
+        )
     }
 
     /** Question 2: does it actually execute JavaScript, or merely start? */
@@ -214,9 +225,75 @@ class NodeOnDeviceTest {
         )
     }
 
+    /**
+     * Question 5: does **npm** run? It is the reason spawning mattered.
+     *
+     * npm is not a binary: `bin/npm` is a shell script that execs `node` on
+     * `npm-cli.js`, and that indirection is exactly what this launch breaks --
+     * the script looks for `node` on `PATH`, and the only `node` here cannot be
+     * executed directly. So it is invoked the way the app would have to invoke
+     * it: the runtime, through the linker, on npm's own entry point.
+     *
+     * **`nodejs-lts` does not contain npm.** Termux ships the runtime and
+     * `corepack` in one package and npm in another, so a closure walked from the
+     * runtime alone produces a `bin/` holding `node` and `corepack` and nothing
+     * else. `fetch-node.sh` walks both roots; this test is what would notice if
+     * it stopped.
+     */
+    @Test
+    fun npm_runs_and_reports_its_version() {
+        val cli = File(prefix, "lib/node_modules/npm/bin/npm-cli.js")
+        assumeTrue("npm is not in this archive; re-run tools/node/fetch-node.sh", cli.isFile)
+
+        val run = node(cli.absolutePath, "--version", timeoutSeconds = 180)
+        Log.i(TAG, "npm --version -> exit=${run.exit} in ${run.millis} ms: ${run.output}")
+
+        assertEquals("npm did not run: ${run.output}", 0, run.exit)
+        assertTrue("no version in '${run.output}'", Regex("""^\d+\.\d+\.\d+""").containsMatchIn(run.output))
+    }
+
+    /**
+     * And npm doing real work: resolving and writing a dependency tree.
+     *
+     * `--version` proves the script loads. This proves the parts a project
+     * actually uses -- the filesystem, the lockfile, and npm's own spawning --
+     * survive the launch. Offline and with no registry, because the question is
+     * whether npm functions here, not whether the emulator has a network:
+     * `install` with a local file dependency exercises the same machinery.
+     */
+    @Test
+    fun npm_installs_a_local_dependency_without_a_registry() {
+        val cli = File(prefix, "lib/node_modules/npm/bin/npm-cli.js")
+        assumeTrue("npm is not in this archive", cli.isFile)
+
+        val project = File(context.filesDir, "npm-project").apply { deleteRecursively(); mkdirs() }
+        val library = File(project, "lib").apply { mkdirs() }
+        File(library, "package.json").writeText("""{"name":"local-lib","version":"1.0.0","main":"index.js"}""")
+        File(library, "index.js").writeText("module.exports = () => 42;\n")
+        File(project, "package.json").writeText(
+            """{"name":"demo","version":"1.0.0","dependencies":{"local-lib":"file:lib"}}""",
+        )
+
+        val run = node(
+            cli.absolutePath, "install", "--offline", "--no-audit", "--no-fund",
+            "--prefix", project.absolutePath,
+            timeoutSeconds = 300,
+        )
+        Log.i(TAG, "npm install -> exit=${run.exit} in ${run.millis} ms: ${run.output.take(300)}")
+
+        assertEquals("npm install failed: ${run.output}", 0, run.exit)
+        assertTrue(
+            "npm wrote no node_modules",
+            File(project, "node_modules/local-lib/index.js").isFile,
+        )
+    }
+
     private companion object {
         const val TAG = "NodeSpike"
         const val ARCHIVE = "node.tar"
         const val LINKER = "/system/bin/linker64"
+
+        /** The Node line `tools/node/fetch-node.sh` asks for. */
+        const val LTS_MAJOR = 24
     }
 }
