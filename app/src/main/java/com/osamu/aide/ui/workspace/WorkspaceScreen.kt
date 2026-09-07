@@ -86,6 +86,8 @@ import androidx.compose.ui.graphics.Color
 import com.osamu.aide.editor.CodeEditorController
 import com.osamu.aide.editor.CodeEditorView
 import com.osamu.aide.editor.EditorLanguages
+import com.osamu.aide.editor.EditorPreferences
+import com.osamu.aide.editor.EditorSettings
 import com.osamu.aide.editor.SearchBar
 import com.osamu.aide.editor.SignatureHintOverlay
 import com.osamu.aide.editor.SymbolRow
@@ -116,12 +118,16 @@ fun WorkspaceScreen(
     // queries, and rebuilding them per screen is the cost the cache exists to
     // avoid.
     languages: EditorLanguages = koinInject(),
+    // Collected here rather than read inside the editor, so a change made in
+    // Settings while a file is open reaches the widget on the next frame.
+    editorPreferences: EditorPreferences = koinInject(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val chat by assistant.state.collectAsStateWithLifecycle()
     val isCompleting by assistant.completing.collectAsStateWithLifecycle()
     val gitState by git.state.collectAsStateWithLifecycle()
     val terminalState by terminal.state.collectAsStateWithLifecycle()
+    val editorSettings by editorPreferences.settings.collectAsStateWithLifecycle()
     var isChatOpen by remember { mutableStateOf(false) }
 
     // One tap: open the panel and ask, rather than opening it and leaving the
@@ -386,6 +392,7 @@ fun WorkspaceScreen(
                             onLaunchIntent = activityLauncher::launch,
                             onCloseDock = viewModel::closeBuildPanel,
                             onInstallDependencies = viewModel::installDependencies,
+                            editorSettings = editorSettings,
                             // The wide layout already has a side tool pane; a
                             // dock as well would report the same build twice.
                             showDock = state.isBuildPanelOpen && !mode.showsToolPane,
@@ -489,6 +496,7 @@ private fun EditorArea(
     onLaunchIntent: (Intent) -> Unit,
     onCloseDock: () -> Unit,
     onInstallDependencies: () -> Unit,
+    editorSettings: EditorSettings,
     showDock: Boolean,
     gitState: GitUiState,
     gitActions: GitActions,
@@ -534,6 +542,7 @@ private fun EditorArea(
                     // build's for everything else; see editorDiagnostics.
                     diagnostics = state.editorDiagnostics,
                     projectRoot = state.projectRoot,
+                    settings = editorSettings,
                 )
 
                 state.documentError != null -> CentredMessage(

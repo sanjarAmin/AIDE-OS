@@ -44,6 +44,11 @@ fun CodeEditorView(
     /** Diagnostic paths are relative to this. Null disables the gutter. */
     projectRoot: File? = null,
     editable: Boolean = true,
+    /**
+     * Applied on every recomposition, not only at construction, so a change
+     * made in Settings reaches the widget already on screen.
+     */
+    settings: EditorSettings = EditorSettings(),
 ) {
     // Identity, not contents. Recomposition must not push text back into the
     // widget: setText resets the cursor, the scroll position and the undo
@@ -65,12 +70,6 @@ fun CodeEditorView(
             CodeEditor(context).apply {
                 typefaceText = Typeface.MONOSPACE
                 typefaceLineNumber = Typeface.MONOSPACE
-                setTextSize(DEFAULT_TEXT_SIZE_SP)
-                // Code has meaningful indentation and long lines; wrapping them
-                // hides the structure the indentation is there to show.
-                setWordwrap(false)
-                setLineNumberEnabled(true)
-                setTabWidth(4)
 
                 getComponent<EditorAutoCompletion>().setAdapter(SemanticCompletionAdapter())
 
@@ -89,6 +88,14 @@ fun CodeEditorView(
         },
         update = { editor ->
             editor.setEditable(editable)
+            // Set here rather than in the factory: these are the four things a
+            // user can change while a file is open, and a widget built before
+            // the change would otherwise keep the old value until the tab was
+            // closed and reopened.
+            editor.setTextSize(settings.fontSizeSp)
+            editor.setTabWidth(settings.tabWidth)
+            editor.setLineNumberEnabled(settings.showLineNumbers)
+            editor.setWordwrap(settings.wordWrap)
             currentController.value?.attach(editor)
             buffers.retainOnly(openDocuments)
 
@@ -124,4 +131,4 @@ fun CodeEditorView(
     )
 }
 
-private const val DEFAULT_TEXT_SIZE_SP = 14f
+

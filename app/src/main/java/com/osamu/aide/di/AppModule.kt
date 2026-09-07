@@ -11,6 +11,7 @@ import com.osamu.aide.core.fs.ProjectImporter
 import com.osamu.aide.core.fs.ProjectRepository
 import com.osamu.aide.editor.DocumentStore
 import com.osamu.aide.editor.EditorLanguages
+import com.osamu.aide.editor.EditorPreferences
 import com.osamu.aide.engine.fast.AndroidPlatformProvider
 import com.osamu.aide.engine.deps.DependencyResolver
 import com.osamu.aide.engine.fast.ApkInstaller
@@ -79,6 +80,7 @@ val appModule = module {
     // Holds the tree-sitter query sources, so opening a second Java file does
     // not go back to assets for them.
     single { EditorLanguages(get()) }
+    single { EditorPreferences(get()) }
     single { DocumentStore(get()) }
 
     single { NativeToolchain.from(get()) }

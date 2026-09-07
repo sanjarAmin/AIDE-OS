@@ -133,3 +133,28 @@ is.
   yet.
 - **Diagnostics as you type.** The gutter shows what the last *build* found.
   Live diagnostics are M3 and need a language server, not more editor.
+
+## Editor settings are applied in `update`, not in the factory
+
+Added 2026-09-07, when the four hardcoded appearance values became settings.
+
+`CodeEditorView`'s `AndroidView` builds the widget once and reuses it for every
+tab — one `CodeEditor` for the whole screen, for the reason finding 5 gives. So
+anything set in the `factory` block is set **once, at first composition**, and a
+value changed while a file is open never reaches the widget: the user would have
+to close the tab and reopen it, which reads as the setting not working.
+
+Text size, tab width, line numbers and word wrap are therefore set in `update`,
+which runs on every recomposition. They are cheap — four setters on a view that
+is already laid out — and the alternative is a setting that appears to be
+ignored.
+
+The settings themselves are a `StateFlow` on `EditorPreferences`, collected in
+`WorkspaceScreen`, rather than read inside the editor. On a tablet the settings
+pane and the editor are on screen together, and a read-on-composition would only
+update when something else happened to recompose.
+
+**The stored value is clamped on the way out as well as in.** A range can narrow
+in a later version and the preferences file is editable on a rooted device; a
+zero text size is an editor that draws nothing, which presents as the file
+failing to open rather than as a setting. `EditorPreferencesTest` pins that.
