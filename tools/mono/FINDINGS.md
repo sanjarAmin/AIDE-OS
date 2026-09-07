@@ -102,7 +102,35 @@ the changing name is what proved the file was parsed at all. `--version` returns
 before the config matters, so it can say nothing about this — **the probe has to
 be something that reaches the code under test.**
 
-## 4. What this does not answer
+## 4. The spike has retired into a class
+
+`MonoToolchain` in `:toolchain:native` holds the substitution, so no caller has
+to know why it is needed: `configFor` copies the shipped config with
+`$mono_libdir` rewritten to the real lib directory, and `plan` sets `MONO_PATH`
+and `MONO_CONFIG` from the installation it was given. It also runs `mono-sgen`
+rather than the `bin/mono` symlink, and the compiler as the assembly it is
+rather than through the `bin/mcs` shell script.
+
+`MonoToolchainOnDeviceTest` drives it through the real `NativeToolRunner`:
+
+```
+compile -> Success(exitCode=0)
+run     -> Success(exitCode=0): hello 42
+```
+
+and asserts the generated config **directly** — that it no longer contains the
+variable, and does contain the installed path — because that one substitution is
+the whole difference between a working toolchain and a compiler that reports
+every file as missing.
+
+One thing the test got wrong first, worth keeping because it is about this
+project's own contract rather than about mono: a broken source made
+`NativeToolRunner` return `Success(ToolResult(exitCode=1))`, and the assertion
+expected `AppResult.Failure`. **A non-zero exit is a successful run.** `Failure`
+means the tool could not be started; a compiler that rejected its input did
+exactly what it was asked to.
+
+## 5. What this does not answer
 
 - **x86_64 on the emulator only.** clang, the JDK and Node all needed an arm64
   run before they were believed; so does this.

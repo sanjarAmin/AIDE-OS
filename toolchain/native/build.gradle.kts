@@ -108,5 +108,5 @@ dependencies {
 // without them they skip -- which reports as OK. See the script for why that
 // mattered enough to automate.
 extra["deviceTestPackage"] = "com.osamu.aide.toolchain.nativetools.test"
-extra["deviceArchives"] = listOf("toolchain.tar", "jvm.tar", "node.tar")
+extra["deviceArchives"] = listOf("toolchain.tar", "jvm.tar", "node.tar", "mono.tar")
 apply(from = rootProject.file("gradle/stage-device-archives.gradle.kts"))
