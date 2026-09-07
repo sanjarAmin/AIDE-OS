@@ -64,6 +64,8 @@ archived; the licence is meant to keep that from happening to this one. It also
 preserves the option of reusing code from AndroidIDE and its community fork,
 which are GPL-3.0.
 
-Third-party components keep their own licences — notably `aapt2` (Apache-2.0,
-from AOSP) and the Kotlin compiler (Apache-2.0). `sora-editor` (LGPL-2.1) is
-consumed unmodified as a Maven dependency when the editor lands.
+Third-party components keep their own licences. [`NOTICE.md`](NOTICE.md) lists
+every one the app ships or downloads and where in this repository that licence
+is recorded — including the two the README used to name from memory, `aapt2`
+(Apache-2.0, from AOSP) and the Kotlin compiler (Apache-2.0), and `sora-editor`
+(LGPL-2.1), which is consumed unmodified as a Maven dependency.
