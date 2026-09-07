@@ -56,7 +56,7 @@ class FixAffordanceTest {
                 gitState = GitUiState(),
                 gitActions = GitActions({}, {}, {}, {}, {}, {}, {}, { _, _ -> }, {}),
                 terminalState = TerminalUiState(),
-                terminalActions = TerminalActions({}, { _, _ -> }, {}, {}, {}),
+                terminalActions = TerminalActions({}, { _, _ -> }, {}, {}, {}, { _, _ -> }),
                 onDiagnosticClick = {},
                 onFixDiagnostic = onFix,
                 onLaunchIntent = {},

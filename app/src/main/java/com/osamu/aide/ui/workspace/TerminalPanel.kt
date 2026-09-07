@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -27,6 +28,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,8 +42,11 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import com.osamu.aide.core.ui.theme.CodeTextStyle
+import kotlinx.coroutines.flow.filter
 
 /** What the terminal panel can do, gathered so the dock can forward it. */
 data class TerminalActions(
@@ -49,6 +55,16 @@ data class TerminalActions(
     val sendKey: (Int) -> Unit,
     val interrupt: () -> Unit,
     val restart: () -> Unit,
+    /**
+     * How many cells fit, which only the view knows.
+     *
+     * `TerminalViewModel.resize` has existed since the terminal landed and its
+     * KDoc says it is "driven by the view" -- and nothing drove it. The
+     * emulator kept its default width while the panel showed about forty-six
+     * columns, so a shell prompt that is an absolute path ran off the right
+     * edge and everything typed after it was invisible until the user scrolled.
+     */
+    val resize: (Int, Int) -> Unit,
 )
 
 /**
@@ -78,15 +94,41 @@ fun TerminalPanel(
     val focus = remember { FocusRequester() }
     var control by remember { mutableStateOf(false) }
 
+    /** Emptied after every send; see the field below for why that matters. */
+    val typing = rememberTextFieldState()
+
     // Follow the output the way a terminal does. Keyed on length so an
     // unchanged screen does not re-scroll on every recomposition.
     LaunchedEffect(state.screen.text.length) { vertical.animateScrollTo(vertical.maxValue) }
+
+    // One cell, measured rather than assumed: the code font's advance is what
+    // decides how many columns fit.
+    //
+    // Measured over a **run** and divided, not from a single glyph. One "M" is
+    // one advance with no gap after it, so it under-measures by whatever the
+    // style puts between characters, and the emulator was told it had 51
+    // columns where about 46 were visible -- close enough to look right and
+    // wrong enough that the end of every line needed a scroll.
+    val measurer = rememberTextMeasurer()
+    val cell = remember(measurer) {
+        val run = measurer.measure(SAMPLE, CodeTextStyle).size
+        run.width.toFloat() / SAMPLE.length to run.height
+    }
 
     Column(modifier.fillMaxSize()) {
         Box(
             Modifier
                 .fillMaxWidth()
                 .weight(1f)
+                .onSizeChanged { size ->
+                    val (advance, lineHeight) = cell
+                    if (advance > 0f && lineHeight > 0) {
+                        actions.resize(
+                            (size.width / advance).toInt().coerceAtLeast(MIN_COLUMNS),
+                            (size.height / lineHeight).coerceAtLeast(MIN_ROWS),
+                        )
+                    }
+                }
                 .verticalScroll(vertical)
                 .horizontalScroll(horizontal),
         ) {
@@ -109,6 +151,29 @@ fun TerminalPanel(
             else -> Unit
         }
 
+        // Forwarded from a snapshot rather than from a callback so that the
+        // clear below is an ordinary state edit: two characters arriving
+        // before this runs are collected as one string, which is what the
+        // shell would have received anyway.
+        //
+        // Keyed on the state alone, with the actions read through
+        // `rememberUpdatedState`, so that a caller which rebuilds them cannot
+        // restart the collector and drop a keystroke mid-word.
+        val currentActions = rememberUpdatedState(actions)
+        LaunchedEffect(typing) {
+            snapshotFlow { typing.text.toString() }
+                .filter { it.isNotEmpty() }
+                .collect { typed ->
+                    if (control && typed.length == 1) {
+                        currentActions.value.typeChar(typed[0], true)
+                        control = false
+                    } else {
+                        currentActions.value.type(typed)
+                    }
+                    typing.edit { replace(0, length, "") }
+                }
+        }
+
         KeyRow(
             control = control,
             onToggleControl = { control = !control },
@@ -120,20 +185,20 @@ fun TerminalPanel(
             onInterrupt = actions.interrupt,
         )
 
-        // The field is always empty: what it receives is forwarded immediately
-        // and then discarded. It exists to raise the soft keyboard and to give
-        // the platform somewhere to deliver characters, not to hold text.
+        // **Held in a TextFieldState and cleared after every send.** The first
+        // version passed a constant `TextFieldValue("")` as the value, on the
+        // reasoning that a terminal's input is forwarded rather than kept. It
+        // reads correctly and is wrong: Compose compares the value it is given
+        // against the one it last sent to the IME, sees "" both times, and so
+        // never tells the IME anything changed. The IME therefore keeps its own
+        // buffer and re-sends the whole of it on every keystroke -- typing
+        // `abcdef` reached the shell as `aababcabcdeef`, the running prefixes.
+        //
+        // Clearing a real state is what actually reaches the IME, and the
+        // clear is done here rather than inside an input transformation so the
+        // side effect stays out of the text pipeline.
         BasicTextField(
-            value = TextFieldValue(""),
-            onValueChange = { typed ->
-                if (typed.text.isEmpty()) return@BasicTextField
-                if (control && typed.text.length == 1) {
-                    actions.typeChar(typed.text[0], true)
-                    control = false
-                } else {
-                    actions.type(typed.text)
-                }
-            },
+            state = typing,
             enabled = state.isRunning,
             textStyle = TextStyle(color = MaterialTheme.colorScheme.onSurface),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
@@ -141,7 +206,11 @@ fun TerminalPanel(
                 autoCorrect = false,
                 imeAction = ImeAction.None,
             ),
-            decorationBox = { field ->
+            // **No line limit.** A single-line field swallows Enter, and Enter
+            // is how a shell is told to do anything: with it set, characters
+            // reached the PTY and no command ever ran. The field is emptied
+            // after every send, so it never grows regardless.
+            decorator = { field ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("> ", style = CodeTextStyle, color = MaterialTheme.colorScheme.primary)
                     Box(Modifier.weight(1f)) {
@@ -262,3 +331,16 @@ private fun ExitedRow(status: Int, onRestart: () -> Unit) {
         ) { Text("Restart") }
     }
 }
+
+/**
+ * Floors for a terminal too small to be one.
+ *
+ * A zero-column emulator is not a smaller terminal, it is a broken one: curses
+ * programs divide by the width. These are the smallest sizes anything sane
+ * still runs at, and they only apply while the panel is being laid out.
+ */
+/** Long enough that the per-character gap is averaged rather than guessed. */
+private const val SAMPLE = "MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM"
+
+private const val MIN_COLUMNS = 20
+private const val MIN_ROWS = 4

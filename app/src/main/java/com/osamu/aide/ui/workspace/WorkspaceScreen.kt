@@ -160,6 +160,7 @@ fun WorkspaceScreen(
             sendKey = { terminal.sendKey(it) },
             interrupt = terminal::interrupt,
             restart = terminal::restart,
+            resize = terminal::resize,
         )
     }
 

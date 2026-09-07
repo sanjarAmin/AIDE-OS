@@ -140,3 +140,39 @@ child process, and a test that cannot stop one leaks a shell per test.
 - **One session per project, and it is not persisted.** Leaving the workspace
   kills the shell. Spike R7 showed a backgrounded shell survives, so a session
   that outlives the screen is possible and is not built.
+
+## The input field must hold real state, and must not be single-line
+
+Both found 2026-09-07 by typing into the running app.
+
+**`TextFieldValue("")` as a constant value duplicates every keystroke.** The
+panel forwarded what the field received and passed a constant empty value back,
+on the reasoning that a terminal's input is sent onward rather than kept. It
+reads correctly and is wrong: Compose compares the value it is handed against
+the one it last sent to the IME, sees `""` both times, and never tells the IME
+anything changed. The IME keeps its own buffer and re-sends the whole of it on
+every keystroke, so typing `abcdef` reached the shell as **`aababcabcdeef`** --
+the running prefixes. A `TextFieldState` that is genuinely cleared after each
+send is what actually reaches the IME.
+
+**A single-line field swallows Enter, and Enter is the whole point.** Setting
+`TextFieldLineLimits.SingleLine` on the replacement looked tidy and meant every
+character reached the PTY while no command ever ran: the field is emptied after
+each send, so it never grows and the limit bought nothing.
+
+Both failures look identical from outside — "the terminal does not work" — and
+neither is visible in a test that drives the view model.
+
+## The emulator was never told how big it was
+
+`TerminalViewModel.resize` has existed since the terminal landed, and its KDoc
+says it is "driven by the view, which is the only thing that knows how many
+monospace cells fit". Nothing drove it. The emulator kept its default width
+while the panel showed about fifty columns, so a shell prompt that is an
+absolute path ran past the right edge and everything typed after it was
+invisible until the user scrolled sideways.
+
+The panel measures a **run** of characters and divides, rather than measuring
+one glyph: a single `M` is one advance with no gap after it. `stty size` inside
+the terminal now answers with the panel's own dimensions, which is the check
+worth repeating after any change here — it asks the PTY rather than the app.
