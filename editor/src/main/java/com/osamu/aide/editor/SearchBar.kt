@@ -20,11 +20,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 
@@ -46,6 +49,14 @@ fun SearchBar(
     var replacement by remember { mutableStateOf("") }
     var showReplace by remember { mutableStateOf(false) }
 
+    // **Focused as it appears.** Search is opened by a button in the toolbar,
+    // so the tap that opens the bar is not a tap into it: without this the
+    // user taps the icon, types, and nothing happens, because focus is still
+    // in the editor. Only using it shows that -- a test that sets the query
+    // through the controller never touches focus. `SearchBarTest`.
+    val findFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { findFocus.requestFocus() }
+
     Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = modifier) {
         Column(Modifier.fillMaxWidth().padding(8.dp)) {
             Row(
@@ -55,7 +66,7 @@ fun SearchBar(
                 OutlinedTextField(
                     value = search.query,
                     onValueChange = { controller.searchFor(it) },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).focusRequester(findFocus),
                     label = { Text("Find") },
                     singleLine = true,
                     isError = search.error != null,
