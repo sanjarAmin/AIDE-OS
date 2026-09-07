@@ -158,8 +158,11 @@ because a size reduction nobody can reproduce is a number in a document.
 
 ## 6. What this does not answer
 
-- **x86_64 on the emulator only.** clang, the JDK and Node all needed an arm64
-  run before they were believed; so does this.
+- ~~**x86_64 on the emulator only.**~~ **Answered 2026-09-07**: the aarch64
+  archive runs on real hardware. `:spike:mono` 7/7 and `:engine:mono` 6/6 on an
+  NX809J (Android 16, arm64-v8a), staged from `mono-aarch64/mono.tar` — the
+  `$mono_libdir` rewrite, the `bin/mono` symlink and `mcs.exe` all behave as
+  they do on the emulator.
 - **Nothing but `mcs` has been run.** `xbuild`, NuGet and anything that spawns
   are untried, and `bin/mcs` being a shell script hardcoding Termux's prefix
   suggests every other wrapper in `bin/` is too.

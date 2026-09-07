@@ -146,18 +146,23 @@ child          -> Success: child said 42
 npm --version  -> Success: 11.19.1
 ```
 
-What is still missing before M10 can ship this is a `ToolchainComponent`, and
-that needs `node.tar` **published** — the JDK and clang components point at this
-project's own releases, per architecture. Nothing here invents a pin;
+What was still missing before M10 could ship this was a `ToolchainComponent`,
+and that needed `node.tar` **published** — the JDK and clang components point at
+this project's own releases, per architecture. Both exist now
+(`ToolchainComponent.node`, per ABI, pinned and checked by `PinnedReleaseTest`),
+and `:engine:node` drives the result. Nothing here invents a pin;
 `toolchain/manager/FINDINGS.md` records what happens when one does not match.
 
 ## 5. What this does not answer
 
-- **Only x86_64 so far**, and only on the emulator. clang and the JDK both
-  needed an arm64 run before they were believed; so does this.
+- ~~**Only x86_64 so far**, and only on the emulator.~~ **Answered
+  2026-09-07**: the aarch64 archive runs on real hardware. `:spike:nodejs` 8/8
+  and `:engine:node` 5/5 on an NX809J (Android 16, arm64-v8a), staged from
+  `node-aarch64/node.tar`. Nothing differed from the emulator — no ABI-specific
+  finding on this page needed changing.
 - **Nothing has been done about `execPath`.** The spike records the deception
   and does not correct it.
-- **The C# half of M10 is a separate question.** Termux publishes `mono`
-  (~9 MB) and no `dotnet`, so ".NET SDK (experimental)" as the roadmap words it
-  is not available by this route; mono's `mcs` is what is. Nothing here has
-  tried it.
+- ~~**The C# half of M10 is a separate question.**~~ Answered by spike R14 and
+  `:engine:mono`: Termux publishes `mono` (~9 MB) and no `dotnet`, so ".NET SDK
+  (experimental)" as the roadmap words it is not available by this route, and
+  mono's `mcs` is what is. `tools/mono/FINDINGS.md`.
