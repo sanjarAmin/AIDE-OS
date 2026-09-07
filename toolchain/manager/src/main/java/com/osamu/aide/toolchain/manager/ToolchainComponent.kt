@@ -327,6 +327,95 @@ data class ToolchainComponent(
         )
 
         /**
+         * Node.js, for M10's JavaScript half.
+         *
+         * Termux's build, because the ones from nodejs.org are glibc and cannot
+         * start here at all -- the same reason the JDK and clang are re-hosted.
+         * Carries npm, which is a *separate* Termux package: an archive built
+         * from the runtime alone has a `bin/` holding `node` and `corepack` and
+         * nothing else. `tools/node/FINDINGS.md`, spike R13.
+         *
+         * No SDK licence: MIT.
+         */
+        fun node(abi: String): ToolchainComponent? = when (abi) {
+            "arm64-v8a" -> node(
+                architecture = "aarch64",
+                sha1 = "4407a32a6e6e7d7e0f0a51a8d27a68381fddcbf0",
+                archiveBytes = 38_086_286L,
+            )
+            "x86_64" -> node(
+                architecture = "x86_64",
+                sha1 = "bc37e23c37588b558ab25663e51efb35e053b5c4",
+                archiveBytes = 37_312_652L,
+            )
+            // Not built for the 32-bit ABIs, for the reason the JDK is not.
+            else -> null
+        }
+
+        private fun node(
+            architecture: String,
+            sha1: String,
+            archiveBytes: Long,
+        ) = ToolchainComponent(
+            id = "node-24",
+            displayName = "Node.js 24.18.0",
+            archiveUrl = "https://github.com/sanjarAmin/AIDE-OS/releases/download/" +
+                "node-24.18.0/node-24.18.0-$architecture.tar.gz",
+            archiveSha1 = sha1,
+            archiveBytes = archiveBytes,
+            // The runtime itself. npm is JavaScript and would still be there
+            // with a broken binary, so it is the wrong thing to check for.
+            archive = ComponentArchive.GzippedTar("bin/node"),
+            installedBytes = 110_000_000L,
+            requiresSdkLicense = false,
+        )
+
+        /**
+         * Mono, for M10's C# half.
+         *
+         * **Not the .NET SDK**, which Termux does not publish and Microsoft
+         * ships only for glibc. `tools/mono/FINDINGS.md`, spike R14 -- which
+         * also records the two things a consumer has to do that no other
+         * component needs: run the compiler as `lib/mono/4.5/mcs.exe` rather
+         * than through the `bin/mcs` shell script, and rewrite `$mono_libdir`
+         * in the shipped config or every `System.IO` call fails.
+         * `MonoToolchain` does both.
+         *
+         * No SDK licence: MIT.
+         */
+        fun mono(abi: String): ToolchainComponent? = when (abi) {
+            "arm64-v8a" -> mono(
+                architecture = "aarch64",
+                sha1 = "1c879ac363958647eabd9e066b73c9c7f6912cd1",
+                archiveBytes = 45_526_315L,
+            )
+            "x86_64" -> mono(
+                architecture = "x86_64",
+                sha1 = "9719c1b0054d7c3e490ab646dc80a5a990c95f2e",
+                archiveBytes = 45_166_352L,
+            )
+            else -> null
+        }
+
+        private fun mono(
+            architecture: String,
+            sha1: String,
+            archiveBytes: Long,
+        ) = ToolchainComponent(
+            id = "mono-6",
+            displayName = "Mono 6.14.1 (C#)",
+            archiveUrl = "https://github.com/sanjarAmin/AIDE-OS/releases/download/" +
+                "mono-6.14.1/mono-6.14.1-$architecture.tar.gz",
+            archiveSha1 = sha1,
+            archiveBytes = archiveBytes,
+            // `bin/mono` is a symlink to this; naming the symlink would pass
+            // for an archive whose target never arrived.
+            archive = ComponentArchive.GzippedTar("bin/mono-sgen"),
+            installedBytes = 120_000_000L,
+            requiresSdkLicense = false,
+        )
+
+        /**
          * Every component this app can install.
          *
          * Exists so something can iterate them: `PinnedReleaseTest` checks each
@@ -335,12 +424,21 @@ data class ToolchainComponent(
          * install. `FINDINGS.md`. Add new components here, or they go
          * unchecked.
          */
-        val ALL: List<ToolchainComponent> = listOf(
+        /** The ABIs this project builds toolchains for. */
+        private val ABIS = listOf("arm64-v8a", "x86_64")
+
+        val ALL: List<ToolchainComponent> = listOfNotNull(
             ANDROID_PLATFORM,
             ANDROID_BUILD_TOOLS,
             KOTLIN_COMPILER,
             KOTLIN_ANALYSIS_API,
             GRADLE,
+            // **Both ABIs of every per-architecture component.** These were
+            // missing, so the JDK's and clang's pins went unchecked by the very
+            // test written after a wrong pin shipped -- and they are the
+            // components most likely to drift, being ours and rebuilt by hand.
+            *ABIS.flatMap { listOfNotNull(openJdk(it), nativeToolchain(it), node(it), mono(it)) }
+                .toTypedArray(),
         )
     }
 }

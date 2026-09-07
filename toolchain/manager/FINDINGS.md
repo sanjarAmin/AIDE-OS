@@ -174,6 +174,14 @@ sibling; it fails today, for the right reason, and it checks the archive is
 *current* rather than merely valid, since the published one is a well-formed zip
 whose backend has no `definitionAt`.
 
+**And the gap was wider than the one component.** `ALL` — the list
+`PinnedReleaseTest` walks — held only the five components with a fixed URL. The
+per-architecture ones were absent, so the JDK's and clang's pins went unchecked
+by the very test written because a pin shipped wrong, and those are the most
+likely to drift: they are ours, rebuilt by hand, two files each. `ALL` now
+expands both ABIs of every per-architecture component, which took it from five
+entries to **thirteen**, all passing.
+
 **The lesson worth keeping is about the test gap, not the number.** Every test
 of this component stages its archive, which is right for speed and for working
 offline, and means **nothing exercises the pin**. A test that fetches the real
