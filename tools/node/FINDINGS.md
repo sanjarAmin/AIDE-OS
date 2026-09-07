@@ -24,7 +24,14 @@ run here at all. Termux builds against Bionic, so `bin/node` is an ordinary
 Android ELF whose interpreter is `/system/bin/linker64` — the one shape spike R9
 established this app can start, and the same shape as the JDK and clang.
 `tools/node/fetch-node.sh` assembles it from the package repo, walking the
-dependency closure: nine packages, 101 MB packed, `nodejs-lts` at 24.18.0.
+dependency closure from two roots — `nodejs-lts` at 24.18.0 and `npm` — and
+trims what running JavaScript cannot use: `include/` is 11 MB of C++ headers for
+native addons, which would need a compiler and a linker this launch cannot spawn
+anyway, and `share/` is man pages. **104 MB packed.**
+
+The rest is not reducible. The runtime binary is 43 MB and `libicudata` is
+32 MB, and dropping the latter is not a size decision but a decision to break
+`Intl`.
 
 **`LD_LIBRARY_PATH` is not optional.** The binary's `RUNPATH` is
 `/data/data/com.termux/files/usr/lib`, a prefix this app neither has nor can

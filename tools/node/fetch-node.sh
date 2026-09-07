@@ -127,6 +127,16 @@ PREFIX=root/data/data/com.termux/files/usr
 [ -x "$PREFIX/bin/node" ] || { echo "no node binary in the closure" >&2; exit 1; }
 [ -f "$PREFIX/lib/node_modules/npm/bin/npm-cli.js" ] || { echo "no npm in the closure" >&2; exit 1; }
 
+# **Trimmed of what running JavaScript cannot use.** `include/` is 11 MB of
+# node's C++ headers, there for building native addons -- which needs a compiler
+# and a linker this launch cannot spawn anyway -- and `share/` is man pages.
+#
+# The rest is not reducible: the runtime binary is 43 MB and `libicudata` is
+# 32 MB, and dropping the latter is not a size decision but a decision to break
+# `Intl`. 118 MB -> ~106 MB.
+echo "==> trimming"
+rm -rf "$PREFIX/include" "$PREFIX/share"
+
 echo "==> node.tar"
 tar cf node.tar -C "$PREFIX" .
 
