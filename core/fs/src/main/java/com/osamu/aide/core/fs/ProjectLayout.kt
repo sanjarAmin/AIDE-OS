@@ -66,6 +66,20 @@ class ProjectLayout(val root: File) {
         }
 
     /**
+     * Where a run puts npm's home and its cache.
+     *
+     * Inside the project rather than in app storage, so that deleting a
+     * project takes its downloaded packages with it and two projects cannot
+     * disagree about a dependency's version. Dot-prefixed because the file
+     * tree hides those, and named in [ProjectTemplate]'s `.gitignore` -- the
+     * two must stay in step, which is why they are spelled once, here.
+     */
+    val nodeHome: File get() = File(root, NODE_HOME)
+
+    /** @see nodeHome */
+    val nodeCache: File get() = File(root, NODE_CACHE)
+
+    /**
      * True when there is enough here to attempt a build.
      *
      * **An APK build**, which is the only kind this asks about. A Node project
@@ -76,6 +90,9 @@ class ProjectLayout(val root: File) {
     fun isBuildable(): Boolean = manifestFile.isFile
 
     companion object {
+        const val NODE_HOME = ".aide-home"
+        const val NODE_CACHE = ".aide-cache"
+
         private val NATIVE_EXTENSIONS = setOf("c", "cc", "cpp", "cxx")
 
         fun of(project: Project) = ProjectLayout(project.rootDir)

@@ -173,8 +173,18 @@ fun ProjectsScreen(
 
 @Composable
 private fun ProjectRow(project: Project, onClick: () -> Unit) {
+    // The row's icon comes from the file icons, so the language has to be
+    // spelled as an extension. A `when` rather than the two-way `if` this was:
+    // a JavaScript project was showing the Java icon.
     val dummyFile = remember(project.language) {
-        File("dummy." + if (project.language == SourceLanguage.KOTLIN) "kt" else "java")
+        val extension = when (project.language) {
+            SourceLanguage.KOTLIN -> "kt"
+            SourceLanguage.JAVASCRIPT -> "js"
+            SourceLanguage.C -> "c"
+            SourceLanguage.CPP -> "cpp"
+            SourceLanguage.JAVA -> "java"
+        }
+        File("dummy.$extension")
     }
     val iconInfo = FileIcons.infoFor(dummyFile, isDirectory = false)
 
@@ -210,7 +220,15 @@ private fun ProjectRow(project: Project, onClick: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurface
             )
             Text(
-                text = "${project.language.displayName}  ·  ${project.engine.displayName} build  ·  ${project.applicationId}",
+                // A JavaScript project has no build engine and no application
+                // ID -- it has neither an APK nor a package name -- so showing
+                // the two it was given at creation would be showing fields
+                // that mean nothing here.
+                text = if (project.language == SourceLanguage.JAVASCRIPT) {
+                    "${project.language.displayName}  ·  runs on Node"
+                } else {
+                    "${project.language.displayName}  ·  ${project.engine.displayName} build  ·  ${project.applicationId}"
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -261,8 +279,16 @@ private fun CreateProjectDialog(
                     modifier = Modifier.padding(top = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    // Only the languages the fast build path targets first.
-                    listOf(SourceLanguage.JAVA, SourceLanguage.KOTLIN).forEach { option ->
+                    // Java and Kotlin build an APK; JavaScript does not build
+                    // at all, it runs. The picker does not say so, because the
+                    // ▶ button does the right thing for each and explaining the
+                    // difference here would explain it to everyone who did not
+                    // need to know.
+                    listOf(
+                        SourceLanguage.JAVA,
+                        SourceLanguage.KOTLIN,
+                        SourceLanguage.JAVASCRIPT,
+                    ).forEach { option ->
                         FilterChip(
                             selected = language == option,
                             onClick = { language = option },

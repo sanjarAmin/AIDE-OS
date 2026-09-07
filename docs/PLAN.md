@@ -278,7 +278,7 @@ Bring-your-own-key, no backend infrastructure, no per-user liability for you.
 | **M7** C/C++ | Termux clang/lld toolchain download, NDK sysroot, clangd | JNI project with a native `.so` builds — **met**, clangd included |
 | **M8** Git + Terminal | JGit, PTY terminal | Clone from GitHub, edit, commit, push |
 | **M9** Gradle path | ~~Rootfs bootstrap~~ → Termux's **Bionic-built OpenJDK 21**, a launcher of our own, and `:engine:gradle` | **Met.** An unmodified Android Studio project builds on device through the `BuildSystem` interface, on both ABIs and with more than one module. Every part installs itself: OpenJDK from this repo's releases, Gradle pinned to its own publisher, build-tools from Google, and an SDK root composed from the last two |
-| **M10** JS / C# | ~~QuickJS +~~ Node from Termux (R13) and **mono** rather than the .NET SDK, which Termux does not publish (R14). Both are **published and pinned** as installable components, and `NodeToolchain` / `MonoToolchain` drive them | Node project runs; C# console app compiles — both halves proven on device and installable; what remains is that **nothing offers them yet**: no project template, no run action, no caller of `ToolchainComponent.node`/`mono` |
+| **M10** JS / C# | ~~QuickJS +~~ Node from Termux (R13) and **mono** rather than the .NET SDK, which Termux does not publish (R14). Both are **published and pinned** as installable components, and `NodeToolchain` / `MonoToolchain` drive them | **JavaScript is wired end to end**: the picker offers it, the template writes a real Node project, and ▶ runs it through `RunSystem`/`NodeRunSystem` into the build panel, offering the Node download when it is missing. **C# is still only a toolchain** — no template, no run action, no caller of `ToolchainComponent.mono` |
 | **M11** Kotlin intelligence | `:lsp:kotlin` — the Analysis API resident on device, behind the same `LanguageService` the editor already talks to | Completion, diagnostics and go-to-definition on a Kotlin buffer, inside the 200 ms budget — **met**, at ~107 ms warm |
 
 M0–M5 is the real v1.0. Everything from M6 on is expansion.
@@ -660,11 +660,28 @@ sharpest example so far of a bug no module's own test suite can see.
     deception, npm as `npm-cli.js`, and mono's `$mono_libdir` rewrite without
     which every `System.IO` call fails.
 
-    **What is missing is everything above them.** Nothing calls
-    `ToolchainComponent.node` or `.mono`; `SourceLanguage` knows only Java and
-    Kotlin; there is no project template for either language and no run action.
-    That is the next work, and unlike the last two milestones it is ordinary
-    plumbing rather than a question about the platform.
+    **The JavaScript half now has everything above it**, and it took a new
+    contract rather than a new engine: `RunSystem` is a sibling of
+    `BuildSystem` in `:engine:api`, because a run is not a build with a
+    different last stage — it has no artifact, it streams while it lives, and
+    it ends with an exit code rather than a file. `:engine:node` implements it,
+    `ProjectTemplate` writes `package.json` and `index.js`, and ▶ branches on
+    the language before any of the APK checks: a Node project asked whether it
+    has an `AndroidManifest.xml` gets a refusal that names the wrong thing.
+
+    One gap the UI cannot close on its own: **a `.js` buffer has no syntax
+    highlighting**, because `com.itsaky.androidide.treesitter` — the publisher
+    of every prebuilt grammar the editor uses — ships no JavaScript one. It
+    publishes java, kotlin, xml, json, c, cpp, python, aidl, log and
+    properties, and that is the whole list. Highlighting JavaScript means
+    building a grammar for four ABIs ourselves, which is a piece of work with
+    nothing to do with M10, so a Node project's sources render as plain text
+    for now.
+
+    **The C# half is still only a toolchain.** Nothing calls
+    `ToolchainComponent.mono`, and there is no template or run action for it.
+    Compiling with `mcs` and running the assembly is a second `RunSystem`
+    implementation and a second template, which is now a known shape.
 
     One correction to the milestone as written: **".NET SDK (experimental)" is
     not reachable by this route.** Termux publishes no `dotnet` and Microsoft's

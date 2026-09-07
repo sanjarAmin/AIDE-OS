@@ -81,6 +81,17 @@ object ProjectTemplate {
             console.log('Hello from ' + process.platform + ' on ' + process.arch);
             """.trimIndent() + "\n",
         )
+        // The only template that writes one, because it is the only one whose
+        // run leaves files behind: npm's home and cache sit beside the sources
+        // so that a project is self-contained, and the file tree hides them,
+        // but the Git panel would otherwise offer to commit a cache.
+        File(project.rootDir, ".gitignore").writeText(
+            listOf(
+                "node_modules/",
+                "${ProjectLayout.NODE_HOME}/",
+                "${ProjectLayout.NODE_CACHE}/",
+            ).joinToString(separator = "\n", postfix = "\n"),
+        )
     }
 
     private fun manifest(applicationId: String): String = """

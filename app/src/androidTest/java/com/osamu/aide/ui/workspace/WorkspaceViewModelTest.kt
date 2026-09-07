@@ -33,6 +33,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 /**
  * The workspace's wiring, on a device: project -> file tree -> editor -> build.
@@ -149,6 +150,28 @@ class WorkspaceViewModelTest {
                 .open("android.jar")
                 .use { input -> target.outputStream().use { input.copyTo(it) } }
         }
+    }
+
+    /**
+     * Installs a staged Node where [ToolchainManager] looks for one.
+     *
+     * The same shape as [stagePlatformJar] and for the same reason: without it
+     * the JavaScript test can assert only that a download is offered, and the
+     * half of the feature that matters -- a program starting and its output
+     * arriving in the panel -- would never run. `tar` rather than a Kotlin
+     * unpack because the archive carries symlinks (`bin/npm`) and modes, both
+     * of which a naive extractor drops.
+     */
+    private fun stageNode() {
+        val root = File(context.filesDir, "toolchains/node-24")
+        if (File(root, "bin/node").isFile) return
+        val archive = File(context.getExternalFilesDir(null), "node.tar")
+        if (!archive.isFile) return
+        root.mkdirs()
+        ProcessBuilder("/system/bin/tar", "-xf", archive.absolutePath, "-C", root.absolutePath)
+            .redirectErrorStream(true)
+            .start()
+            .apply { inputStream.readBytes(); waitFor(10, TimeUnit.MINUTES) }
     }
 
     private val hasPlatform: Boolean
@@ -432,6 +455,58 @@ class WorkspaceViewModelTest {
             platform.component.archiveUrl.startsWith("https://dl.google.com/"),
         )
         assertFalse("a build was started without a platform", viewModel.state.value.build.isRunning)
+    }
+
+    /**
+     * The M10 slice: tapping the same button on a JavaScript project runs it.
+     *
+     * The two outcomes below are the same assertion seen from either side of
+     * one download, and both are worth having. On a device without Node the
+     * point is that the refusal names Node -- not clang, not android.jar,
+     * which is what the APK pipeline would have said had this project reached
+     * it, and a refusal naming the wrong download is worse than none. On a
+     * device with Node the point is that the program's own stdout reaches the
+     * panel, which is the whole feature.
+     */
+    @Test
+    fun running_a_javascript_project_runs_node_rather_than_building_an_apk() = runBlocking {
+        val script = (
+            repository.createProject(
+                name = "Hello Node",
+                applicationId = "com.example.hello",
+                language = SourceLanguage.JAVASCRIPT,
+                engine = BuildEngine.FAST,
+            ) as AppResult.Success
+            ).value
+        assertTrue("the template wrote no entry point", File(script.rootDir, "index.js").isFile)
+        stageNode()
+
+        onMain { viewModel.open(script.rootDir) }
+        awaitState("the descriptor to be read") { it.projectName == "Hello Node" }
+        onMain { viewModel.build() }
+
+        if (ToolchainManager(context, dispatchers).nodeRoot() == null) {
+            awaitState("the Node prompt") { it.platform != null }
+            val prompt = viewModel.state.value.platform!!
+            assertEquals("the prompt is for something else", "node-24", prompt.component.id)
+            assertFalse("Node should need no SDK licence", prompt.component.requiresSdkLicense)
+            assertTrue("the prompt should be ready to download", prompt.licenseAccepted)
+            assertFalse("a build started anyway", viewModel.state.value.build.isRunning)
+            return@runBlocking
+        }
+
+        // index.js prints one line naming the platform it is running on, so
+        // seeing it means node really started -- an empty log would also be
+        // consistent with a process that never launched.
+        awaitState("the script's output") { state ->
+            state.build.log.any { "Hello from" in it }
+        }
+        awaitState("the run to finish") { !it.build.isRunning && it.build.outcome != null }
+        assertTrue(
+            "a clean script did not report success: ${viewModel.state.value.build.outcome}",
+            viewModel.state.value.build.succeeded,
+        )
+        assertTrue("the run panel stayed shut", viewModel.state.value.isBuildPanelOpen)
     }
 
     private companion object {

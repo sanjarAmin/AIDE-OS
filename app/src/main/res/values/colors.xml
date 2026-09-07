@@ -10,6 +10,10 @@
     <color name="file_xml">#4CAF50</color>
     <color name="file_json">#FBC02D</color>
     <color name="file_gradle">#02303A</color>
+    <!-- Darker than JavaScript's own #F7DF1E, which is illegible on a light
+         surface, and far enough from file_json's amber to tell apart in a
+         list where both appear side by side. -->
+    <color name="file_js">#C8A000</color>
     <color name="file_generic">#757575</color>
     <color name="folder">#FFA000</color>
 </resources>

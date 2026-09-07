@@ -85,6 +85,7 @@ dependencies {
     implementation(project(":engine:deps"))
     implementation(project(":engine:fast"))
     implementation(project(":engine:gradle"))
+    implementation(project(":engine:node"))
     implementation(project(":lsp:java"))
     implementation(project(":lsp:native"))
     implementation(project(":lsp:kotlin"))
@@ -137,5 +138,9 @@ extra["deviceTestPackage"] = "com.osamu.aide"
 extra["deviceArchives"] = listOf(
     "kotlinc-archive.zip=kotlin-compiler-2.2.10.zip",
     "kotlin-analysis-2.2.10.zip",
+    // 109 MB, and without it the JavaScript run test can only prove that the
+    // download is offered -- which is the half of the feature that does not
+    // start a program.
+    "node.tar",
 )
 apply(from = rootProject.file("gradle/stage-device-archives.gradle.kts"))

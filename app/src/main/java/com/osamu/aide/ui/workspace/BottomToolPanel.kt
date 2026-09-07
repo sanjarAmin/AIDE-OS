@@ -228,7 +228,11 @@ fun BottomToolDock(
                             }
                             if (buildState.log.isEmpty() && buildState.install == null) {
                                 Text(
-                                    text = "Build output appears here.",
+                                    text = if (buildState.isRun) {
+                                        "Output from the program appears here."
+                                    } else {
+                                        "Build output appears here."
+                                    },
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )

@@ -29,6 +29,9 @@ object FileIcons {
             val (iconRes, colorRes) = when (extension) {
                 "java" -> R.drawable.ic_file_java to R.color.file_java
                 "kt", "kts" -> R.drawable.ic_file_kotlin to R.color.file_kotlin
+                // .mjs and .cjs are the same language; a Node project can
+                // hold either the moment it declares a module type.
+                "js", "mjs", "cjs" -> R.drawable.ic_file_js to R.color.file_js
                 "xml" -> R.drawable.ic_file_xml to R.color.file_xml
                 "json" -> R.drawable.ic_file_json to R.color.file_json
                 "gradle" -> R.drawable.ic_file_gradle to R.color.file_gradle

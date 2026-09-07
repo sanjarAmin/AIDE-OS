@@ -14,7 +14,15 @@ import com.osamu.aide.core.fs.ProjectRepository
 import com.osamu.aide.editor.DocumentStore
 import com.osamu.aide.editor.EditorLanguages
 import com.osamu.aide.editor.SourceDocument
+import com.osamu.aide.core.fs.ProjectLayout
+import com.osamu.aide.core.fs.SourceLanguage
 import com.osamu.aide.engine.api.BuildEvent
+import com.osamu.aide.engine.api.RunEvent
+import com.osamu.aide.engine.api.RunRequest
+import com.osamu.aide.engine.api.RunResult
+import com.osamu.aide.engine.node.NodeRunSystem
+import com.osamu.aide.toolchain.nativetools.LinkerLaunch
+import com.osamu.aide.toolchain.nativetools.NodeToolchain
 import com.osamu.aide.engine.api.BuildResult
 import com.osamu.aide.engine.api.BuildStage
 import com.osamu.aide.engine.api.Diagnostic
@@ -60,6 +68,15 @@ data class BuildUiState(
     val outcome: String? = null,
     val succeeded: Boolean = false,
     val install: InstallUiState? = null,
+    /**
+     * True while this panel holds a run rather than a build.
+     *
+     * Only the headings read it. A run has no stages and no diagnostics, so
+     * without it the panel offers "Build output" and "Compiler diagnostics
+     * appear here" over a program's stdout, which is the wrong promise on
+     * both counts.
+     */
+    val isRun: Boolean = false,
 )
 
 /**
@@ -155,6 +172,15 @@ data class WorkspaceUiState(
     val analysis: AnalysisUiState = AnalysisUiState(),
     val isBuildPanelOpen: Boolean = false,
     val platform: PlatformUiState? = null,
+    /**
+     * The open project's language, once its descriptor has been read.
+     *
+     * Null both before that and for a directory that is not a project at all.
+     * The toolbar reads it: ▶ builds an APK for most languages and runs a
+     * program for JavaScript, and a button that says the wrong one of those is
+     * the difference between a user expecting an install and getting output.
+     */
+    val projectLanguage: SourceLanguage? = null,
 ) {
     val active: OpenFile? get() = openFiles.firstOrNull { it.file == activeFile }
 
@@ -267,7 +293,12 @@ class WorkspaceViewModel(
             when (val result = projects.openProject(projectDir)) {
                 is AppResult.Success -> {
                     project = result.value
-                    _state.update { it.copy(projectName = result.value.name) }
+                    _state.update {
+                        it.copy(
+                            projectName = result.value.name,
+                            projectLanguage = result.value.language,
+                        )
+                    }
                 }
                 // Left null. Editing a directory that is not an AIDE-OS project
                 // is legitimate; building it is what is not, and build() says so.
@@ -625,6 +656,15 @@ class WorkspaceViewModel(
                 )
                 return@launch
             }
+            // **A JavaScript project does not build, it runs.** Branching here
+            // rather than inside runBuild, because every check below is about
+            // an APK: a Node project has no native sources to need clang and
+            // no manifest to link against android.jar, and asking it those
+            // questions produces refusals that name the wrong thing.
+            if (project.language == SourceLanguage.JAVASCRIPT) {
+                runNodeProject(project)
+                return@launch
+            }
             builder.missingNativeToolchain(project)?.let { component ->
                 // Offered before the build starts rather than after it fails,
                 // for the same reason the platform is: the refusal names a
@@ -645,6 +685,102 @@ class WorkspaceViewModel(
                 return@launch
             }
             runBuild(project)
+        }
+    }
+
+    /**
+     * Runs a Node project, reporting into the same panel a build reports into.
+     *
+     * The same panel rather than a second one: a user who tapped ▶ wants to
+     * see what happened, and two panels that each work half the time is worse
+     * than one that holds either. Its headings read [BuildUiState.isRun] and
+     * say "Running" instead of "Build output", because the lines below them
+     * are the program's own words and not a compiler's.
+     *
+     * A missing entry point is left to node, which says `Cannot find module`
+     * and names the path -- better than anything this could say, since the
+     * name came from the user's own `package.json`.
+     */
+    private suspend fun runNodeProject(project: Project) {
+        val root = toolchain.nodeRoot() ?: run {
+            toolchain.missingNodeComponent()?.let { component ->
+                val megabytes = component.archiveBytes / (1024 * 1024)
+                offerComponentInstall(
+                    component = component,
+                    rationale = "Running JavaScript needs Node.js, which is about " +
+                        "$megabytes MB to download and roughly " +
+                        "${component.installedBytes / (1024 * 1024)} MB once installed.",
+                )
+            } ?: _events.send(
+                WorkspaceEvent.Notice("Node.js is not available for this device's ABI."),
+            )
+            return
+        }
+
+        val launch = LinkerLaunch.forThisProcess() ?: run {
+            _events.send(WorkspaceEvent.Notice("This device has no linker Node can start through."))
+            return
+        }
+        val layout = ProjectLayout.of(project)
+        val entryPoint = layout.nodeEntryPoint
+        val engine = NodeRunSystem(
+            node = NodeToolchain(root, launch),
+            dispatchers = dispatchers,
+            home = layout.nodeHome,
+            cache = layout.nodeCache,
+        )
+
+        try {
+            _state.update {
+                it.copy(isBuildPanelOpen = true, build = BuildUiState(isRunning = true, isRun = true))
+            }
+            engine.run(RunRequest(projectDir = project.rootDir, entryPoint = entryPoint))
+                .collect(::onRunEvent)
+        } finally {
+            _state.update {
+                it.copy(
+                    build = it.build.copy(
+                        isRunning = false,
+                        stage = null,
+                        outcome = it.build.outcome ?: "Run stopped.",
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun onRunEvent(event: RunEvent) {
+        when (event) {
+            // The command, not a friendly paraphrase: it names the linker, and
+            // a reader who later wonders why `process.execPath` is not node
+            // has the answer in the log they already have.
+            is RunEvent.Started -> _state.update {
+                it.copy(build = it.build.copy(log = it.build.log + event.commandLine))
+            }
+
+            // The program's own output, verbatim and in order. Both streams go
+            // to the same log: a console is one thing to read, and the stream
+            // tag is kept in the event for a caller that wants to colour it.
+            is RunEvent.Output -> _state.update {
+                it.copy(build = it.build.copy(log = it.build.log + event.line))
+            }
+
+            is RunEvent.Finished -> _state.update {
+                val result = event.result
+                val outcome = when (result) {
+                    is RunResult.Exited ->
+                        if (result.succeeded) "Finished in ${result.durationMillis} ms"
+                        else "Exited with code ${result.exitCode} after ${result.durationMillis} ms"
+                    is RunResult.Failed -> result.message
+                }
+                it.copy(
+                    build = it.build.copy(
+                        isRunning = false,
+                        outcome = outcome,
+                        succeeded = result is RunResult.Exited && result.succeeded,
+                    ),
+                )
+            }
         }
     }
 

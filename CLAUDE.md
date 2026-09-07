@@ -35,7 +35,8 @@ emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu host
 :core:fs             Project storage, the file tree, SAF import. FINDINGS.
 :core:ui             Design system, theme, adaptive phone/tablet layout
 :editor              sora-editor + tree-sitter, wrapped for Compose. FINDINGS.
-:engine:api          The BuildSystem contract; knows nothing of any toolchain
+:engine:api          The BuildSystem and RunSystem contracts; knows nothing of
+                     any toolchain
 :engine:deps         Maven resolution and AAR extraction, on ART. FINDINGS.
 :engine:fast         The bundled pipeline: aapt2 -> ECJ -> D8 -> apksig, plus
                      clang for src/main/cpp. FINDINGS.

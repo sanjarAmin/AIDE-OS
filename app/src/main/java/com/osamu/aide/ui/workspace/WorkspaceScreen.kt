@@ -76,6 +76,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.osamu.aide.core.fs.FileNode
+import com.osamu.aide.core.fs.SourceLanguage
 import com.osamu.aide.ai.ui.ChatPanel
 import com.osamu.aide.core.ui.layout.AdaptiveWorkspace
 import com.osamu.aide.core.ui.layout.PaneBreakpoints
@@ -299,15 +300,31 @@ fun WorkspaceScreen(
                                     )
                                 }
                             }
+                            // The same button does two different things, and
+                            // says which: a JavaScript project has no APK to
+                            // build and no install to wait for, it just runs.
+                            val runsRatherThanBuilds =
+                                state.projectLanguage == SourceLanguage.JAVASCRIPT
                             if (state.build.isRunning) {
                                 IconButton(onClick = viewModel::stopBuild) {
-                                    Icon(Icons.Default.Stop, contentDescription = "Stop the build")
+                                    Icon(
+                                        Icons.Default.Stop,
+                                        contentDescription = if (state.build.isRun) {
+                                            "Stop the program"
+                                        } else {
+                                            "Stop the build"
+                                        },
+                                    )
                                 }
                             } else {
                                 IconButton(onClick = viewModel::build) {
                                     Icon(
                                         Icons.Default.PlayArrow,
-                                        contentDescription = "Build and run",
+                                        contentDescription = if (runsRatherThanBuilds) {
+                                            "Run"
+                                        } else {
+                                            "Build and run"
+                                        },
                                     )
                                 }
                             }
@@ -702,7 +719,9 @@ private fun BuildPane(
                     CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                 }
                 Text(
-                    text = state.stage?.displayName ?: state.outcome ?: "Build output",
+                    text = state.stage?.displayName
+                        ?: state.outcome
+                        ?: if (state.isRun) "Running" else "Build output",
                     style = MaterialTheme.typography.titleMedium,
                     color = if (state.outcome != null && !state.succeeded && !state.isRunning) {
                         MaterialTheme.colorScheme.error
@@ -714,7 +733,11 @@ private fun BuildPane(
 
             if (state.log.isEmpty() && state.diagnostics.isEmpty()) {
                 Text(
-                    text = "Compiler diagnostics appear here.",
+                    text = if (state.isRun) {
+                        "Output from the program appears here."
+                    } else {
+                        "Compiler diagnostics appear here."
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 8.dp),

@@ -72,6 +72,27 @@ class ProjectTemplateTest {
         )
     }
 
+    /**
+     * A run writes into the project, so the template says what not to commit.
+     *
+     * `node_modules` is the obvious one; the other two are ours. npm's home
+     * and cache go beside the sources so a project carries its own state, and
+     * the file tree hides dot-directories -- but the Git panel does not, and
+     * offering to commit a package cache is how a 200 MB repository happens.
+     */
+    @Test
+    fun `a node project ignores the directories a run writes`() {
+        val project = project(language = SourceLanguage.JAVASCRIPT)
+        ProjectTemplate.write(project)
+
+        val ignored = File(project.rootDir, ".gitignore")
+        assertTrue("no .gitignore", ignored.isFile)
+        val lines = ignored.readLines()
+        assertTrue("node_modules is not ignored", lines.contains("node_modules/"))
+        assertTrue("npm's home is not ignored", lines.contains(".aide-home/"))
+        assertTrue("npm's cache is not ignored", lines.contains(".aide-cache/"))
+    }
+
     /** The runner reads the entry point from `package.json`, not by convention. */
     @Test
     fun `the entry point comes from package json rather than a guess`() {

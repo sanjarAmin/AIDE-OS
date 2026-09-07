@@ -1,6 +1,7 @@
 package com.osamu.aide.toolchain.manager
 
 import android.content.Context
+import android.os.Build
 import com.osamu.aide.core.common.DispatcherProvider
 import com.osamu.aide.toolchain.manager.R
 import kotlinx.coroutines.flow.Flow
@@ -49,6 +50,25 @@ class ToolchainManager(
         .takeIf { it.isFile }
 
     fun canBuild(): Boolean = androidJar() != null
+
+    /**
+     * Where Node is installed, or null when it is not.
+     *
+     * Null rather than an exception, for the reason [androidJar] gives: not
+     * having it is the state every install starts in, and the permanent state
+     * of anyone who never opens a JavaScript project.
+     *
+     * The marker is `bin/node` rather than the directory, because an install
+     * interrupted between creating the directory and finishing the unpack
+     * leaves the first and not the second.
+     */
+    fun nodeRoot(): File? = ToolchainComponent.node(Build.SUPPORTED_ABIS.first())
+        ?.let { storage.directoryFor(it) }
+        ?.takeIf { File(it, "bin/node").isFile }
+
+    /** The Node component this device needs, or null when it is installed. */
+    fun missingNodeComponent(): ToolchainComponent? =
+        if (nodeRoot() != null) null else ToolchainComponent.node(Build.SUPPORTED_ABIS.first())
 
     /**
      * The archives Kotlin intelligence needs, or null if either is missing.
