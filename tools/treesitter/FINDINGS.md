@@ -72,7 +72,20 @@ Two flags are not incidental:
 - `-Wl,-z,max-page-size=16384` — Android 15's 16 KB pages. A 4 KB-aligned
   library fails to load there, on a device nobody testing on API 34 has.
 
-## 5. C# is buildable and deliberately not built
+## 5. JSX is the same grammar and a longer query
+
+tree-sitter-javascript parses JSX already — `jsx_element`, `jsx_opening_element`
+and the rest are in its `node-types.json`. What `.jsx` needs is upstream's
+`highlights-jsx.scm`, which is eight patterns written to be applied **on top of**
+`highlights.scm` rather than instead of it.
+
+tree-sitter applies one query per language, so the build script concatenates the
+two into `javascriptx/` and `EditorLanguage` has a second entry pointing at the
+same grammar. Adding `jsx` to JavaScript's extensions instead would highlight
+those files with the query that has no idea what a tag is — which compiles, runs,
+and colours nothing, the failure mode this whole document is about.
+
+## 6. C# is buildable and deliberately not built
 
 The same script builds it — `tree-sitter-c-sharp` v0.23.1 also declares ABI 14
 — but the size is the whole argument:

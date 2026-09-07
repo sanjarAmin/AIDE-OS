@@ -31,7 +31,7 @@ object FileIcons {
                 "kt", "kts" -> R.drawable.ic_file_kotlin to R.color.file_kotlin
                 // .mjs and .cjs are the same language; a Node project can
                 // hold either the moment it declares a module type.
-                "js", "mjs", "cjs" -> R.drawable.ic_file_js to R.color.file_js
+                "js", "mjs", "cjs", "jsx" -> R.drawable.ic_file_js to R.color.file_js
                 "cs" -> R.drawable.ic_file_cs to R.color.file_cs
                 "xml" -> R.drawable.ic_file_xml to R.color.file_xml
                 "json" -> R.drawable.ic_file_json to R.color.file_json

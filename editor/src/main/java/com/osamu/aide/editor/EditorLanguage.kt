@@ -46,7 +46,20 @@ enum class EditorLanguage(
         setOf("js", "mjs", "cjs"),
         "javascript",
         { JavaScriptGrammar.language() },
-    );
+    ),
+
+    /**
+     * The same grammar, a longer query.
+     *
+     * tree-sitter-javascript parses JSX already; what `.jsx` needs is
+     * upstream's `highlights-jsx.scm`, which is written to be applied **on top
+     * of** `highlights.scm` rather than instead of it. A language gets one
+     * query, so `tools/treesitter/build-grammars.sh` concatenates the two into
+     * a directory of its own -- and this entry exists rather than adding `jsx`
+     * to [JAVASCRIPT]'s extensions because those files would then be
+     * highlighted by the query that has no idea what a tag is.
+     */
+    JSX("JSX", setOf("jsx"), "javascriptx", { JavaScriptGrammar.language() });
 
     fun language(): TSLanguage = grammar()
 

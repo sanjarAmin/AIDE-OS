@@ -79,6 +79,18 @@ JNI
   # is about.
   mkdir -p "$ASSETS/$name"
   cp "$WORK/$repo-$version/queries/highlights.scm" "$ASSETS/$name/highlights.scm"
+
+  # JSX is the same grammar and a *supplementary* query: upstream ships
+  # highlights-jsx.scm expecting it to be applied on top of highlights.scm, so
+  # the two are concatenated into one language rather than shipped separately.
+  # tree-sitter applies one query per language.
+  if [ -f "$WORK/$repo-$version/queries/highlights-jsx.scm" ]; then
+    mkdir -p "$ASSETS/${name}x"
+    cat "$WORK/$repo-$version/queries/highlights.scm" \
+        "$WORK/$repo-$version/queries/highlights-jsx.scm" \
+        > "$ASSETS/${name}x/highlights.scm"
+    echo "    queries: $name, ${name}x"
+  fi
 done <<< "$GRAMMARS"
 
 echo "done. :editor:connectedDebugAndroidTest is what says whether it works."

@@ -11,6 +11,7 @@ vendored unmodified:
 | `xml/` | [tree-sitter-grammars/tree-sitter-xml](https://github.com/tree-sitter-grammars/tree-sitter-xml) | MIT |
 | `json/` | [tree-sitter/tree-sitter-json](https://github.com/tree-sitter/tree-sitter-json) | MIT |
 | `javascript/` | [tree-sitter/tree-sitter-javascript](https://github.com/tree-sitter/tree-sitter-javascript) v0.23.1 | MIT |
+| `javascriptx/` | the same, `highlights.scm` + `highlights-jsx.scm` concatenated | MIT |
 
 ## The Kotlin query is edited; the rest are not
 
@@ -29,9 +30,12 @@ builds it from tree-sitter-javascript v0.23.1 and copies **that tag's**
 `highlights.scm` here, so the pair moves together — which is the one case on
 this page where the version mismatch §1 describes cannot happen by accident.
 
-`highlights-jsx.scm` is deliberately not vendored: `EditorLanguage` claims
-`.js`, `.mjs` and `.cjs` and not `.jsx`, because highlighting JSX without its
-query renders every tag as an error.
+`.jsx` is a separate entry using the **same grammar** and a longer query.
+Upstream's `highlights-jsx.scm` is written to be applied on top of
+`highlights.scm`, and tree-sitter applies one query per language, so the build
+script concatenates them into `javascriptx/`. Adding `jsx` to JavaScript's
+extensions instead would highlight those files with the query that has no idea
+what a tag is.
 
 A query is written against a particular revision of its grammar, and the
 grammars here are `com.itsaky.androidide.treesitter`'s prebuilt ones. A query

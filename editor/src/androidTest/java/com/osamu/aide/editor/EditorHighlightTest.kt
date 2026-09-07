@@ -222,6 +222,52 @@ class EditorHighlightTest {
         )
     }
 
+    /**
+     * A `.jsx` tag is coloured, which is the whole reason it is its own entry.
+     *
+     * The grammar is JavaScript's and parses JSX already; what `.jsx` needed
+     * was upstream's supplementary query. Claiming the extension without it
+     * would leave every tag uncoloured -- indistinguishable from the plain text
+     * this replaced, and exactly the failure `TreeSitterQueryTest` cannot see,
+     * because a query that compiles can still say nothing about tags.
+     */
+    @Test
+    fun a_jsx_tag_is_highlighted_and_a_plain_js_file_still_is_too() {
+        val component = buildString {
+            appendLine("// A component.")
+            appendLine("const hello = 'hi';")
+            appendLine("function App() {")
+            appendLine("    return <section className=\"box\">{hello}</section>;")
+            appendLine("}")
+        }
+        instrumentation.runOnMainSync {
+            editor.setEditorLanguage(languages.languageFor(File("App.jsx")))
+            editor.setText(component)
+        }
+
+        val tagLine = 3
+        val deadline = System.currentTimeMillis() + ANALYSIS_TIMEOUT_MILLIS
+        while (System.currentTimeMillis() < deadline && colorsOn(tagLine).size <= 1) {
+            Thread.sleep(POLL_INTERVAL_MILLIS)
+        }
+
+        // `section` is captured as @tag, which the theme colours as an
+        // identifier; `"box"` is a string. Both on one line means the JSX half
+        // of the query ran, not only the JavaScript half.
+        assertTrue(
+            "a JSX tag is not coloured: ${colorsOn(tagLine)}",
+            EditorColorScheme.IDENTIFIER_NAME in colorsOn(tagLine),
+        )
+        assertTrue(
+            "the string in a JSX attribute is not coloured: ${colorsOn(tagLine)}",
+            EditorColorScheme.LITERAL in colorsOn(tagLine),
+        )
+        assertTrue(
+            "a comment is not coloured as one: ${colorsOn(0)}",
+            EditorColorScheme.COMMENT in colorsOn(0),
+        )
+    }
+
     @Test
     fun an_unknown_file_type_opens_as_plain_text_rather_than_failing() {
         instrumentation.runOnMainSync {
