@@ -3,6 +3,7 @@ package com.osamu.aide.editor
 import android.graphics.Typeface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
@@ -10,6 +11,8 @@ import com.osamu.aide.engine.api.Diagnostic
 import io.github.rosemoe.sora.event.ContentChangeEvent
 import io.github.rosemoe.sora.event.SelectionChangeEvent
 import io.github.rosemoe.sora.widget.CodeEditor
+import io.github.rosemoe.sora.widget.schemes.EditorColorScheme
+import io.github.rosemoe.sora.widget.schemes.SchemeDarcula
 import io.github.rosemoe.sora.widget.component.EditorAutoCompletion
 import io.github.rosemoe.sora.widget.getComponent
 import java.io.File
@@ -64,6 +67,12 @@ fun CodeEditorView(
     val buffers = remember { EditorBuffers() }
     val currentController = rememberUpdatedState(controller)
 
+    // Resolved here because isSystemInDarkTheme is a composable read, and the
+    // update block below is not one. It also means a change of system theme
+    // recomposes and repaints the editor, which is the behaviour that was
+    // missing entirely: the chrome went dark and the code stayed white.
+    val wantsDark = settings.theme.isDark(isSystemInDarkTheme())
+
     AndroidView(
         modifier = modifier,
         factory = { context ->
@@ -96,6 +105,12 @@ fun CodeEditorView(
             editor.setTabWidth(settings.tabWidth)
             editor.setLineNumberEnabled(settings.showLineNumbers)
             editor.setWordwrap(settings.wordWrap)
+            // Compared rather than assigned every frame: a new scheme object
+            // makes the editor rebuild its styles, which on a 5,000-line file
+            // is visible.
+            if (wantsDark != (editor.colorScheme is SchemeDarcula)) {
+                editor.colorScheme = if (wantsDark) SchemeDarcula() else EditorColorScheme()
+            }
             currentController.value?.attach(editor)
             buffers.retainOnly(openDocuments)
 

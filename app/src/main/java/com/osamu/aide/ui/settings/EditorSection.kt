@@ -21,6 +21,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.osamu.aide.editor.EditorColorTheme
 import com.osamu.aide.editor.EditorPreferences
 import com.osamu.aide.editor.EditorSettings
 import kotlin.math.roundToInt
@@ -78,9 +79,24 @@ fun EditorSection(preferences: EditorPreferences, modifier: Modifier = Modifier)
         )
 
         Text(
-            text = "Tab width",
+            text = "Colours",
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.padding(top = 8.dp),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            EditorColorTheme.entries.forEach { theme ->
+                FilterChip(
+                    selected = settings.theme == theme,
+                    onClick = { preferences.update { it.copy(theme = theme) } },
+                    label = { Text(theme.displayName) },
+                )
+            }
+        }
+
+        Text(
+            text = "Tab width",
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.padding(top = 12.dp),
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             EditorSettings.TAB_WIDTHS.forEach { width ->

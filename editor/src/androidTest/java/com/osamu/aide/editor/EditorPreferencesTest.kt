@@ -59,10 +59,31 @@ class EditorPreferencesTest {
         assertEquals(EditorSettings.DEFAULT_TAB_WIDTH, settings.tabWidth)
     }
 
+    /** An unknown theme name falls back rather than throwing. */
+    @Test
+    fun a_theme_written_by_a_later_version_does_not_crash_an_earlier_one() {
+        context.getSharedPreferences("editor-settings", android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putString("theme", "SOLARIZED_FROM_THE_FUTURE")
+            .commit()
+
+        assertEquals(
+            EditorColorTheme.FOLLOW_SYSTEM,
+            EditorPreferences(context).settings.value.theme,
+        )
+    }
+
     @Test
     fun reset_puts_back_what_the_editor_shipped_with() {
         val preferences = EditorPreferences(context)
-        preferences.update { it.copy(fontSizeSp = 26f, wordWrap = true, showLineNumbers = false) }
+        preferences.update {
+            it.copy(
+                fontSizeSp = 26f,
+                wordWrap = true,
+                showLineNumbers = false,
+                theme = EditorColorTheme.DARK,
+            )
+        }
 
         preferences.reset()
 

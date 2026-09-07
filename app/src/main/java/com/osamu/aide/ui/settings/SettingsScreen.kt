@@ -32,7 +32,7 @@ private data class SettingsSection(val title: String, val summary: String)
 /**
  * Settings.
  *
- * Five of these sections work and two do not exist yet. They used to be drawn
+ * Five of these sections work and one does not exist yet. They used to be drawn
  * identically -- a title in `titleMedium` over a grey summary, whether or not
  * anything was behind it -- so the only way to learn that "Build" was a
  * description of the future was to tap it and have nothing happen.
@@ -47,7 +47,6 @@ private data class SettingsSection(val title: String, val summary: String)
 fun SettingsScreen(onNavigateBack: () -> Unit) {
     val sections = listOf(
         SettingsSection("Build", "Fast or Gradle engine, JDK level, signing keys."),
-        SettingsSection("Themes", "A colour scheme for the editor, light and dark."),
     )
 
     val keys = koinInject<ApiKeyStore>()

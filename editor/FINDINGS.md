@@ -134,6 +134,30 @@ is.
 - **Diagnostics as you type.** The gutter shows what the last *build* found.
   Live diagnostics are M3 and need a language server, not more editor.
 
+## The editor did not follow dark mode, and nothing said so
+
+Found 2026-09-07 by putting the emulator into night mode and opening a file.
+The app's chrome — bar, tabs, breadcrumb, symbol row — all followed the system,
+and the editor stayed on sora's default light scheme: at night, most of the
+screen was a white rectangle inside a dark app.
+
+`EditorTheme`'s own KDoc said "colours are not chosen here … what they resolve
+to is the app's theme", which was **aspirational**. `EditorTheme` maps
+tree-sitter captures onto slots in sora's `EditorColorScheme`; nothing ever set
+that scheme, so it stayed the light default whatever the app did.
+
+Every test passed throughout, and would have: the highlighting tests assert
+which *slot* a token gets (`EditorColorScheme.KEYWORD`), which is correct in
+either scheme. A test that could see this would have to compare pixels or
+assert on the scheme object, and the cheap version of the second is
+`EditorColorThemeTest` — the resolution is a function now rather than an `if`
+inside an `AndroidView` update block, where nothing can be asserted.
+
+The fix is sora's own `SchemeDarcula` for dark and its default for light, chosen
+per composition from `isSystemInDarkTheme()` unless the user overrode it. The
+scheme is compared before being assigned: a new scheme object makes the editor
+rebuild its styles, which on a 5,000-line file is visible.
+
 ## Editor settings are applied in `update`, not in the factory
 
 Added 2026-09-07, when the four hardcoded appearance values became settings.

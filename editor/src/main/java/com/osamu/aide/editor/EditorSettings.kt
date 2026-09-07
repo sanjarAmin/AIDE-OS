@@ -25,6 +25,7 @@ data class EditorSettings(
      * overriding, which is why it is a setting rather than a constant.
      */
     val wordWrap: Boolean = false,
+    val theme: EditorColorTheme = EditorColorTheme.FOLLOW_SYSTEM,
 ) {
     companion object {
         const val DEFAULT_FONT_SIZE_SP = 14f
@@ -34,6 +35,35 @@ data class EditorSettings(
         val FONT_SIZE_RANGE = 9f..26f
 
         val TAB_WIDTHS = listOf(2, 4, 8)
+    }
+}
+
+/**
+ * Which colours the code is drawn in.
+ *
+ * [FOLLOW_SYSTEM] is the default and was, until this existed, not what happened:
+ * the app's chrome followed the system into dark mode and the editor stayed on
+ * sora's light scheme, so at night most of the screen was a white rectangle
+ * inside a dark app. That is the bug this enum was added to fix; the choice
+ * between the other two is the feature.
+ */
+enum class EditorColorTheme(val displayName: String) {
+    FOLLOW_SYSTEM("System"),
+    LIGHT("Light"),
+    DARK("Dark"),
+    ;
+
+    /**
+     * Whether to draw dark, given what the system is doing.
+     *
+     * A function rather than an `if` at the call site because the call site is
+     * inside an `AndroidView` update block, where nothing can be tested: this
+     * is the whole decision, and [EditorColorThemeTest] is three lines.
+     */
+    fun isDark(systemIsDark: Boolean): Boolean = when (this) {
+        FOLLOW_SYSTEM -> systemIsDark
+        DARK -> true
+        LIGHT -> false
     }
 }
 
@@ -61,6 +91,7 @@ class EditorPreferences(context: Context) {
             .putInt(KEY_TAB_WIDTH, updated.tabWidth)
             .putBoolean(KEY_LINE_NUMBERS, updated.showLineNumbers)
             .putBoolean(KEY_WORD_WRAP, updated.wordWrap)
+            .putString(KEY_THEME, updated.theme.name)
             .apply()
         _settings.value = updated
     }
@@ -76,6 +107,11 @@ class EditorPreferences(context: Context) {
         tabWidth = preferences.getInt(KEY_TAB_WIDTH, EditorSettings.DEFAULT_TAB_WIDTH),
         showLineNumbers = preferences.getBoolean(KEY_LINE_NUMBERS, true),
         wordWrap = preferences.getBoolean(KEY_WORD_WRAP, false),
+        // By name, and unrecognised names fall back rather than throw: a value
+        // written by a later version has to be survivable by an earlier one.
+        theme = preferences.getString(KEY_THEME, null)
+            ?.let { name -> EditorColorTheme.entries.firstOrNull { it.name == name } }
+            ?: EditorColorTheme.FOLLOW_SYSTEM,
     ).coerced()
 
     /**
@@ -97,5 +133,6 @@ class EditorPreferences(context: Context) {
         const val KEY_TAB_WIDTH = "tabWidth"
         const val KEY_LINE_NUMBERS = "showLineNumbers"
         const val KEY_WORD_WRAP = "wordWrap"
+        const val KEY_THEME = "theme"
     }
 }
