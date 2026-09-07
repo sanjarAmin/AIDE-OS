@@ -144,6 +144,18 @@ failed to load still produces a clean compile.
 - **`grep` here is a shell function that skips binary files.** Use
   `/usr/bin/grep -a` when searching class files, jars, or dex.
 
+- **A Compose `Row` squeezes rather than overflows, and no obvious assertion
+  sees it.** Four `FilterChip`s in the new-project dialog: the last was laid
+  out 19 dp wide against its neighbour's 99, its label wrapped inside it, and
+  it shipped unreadable. `assertIsDisplayed()` is **true** of that chip — it is
+  laid out and its bounds are in the window. Comparing its right edge against
+  the container is true too, and always will be: a `Row` clamps to the space it
+  has, so the edge lands exactly on the boundary. What separates the two
+  layouts is **height** — a chip too narrow for its label wraps the label and
+  grows taller, 40.4 dp against 32. Assert that sibling chips are the same
+  height, and use `FlowRow` when there are more than three.
+  `CreateProjectDialogTest`.
+
 - **Koin cannot hold `null` in a singleton.** A `single<T?>` that resolves to
   null throws `Single instance created couldn't return value` and takes every
   dependent definition with it. This crashed every project open for a whole
