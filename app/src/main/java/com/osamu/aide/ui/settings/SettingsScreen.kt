@@ -20,6 +20,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.osamu.aide.ai.core.ApiKeyStore
+import com.osamu.aide.core.common.DispatcherProvider
+import com.osamu.aide.toolchain.manager.ToolchainManager
 import com.osamu.aide.vcs.git.GitCredentialStore
 import com.osamu.aide.vcs.git.GitIdentityStore
 import org.koin.compose.koinInject
@@ -29,7 +31,7 @@ private data class SettingsSection(val title: String, val summary: String)
 /**
  * Settings.
  *
- * Two of these sections work and four do not exist yet. They used to be drawn
+ * Three of these sections work and three do not exist yet. They used to be drawn
  * identically -- a title in `titleMedium` over a grey summary, whether or not
  * anything was behind it -- so the only way to learn that "Build" was a
  * description of the future was to tap it and have nothing happen.
@@ -45,13 +47,14 @@ fun SettingsScreen(onNavigateBack: () -> Unit) {
     val sections = listOf(
         SettingsSection("Editor", "Font size, tab width, line numbers, colour scheme."),
         SettingsSection("Build", "Fast or Gradle engine, JDK level, signing keys."),
-        SettingsSection("Toolchains", "Download and manage aapt2, Kotlin and the NDK."),
         SettingsSection("About", "AIDE-OS, an on-device IDE for phones and tablets."),
     )
 
     val keys = koinInject<ApiKeyStore>()
     val identities = koinInject<GitIdentityStore>()
     val credentials = koinInject<GitCredentialStore>()
+    val toolchain = koinInject<ToolchainManager>()
+    val dispatchers = koinInject<DispatcherProvider>()
 
     Scaffold(
         topBar = {
@@ -69,6 +72,8 @@ fun SettingsScreen(onNavigateBack: () -> Unit) {
             item { ApiKeySection(keys) }
             item { HorizontalDivider() }
             item { GitSection(identities, credentials) }
+            item { HorizontalDivider() }
+            item { ToolchainSection(toolchain, dispatchers) }
 
             item {
                 Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 22.dp)) {

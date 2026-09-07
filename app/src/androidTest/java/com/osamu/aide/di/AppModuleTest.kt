@@ -10,6 +10,8 @@ import com.osamu.aide.ui.workspace.LanguageServices
 import com.osamu.aide.ui.workspace.GitViewModel
 import com.osamu.aide.ui.workspace.ProjectBuilder
 import com.osamu.aide.vcs.git.GitCredentialStore
+import com.osamu.aide.core.common.DispatcherProvider
+import com.osamu.aide.toolchain.manager.ToolchainManager
 import com.osamu.aide.vcs.git.GitIdentityStore
 import com.osamu.aide.vcs.git.GitWorkspace
 import org.junit.After
@@ -67,6 +69,12 @@ class AppModuleTest {
         assertNotNull(koin.get<GitWorkspace>())
         assertNotNull(koin.get<GitIdentityStore>())
         assertNotNull(koin.get<GitCredentialStore>())
+        // The settings screen resolves these two directly rather than through
+        // a view model, so nothing else in this test would notice if either
+        // left the graph -- and the failure would be a crash on opening
+        // Settings, which is not where anyone would look for it.
+        assertNotNull(koin.get<ToolchainManager>())
+        assertNotNull(koin.get<DispatcherProvider>())
         // Resolved rather than assumed because it takes an unqualified `File`,
         // and the module defines two: the workspace root and, under a name, the
         // build output root. Koin picks the unnamed one, which is correct and

@@ -188,3 +188,32 @@ offline, and means **nothing exercises the pin**. A test that fetches the real
 release URL and checks its length and digest against the constant would have
 caught this the day it drifted, and costs one request.
 
+
+## 9. Measuring an install means not following its symlinks
+
+Added 2026-09-07 with the Toolchains screen, which reports what each component
+costs on disk so it can be removed.
+
+`File.walkTopDown()` follows symlinks, and every toolchain here is built out of
+them: Node ships `bin/npm` pointing into `lib/node_modules`, mono's `bin/mono`
+points at `mono-sgen`, clang's driver names are all links to one binary. Walking
+through them reported Node at **184 MB where `du` said 119** — a 55 %
+overstatement on the one number that screen exists to show, and the kind of
+error nobody checks because a plausible figure is indistinguishable from a
+correct one. It was caught only by running `du` on the device beside the app.
+
+Following them also risks a cycle, which would hang the measurement instead of
+exaggerating it.
+
+So the walk is hand-written with `Files.isSymbolicLink` as its first branch, and
+a symlink contributes zero: the bytes it points at are already counted where
+they live, or belong to something else. With that, Node measures 101 MB against
+its pinned `installedBytes` estimate of ~104 MB — the pin was right all along.
+
+**The listing is scanned from disk, not from `ALL`.** The entry worth the most
+space is the one nothing claims any more: a component whose id changed leaves
+its directory behind for ever, and a list built from what the app expects would
+never mention it. Those are shown by directory name and marked "no longer used".
+`SdkLicense`'s acceptance marker lives under the same root and is excluded --
+offering to delete it would be offering to un-accept Google's terms from a
+screen about disk space.
