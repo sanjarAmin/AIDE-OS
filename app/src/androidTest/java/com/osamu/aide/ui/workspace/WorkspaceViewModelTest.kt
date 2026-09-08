@@ -283,6 +283,40 @@ class WorkspaceViewModelTest {
     }
 
     @Test
+    fun revealing_a_directory_expands_everything_above_it() {
+        onMain { viewModel.open(project.rootDir) }
+        awaitState("the tree to be listed") { it.visibleNodes.isNotEmpty() }
+        val packageDir = mainActivitySource.parentFile!!
+
+        onMain { viewModel.revealInTree(packageDir) }
+
+        // Every level, not just the target: a tree opened one level deep with
+        // the levels above it closed shows nothing at all.
+        awaitState("the package to be visible") { state ->
+            state.visibleNodes.any { it.file == mainActivitySource }
+        }
+        val expanded = viewModel.state.value.expandedPaths
+        var walk: File? = packageDir
+        while (walk != null && walk != project.rootDir.parentFile) {
+            assertTrue("$walk was left collapsed", walk.absolutePath in expanded)
+            walk = walk.parentFile
+        }
+    }
+
+    @Test
+    fun revealing_something_outside_the_project_does_nothing() {
+        onMain { viewModel.open(project.rootDir) }
+        awaitState("the tree to be listed") { it.visibleNodes.isNotEmpty() }
+        val before = viewModel.state.value.expandedPaths
+
+        // An open file need not live under the project. Walking up from one
+        // that does not would expand every directory to the filesystem root.
+        onMain { viewModel.revealInTree(File(context.cacheDir, "elsewhere/deep")) }
+
+        assertEquals(before, viewModel.state.value.expandedPaths)
+    }
+
+    @Test
     fun selecting_a_source_file_opens_it_in_the_editor() {
         assertTrue("the template wrote no MainActivity.java", mainActivitySource.isFile)
 

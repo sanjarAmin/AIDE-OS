@@ -387,6 +387,34 @@ class WorkspaceViewModel(
         rebuildTree()
     }
 
+    /**
+     * Expands the tree down to [directory] so it and its contents are visible.
+     *
+     * Called from the breadcrumb, which is a path the user is already looking
+     * at and cannot otherwise act on. Everything above the target is expanded
+     * too: a tree that opens one level deep, with the levels above it closed,
+     * shows nothing.
+     *
+     * Outside the project it does nothing rather than walking to the
+     * filesystem root -- an open file need not be under the project, and a
+     * breadcrumb for one falls back to a bare name.
+     */
+    fun revealInTree(directory: File) {
+        val root = rootNode?.file ?: return
+        if (!directory.startsWith(root)) return
+        _state.update { current ->
+            val expanded = current.expandedPaths.toMutableSet()
+            var walk: File? = directory
+            while (walk != null) {
+                expanded += walk.absolutePath
+                if (walk == root) break
+                walk = walk.parentFile
+            }
+            current.copy(expandedPaths = expanded)
+        }
+        rebuildTree()
+    }
+
     /** Opens [file] in a tab, or brings its tab to the front if it is open. */
     fun openDocument(file: File) {
         // On opening, not on selecting: a tab switch back to a file already

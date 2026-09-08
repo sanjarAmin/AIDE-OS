@@ -427,6 +427,15 @@ fun WorkspaceScreen(
                             onTextChanged = viewModel::onTextChanged,
                             onSelectTab = viewModel::selectDocument,
                             onCloseTab = viewModel::closeDocument,
+                            onRevealInTree = { directory ->
+                                viewModel.revealInTree(directory)
+                                // The tree is a drawer on a phone, so revealing
+                                // into one that is shut is the same as doing
+                                // nothing. The wide layout already shows it.
+                                if (mode == PaneMode.SINGLE) {
+                                    scope.launch { drawerState.open() }
+                                }
+                            },
                             onCloseSearch = viewModel::closeSearch,
                             onGoToDefinition = viewModel::goToDefinition,
                             onCursorMoved = viewModel::onCursorMoved,
@@ -532,6 +541,7 @@ private fun EditorArea(
     onTextChanged: (String) -> Unit,
     onSelectTab: (File) -> Unit,
     onCloseTab: (File) -> Unit,
+    onRevealInTree: (File) -> Unit,
     onCloseSearch: () -> Unit,
     onGoToDefinition: (Int) -> Unit,
     onCursorMoved: (Int) -> Unit,
@@ -566,6 +576,7 @@ private fun EditorArea(
             BreadcrumbBar(
                 file = active.file,
                 projectRoot = state.projectRoot,
+                onSegmentClick = onRevealInTree,
             )
             HorizontalDivider()
         }
