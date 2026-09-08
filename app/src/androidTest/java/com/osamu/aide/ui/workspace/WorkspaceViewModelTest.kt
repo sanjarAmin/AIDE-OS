@@ -22,8 +22,12 @@ import com.osamu.aide.toolchain.manager.ToolchainManager
 import com.osamu.aide.toolchain.nativetools.NativeToolRunner
 import com.osamu.aide.toolchain.nativetools.NativeToolchain
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -280,6 +284,65 @@ class WorkspaceViewModelTest {
         awaitState("the descriptor to be read") { it.projectName == "Demo App" }
         awaitState("the tree to be listed") { it.visibleNodes.isNotEmpty() }
         assertEquals(project.rootDir, viewModel.state.value.visibleNodes.first().file)
+    }
+
+    /**
+     * A tap on Go to definition always says something.
+     *
+     * The manifest has no language service and never will, and the button is
+     * live for it like any other file. It used to return silently -- which is
+     * also what every Java file did on a device with no `android.jar`, so the
+     * first thing a new user tried did nothing and explained nothing.
+     */
+    @Test
+    fun go_to_definition_says_why_when_nothing_can_answer() {
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(manifest) }
+        awaitState("the manifest to load") { it.active?.file == manifest }
+
+        val notice = runBlocking {
+            withTimeoutOrNull(TimeUnit.SECONDS.toMillis(10)) {
+                val collected = async(Dispatchers.Default) {
+                    viewModel.events.filterIsInstance<WorkspaceEvent.Notice>().first()
+                }
+                onMain { viewModel.goToDefinition(0) }
+                collected.await()
+            }
+        }
+
+        assertNotNull("Go to definition said nothing at all", notice)
+        assertTrue(
+            "the notice does not name the file type: ${notice?.message}",
+            notice!!.message.contains(".xml"),
+        )
+    }
+
+    /**
+     * Opening a Java file with no platform offers the download.
+     *
+     * Kotlin has done this since M11 -- the answer to "why are there no
+     * completions in this file" has to arrive while the file is on screen --
+     * and Java, which is the template's default language, did not. It waited
+     * for the user to press Build, which is a different question.
+     */
+    @Test
+    fun opening_java_without_the_platform_offers_it() {
+        val jar = File(context.filesDir, "toolchains/platforms-android-36/android.jar")
+        val staged = jar.isFile
+        if (staged) jar.delete()
+        try {
+            onMain { viewModel.open(project.rootDir) }
+            onMain { viewModel.openDocument(mainActivitySource) }
+
+            awaitState("the platform download to be offered") { it.platform != null }
+            val offer = viewModel.state.value.platform!!
+            assertTrue(
+                "the prompt does not say what it is for: $offer",
+                offer.rationale.contains("Java"),
+            )
+        } finally {
+            if (staged) stagePlatformJar()
+        }
     }
 
     @Test

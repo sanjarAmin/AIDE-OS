@@ -268,8 +268,16 @@ class WorkspaceViewModel(
     private var buildJob: Job? = null
     private var installJob: Job? = null
 
-    /** So a dismissed Kotlin prompt is not re-offered on the next tab. */
-    private var kotlinInstallOffered = false
+    /**
+     * Components already offered for this project.
+     *
+     * A set rather than a flag because a project can want two: Kotlin needs the
+     * compiler and then the Analysis API, and a Java file in the same project
+     * wants the platform. A flag meant declining one download silenced the
+     * offer for every other -- and, the other way round, that accepting the
+     * first had to explicitly un-set it so the second could be asked for.
+     */
+    private val offeredComponents = mutableSetOf<ToolchainComponent>()
 
     /**
      * What to do when the download in flight lands.
@@ -298,7 +306,7 @@ class WorkspaceViewModel(
     fun open(projectDir: File) {
         // A new project is a new chance to offer; the old answer was about the
         // old project.
-        kotlinInstallOffered = false
+        offeredComponents.clear()
         if (rootNode?.file == projectDir) return
         val root = FileNode(projectDir, isDirectory = true, depth = 0)
         rootNode = root
@@ -419,7 +427,7 @@ class WorkspaceViewModel(
     fun openDocument(file: File) {
         // On opening, not on selecting: a tab switch back to a file already
         // open is not the moment to ask for a download.
-        offerKotlinIntelligence(file)
+        offerIntelligence(file)
 
         if (_state.value.openFiles.any { it.file == file }) {
             selectDocument(file)
@@ -607,7 +615,21 @@ class WorkspaceViewModel(
     fun goToDefinition(offset: Int) {
         val active = _state.value.active ?: return
         val root = _state.value.projectRoot ?: return
-        val service = languageServices.serviceFor(active.file, root) ?: return
+        val service = languageServices.serviceFor(active.file, root)
+        if (service == null) {
+            // **A tap deserves an answer.** `LanguageServices` returns null
+            // when there is nothing to analyse with, and its own KDoc argues
+            // that "silence is the better failure" -- correctly, about
+            // *diagnostics*: a file of red squiggles blaming the user for a
+            // missing download is worse than a clean file. But this is not
+            // analysis arriving on its own, it is a question the user asked by
+            // pressing a button, and the button did nothing and said nothing.
+            // On a device with no toolchains that is every Java file.
+            viewModelScope.launch {
+                _events.send(WorkspaceEvent.Notice(noIntelligenceReason(active.file)))
+            }
+            return
+        }
 
         viewModelScope.launch {
             val text = pendingText[active.file] ?: active.document.text
@@ -630,6 +652,22 @@ class WorkspaceViewModel(
             openDocument(File(root, target.file.path))
             _jumps.trySend(EditorJump(target.file, target.line, target.column))
         }
+    }
+
+    /**
+     * Why [file] has no language service, in a sentence for a snackbar.
+     *
+     * Two different situations that look identical from the editor: a language
+     * nothing here analyses, and a language that would be analysed if its
+     * toolchain were installed. Only the second is worth acting on, so only the
+     * second names a download.
+     */
+    private fun noIntelligenceReason(file: File): String = when (file.extension) {
+        "java" -> "Java needs the Android platform, which is not installed yet. " +
+            "Tap Build to download it."
+        "kt", "kts" -> "Kotlin needs its compiler and the Analysis API, which are " +
+            "not installed yet."
+        else -> "There is no code intelligence for .${file.extension} files."
     }
 
     fun save() {
@@ -1151,16 +1189,30 @@ class WorkspaceViewModel(
      * not want a 56 MB download for a file they are reading should not be asked
      * again on the next tab.
      */
-    private fun offerKotlinIntelligence(file: File) {
-        if (file.extension != "kt" && file.extension != "kts") return
-        if (kotlinInstallOffered || _state.value.platform != null) return
-        val component = toolchain.missingKotlinAnalysisComponent() ?: return
+    private fun offerIntelligence(file: File) {
+        // Not while a prompt is already up: two stacked download dialogs is
+        // not a choice, it is a queue the user cannot see the end of.
+        if (_state.value.platform != null) return
+        val language = when (file.extension) {
+            "kt", "kts" -> "Kotlin"
+            "java" -> "Java"
+            else -> return
+        }
+        val component = when (language) {
+            "Kotlin" -> toolchain.missingKotlinAnalysisComponent()
+            // The platform is what javac indexes for `Activity` and every
+            // other framework type. Without it the Java service is not
+            // built at all, so the file has no completion, no errors and no
+            // definitions -- **which is the state a new project starts in**,
+            // Java being the template's default.
+            else -> ToolchainComponent.ANDROID_PLATFORM.takeIf { toolchain.androidJar() == null }
+        } ?: return
+        if (!offeredComponents.add(component)) return
 
-        kotlinInstallOffered = true
         val megabytes = component.archiveBytes / (1024 * 1024)
         offerComponentInstall(
             component = component,
-            rationale = "Completion and errors for Kotlin need " +
+            rationale = "Completion and errors for $language need " +
                 "${component.displayName}, which is about $megabytes MB to " +
                 "download. Editing works without it.",
             then = AfterInstall.ANALYSE,
@@ -1169,8 +1221,10 @@ class WorkspaceViewModel(
 
     fun offerPlatformInstall() = offerComponentInstall(
         component = ToolchainComponent.ANDROID_PLATFORM,
-        rationale = "Building needs android.jar, which cannot be shipped inside " +
-            "AIDE-OS. It is downloaded once, from Google.",
+        rationale = "Building needs android.jar, which is about " +
+            "${ToolchainComponent.ANDROID_PLATFORM.archiveBytes / (1024 * 1024)} MB " +
+            "to download. It cannot be shipped inside AIDE-OS, so it is " +
+            "fetched once, from Google.",
     )
 
     /**
@@ -1260,12 +1314,13 @@ class WorkspaceViewModel(
             // end.** The compiler is the prerequisite and the Analysis API
             // follows it; offering only the first and stopping leaves a user
             // who accepted a 53 MB download still without completion, and
-            // nothing to say why. Clearing the guard lets the next be offered.
+            // nothing to say why. Asking again is safe now the guard is per
+            // component: the one just installed is no longer missing, and the
+            // next has not been offered.
             AfterInstall.ANALYSE -> {
-                kotlinInstallOffered = false
                 afterInstall = AfterInstall.BUILD
                 _state.value.activeFile?.let { active ->
-                    offerKotlinIntelligence(active)
+                    offerIntelligence(active)
                     // Nothing re-analyses on its own: the service is resolved
                     // per request, so the file on screen keeps its old (empty)
                     // diagnostics until something asks again.

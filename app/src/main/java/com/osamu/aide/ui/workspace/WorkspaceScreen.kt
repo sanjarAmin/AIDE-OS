@@ -928,12 +928,14 @@ private fun PlatformInstallDialog(
         title = { Text(state.component.displayName) },
         text = {
             Column {
+                // The rationale says the size, every time. It used to be
+                // appended here instead, but only for a component under the
+                // SDK licence -- so a rationale that mentioned the size and
+                // happened to be about the platform said it twice: "about 62
+                // MB to download. Editing works without it. It is about 62
+                // MB." One place to write it, and every caller writes it.
                 Text(
-                    if (state.component.requiresSdkLicense) {
-                        "${state.rationale} It is about $megabytes MB."
-                    } else {
-                        state.rationale
-                    },
+                    state.rationale,
                     style = MaterialTheme.typography.bodyMedium,
                 )
 

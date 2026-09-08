@@ -194,3 +194,37 @@ update when something else happened to recompose.
 in a later version and the preferences file is editable on a rooted device; a
 zero text size is an editor that draws nothing, which presents as the file
 failing to open rather than as a setting. `EditorPreferencesTest` pins that.
+
+## Unresolved: a file can open with no highlighting at all, once per session
+
+Seen 2026-09-08 while driving the app, twice, and **not reproduced since** — so
+this is a report, not a diagnosis. It is written down because the next person to
+see it should not spend the twenty minutes again from a standing start.
+
+**What was seen.** `MainActivity.java` open in the editor, correctly coloured.
+A few taps later — the platform-install prompt dismissed, the caret placed on
+line 12, Go to definition pressed — the whole file was rendering in one colour:
+structure, indentation and the gutter all intact, every keyword, type and
+literal in the plain text colour. It stayed that way for the rest of the
+session, through a snackbar and six seconds of idle. Closing the tab and
+opening the file again brought the colours straight back, in the same process.
+
+**What that rules out.** `TreeSitterRuntime.isAvailable` is a `by lazy`, so a
+failed load is permanent for the process; the colours came back without a
+restart, so the runtime was fine. It is not the colour scheme either: the
+`update` block only assigns one when `wantsDark` disagrees with the scheme in
+place, and the app was light throughout. The language is set once per document
+key and the key had not changed, so nothing re-ran `setEditorLanguage` before
+the loss — and re-running it is exactly what fixed it. That points at the
+analyzer's spans being dropped or never delivered rather than at the theme.
+
+**What did not reproduce it**: nine runs of the same taps — six against a warm
+process, three each preceded by `installDebug`, since the sighting followed a
+reinstall. All nine kept their colours. Measured rather than eyeballed: count
+the blue pixels in the code band of a screenshot (`b > r + 50 and b > 110`),
+which is ~6,400 for the coloured file and under 700 for the plain one, and
+compare — the two states are not close, so the test is not delicate.
+
+If it turns up again, the thing worth capturing before anything else is whether
+`editor.getStyles()` is empty or merely uncoloured, and whether the analyzer
+thread is still alive.

@@ -163,6 +163,16 @@ failed to load still produces a clean compile.
   from the real module on a bare device; add to it when something joins the
   graph. `ai/core/FINDINGS.md` §1.
 
+- **A `connectedAndroidTest` run uninstalls the app, and projects go with
+  it.** Projects live in `/sdcard/Android/data/com.osamu.aide/files/projects`,
+  which is external *app* storage: Gradle uninstalls the app when the run
+  finishes, and Android deletes that directory with it. A project created by
+  hand to drive the app is gone after the next suite, and the symptom is not an
+  error -- the app is simply not running and the emulator is showing its
+  launcher, which reads as a crash. `dumpsys activity exit-info` empty and
+  `/data/tombstones` unchanged is the tell that nothing died. **Drive after the
+  test runs, not between them.**
+
 - **`ls a* b*` in zsh aborts on the first pattern that matches nothing**, and
   `2>/dev/null` hides the reason. `ls LICENSE* NOTICE*` printed nothing at all
   in a repo that has had a `LICENSE` since its second commit, because `NOTICE*`
