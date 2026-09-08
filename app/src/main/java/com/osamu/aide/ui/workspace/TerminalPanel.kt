@@ -324,10 +324,15 @@ private fun ExitedRow(status: Int, onRestart: () -> Unit) {
             },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            // Weighted: without it the sentence measures at whatever width it
-            // wants and Restart is laid out in what is left, which on a narrow
-            // phone is nothing -- and Restart is the only way back from a dead
-            // shell. The same defect the settings rows had.
+            // Weighted because the row has the shape that keeps breaking here
+            // -- a variable-length label beside the control that matters, and
+            // Restart is the only way back from a dead shell. **It was not
+            // broken.** Measured at 320 dp, the narrowest width any phone
+            // reports: the button is laid out identically with the weight and
+            // without it, because both messages this row can carry are short
+            // and fixed. The weight is the right idiom and costs nothing; the
+            // test that would have pinned it was deleted rather than kept as
+            // one that cannot fail.
             modifier = Modifier.weight(1f),
         )
         TextButton(
