@@ -61,3 +61,30 @@ treating absent as zero — which only means the size check under-counts a
 provider that does not report sizes.
 
 Found by the fake provider in the tests, which is legal in exactly this way.
+
+## 5. Single-child directory chains are folded into one tree row
+
+A Java project puts one file seven levels down: `src`, `main`, `java`, `com`,
+`example`, `<app>`, and then `MainActivity.java`. Five of those rows hold
+exactly one thing, and on a phone — where the tree is a drawer, each tap
+redraws it, and the indent is a fifth of the pane by the time the file arrives
+— the whole project did not fit in a screenful.
+
+`ProjectFiles.childrenOf` folds a run of single-child directories into one
+`FileNode`: `file` is the deepest directory of the run, `name` is the whole of
+it (`java/com/example/app`), and `depth` is the *parent's* depth plus one, so
+the run occupies one indentation level. Expanding, selecting and opening are
+unchanged — only the row's label is different.
+
+Two things it will not do:
+
+- **It counts visible children, not entries.** The filtering runs before the
+  count, so a stray `.DS_Store` or a `build/` beside `com` does not un-fold a
+  chain the user sees as single-child.
+- **It stops at a symlink**, and at twelve levels regardless. A link pointing
+  at its own ancestor makes the walk unbounded, and this repo has already
+  reported Node at 184 MB by assuming a project tree is acyclic (see
+  `toolchain/manager`'s `sizeOf`). The count is a second bound in case
+  something else is cyclic in a way a link check does not see.
+
+`ProjectFilesTest` pins all of it, including the symlink.
