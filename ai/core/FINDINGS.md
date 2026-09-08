@@ -537,6 +537,21 @@ bytes. `clearProviderKey(provider)` removes only that provider's preferences and
 leaves the alias alone. The alias may only be deleted by the call that is
 removing every key in the same breath.
 
+**The screen's copy of that state is keyed on the provider, not reset by hand.**
+Six values in `ApiKeySection` are per provider -- whether a key is stored, the
+draft, the reveal toggle, the model, and both halves of the endpoint -- and each
+was read once at composition and re-read individually in the provider chip's
+`onClick`. That is correct, and it is this finding's bug waiting to happen
+again: a seventh value added to the composition and forgotten in the handler
+shows the previous provider's value under the new provider's name, silently, in
+the screen where the values are credentials. They are `remember(activeProvider)`
+now, so a new one is right by construction and there is no second place to
+remember. The exception is the advanced disclosure, which is deliberately
+sticky: opened once it stays open across a switch, where a keyed remember would
+shut it again on any provider with no endpoint stored.
+`ApiKeySectionTest.switching_provider_swaps_the_endpoint_and_drops_a_half_typed_key`
+pins both halves, and fails if the key is dropped from any one of them.
+
 ## 18. A Compose test composing more than one screenful loses its own nodes
 
 `ApiKeySectionTest` composed the section bare -- `setContent { ApiKeySection(keys) }`
