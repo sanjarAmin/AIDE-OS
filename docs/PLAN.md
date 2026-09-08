@@ -872,7 +872,13 @@ a project end to end, the editor tab bar and gutter, the chat panel's header
 and suggestion chips at 360 dp, and the whole AI settings section -- per
 provider endpoints persist and do not leak across chips, blanking a saved
 endpoint restores the default, and each provider shows its own model and its
-own signup URL. **And a trap worth knowing**:
+own signup URL. The **git panel again on a cold device**: init, the staged and
+unstaged file lists with the staged entry first, and **both diff paths** --
+an untracked file rendered against `/dev/null` and labelled "Not staged yet",
+the same file after staging labelled "Staged, against the last commit". The
+diff looked clipped and is not: it scrolls horizontally and says so in its
+KDoc, which is the third time this session that reading the code first saved a
+false report. **And a trap worth knowing**:
 `connectedAndroidTest` uninstalls the app, which deletes the projects under
 external app storage -- so a project made by hand to drive the app is gone
 after the next suite, and the symptom is the launcher rather than an error.
