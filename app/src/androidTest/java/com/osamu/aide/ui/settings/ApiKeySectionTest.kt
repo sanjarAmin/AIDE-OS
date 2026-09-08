@@ -161,6 +161,36 @@ class ApiKeySectionTest {
         )
     }
 
+    /**
+     * Switching the chip swaps *every* per-provider field with it.
+     *
+     * The section holds six of them and each was re-read by hand in the chip's
+     * `onClick` -- correct, and a trap: a seventh added to the composition and
+     * forgotten there shows the previous provider's value under the new
+     * provider's name, which is section 17's bug in a screen about credentials.
+     * They are keyed on the provider now, and this is what says so: a stored
+     * endpoint appears when its provider is picked, and a key typed but not
+     * saved does not follow.
+     */
+    @Test
+    fun switching_provider_swaps_the_endpoint_and_drops_a_half_typed_key() {
+        keys.saveProviderBaseUrl(AiProviderType.OPENAI, Endpoint.Custom("https://openai.local"))
+        keys.setActiveProvider(AiProviderType.ANTHROPIC)
+        showSection()
+        revealEndpoint()
+
+        compose.onNodeWithContentDescription("API key").performTextInput("sk-half-typed")
+        compose.onNodeWithText("Save key").performScrollTo().assertIsEnabled()
+
+        compose.onNodeWithText("OpenAI").performScrollTo().performClick()
+        compose.waitForIdle()
+
+        compose.onNodeWithText("https://openai.local").performScrollTo().assertExists()
+        // Enabled only while something is typed, so a disabled Save is the
+        // draft having been dropped rather than carried across.
+        compose.onNodeWithText("Save key").performScrollTo().assertIsNotEnabled()
+    }
+
     // -- the endpoint -------------------------------------------------------
 
     @Test

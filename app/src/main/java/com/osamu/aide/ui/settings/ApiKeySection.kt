@@ -80,23 +80,31 @@ import com.osamu.aide.ai.core.parseEndpoint
 fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     var activeProvider by remember { mutableStateOf(keys.activeProvider()) }
-    var activeModel by remember { mutableStateOf(keys.activeModel(activeProvider)) }
+    var activeModel by remember(activeProvider) { mutableStateOf(keys.activeModel(activeProvider)) }
     var shareContext by remember { mutableStateOf(keys.shareProjectContext()) }
 
     var isGoogleSignedIn by remember { mutableStateOf(keys.isGoogleSignedIn()) }
     var googleEmail by remember { mutableStateOf(keys.googleUserEmail()) }
     var googleScopes by remember { mutableStateOf(keys.googleGrantedScopes()) }
 
-    // Keyed by provider so switching chips re-reads rather than showing the
-    // previous provider's state under the new provider's name.
-    var saved by remember { mutableStateOf(keys.hasProviderKey(activeProvider)) }
-    var draft by remember { mutableStateOf("") }
-    var revealed by remember { mutableStateOf(false) }
-
-    // Per provider, because the store keeps one endpoint per provider and each
-    // client is built from its own -- see ApiKeyStore.providerBaseUrl.
-    var storedEndpoint by remember { mutableStateOf(keys.providerBaseUrl(activeProvider).orEmpty()) }
-    var endpointDraft by remember { mutableStateOf(storedEndpoint) }
+    // **Keyed on the provider, so switching chips re-reads rather than showing
+    // the previous provider's state under the new provider's name.** That is
+    // ai/core/FINDINGS.md section 17's bug, where one provider's key appeared
+    // under another, and it was being prevented by re-reading each of these by
+    // hand in the chip's `onClick` -- correct, and a trap: a sixth piece of
+    // per-provider state added here and forgotten there brings the bug back,
+    // silently, in a screen about credentials. The key does it structurally,
+    // and a new value is right by construction.
+    //
+    // The store keeps one endpoint per provider and each client is built from
+    // its own -- see ApiKeyStore.providerBaseUrl.
+    var saved by remember(activeProvider) { mutableStateOf(keys.hasProviderKey(activeProvider)) }
+    var draft by remember(activeProvider) { mutableStateOf("") }
+    var revealed by remember(activeProvider) { mutableStateOf(false) }
+    var storedEndpoint by remember(activeProvider) {
+        mutableStateOf(keys.providerBaseUrl(activeProvider).orEmpty())
+    }
+    var endpointDraft by remember(activeProvider) { mutableStateOf(storedEndpoint) }
 
     // Open when there is already something to see, or when the provider is the
     // one whose entire purpose is a custom address. Otherwise the endpoint is a
@@ -154,16 +162,16 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                 FilterChip(
                     selected = activeProvider == provider,
                     onClick = {
-                        activeProvider = provider
+                        // The store first: everything above reads it on the
+                        // recomposition this line causes.
                         keys.setActiveProvider(provider)
-                        activeModel = keys.activeModel(provider)
-                        saved = keys.hasProviderKey(provider)
-                        draft = ""
-                        revealed = false
-                        storedEndpoint = keys.providerBaseUrl(provider).orEmpty()
-                        endpointDraft = storedEndpoint
+                        activeProvider = provider
+                        // Not keyed, deliberately: the disclosure is sticky.
+                        // Opened once, it stays open across a provider switch,
+                        // where a keyed remember would shut it again on any
+                        // provider that happens to have no endpoint stored.
                         showAdvanced = showAdvanced ||
-                            storedEndpoint.isNotEmpty() ||
+                            keys.providerBaseUrl(provider).orEmpty().isNotEmpty() ||
                             provider == AiProviderType.CUSTOM
                     },
                     label = { Text(provider.displayName) },
