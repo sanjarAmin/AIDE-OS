@@ -156,6 +156,30 @@ failed to load still produces a clean compile.
   height, and use `FlowRow` when there are more than three.
   `CreateProjectDialogTest`.
 
+  **This is the most common defect in this codebase: seven instances so far.**
+  The shape is always a `Row` holding a variable-width label beside a control,
+  with no `weight` on the label. The label measures at whatever width it wants,
+  the control is measured in the remainder, and the remainder is often nothing:
+  a settings `Switch` at `Rect(0, 0, 0, 0)`, a `Remove` button 61 px wide
+  instead of 197 and 360 px tall with its label running down the screen, a dock
+  whose close button drew nothing while the dock covered half the editor.
+  **The control is usually the consequential half of the row** — Save, Remove,
+  Restart the shell, revoke this token, close this panel — because that is the
+  half a designer puts on the right.
+
+  So: **`Modifier.weight(1f)` on the label, every time**, and `horizontalScroll`
+  as well when the row genuinely holds more than fits (the dock's five tabs, the
+  chat suggestions, the terminal key row). Assert it by comparing the control
+  against **the same control in a row with a short label** — a sibling, never
+  the container — since a `Row` never reports bounds past its own edge.
+  `EditorSectionTest`, `ToolchainSectionTest`, `GitSectionTest`,
+  `BottomToolDockTest`.
+
+  **Drive at 360 dp before believing a row is fine.** Every instrumented test
+  runs at the emulator's default width, and the dock's tabs looked correct
+  there and were broken on an ordinary small phone: `adb shell wm size
+  720x1600` with `wm density 320`, then `wm size reset` / `wm density reset`.
+
 - **Koin cannot hold `null` in a singleton.** A `single<T?>` that resolves to
   null throws `Single instance created couldn't return value` and takes every
   dependent definition with it. This crashed every project open for a whole

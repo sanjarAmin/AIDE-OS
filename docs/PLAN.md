@@ -785,7 +785,7 @@ Made 2026-09-02:
 
 Every milestone is met, so the useful question stopped being "what is missing"
 and became "what is wrong". One session of opening the app and using it found
-eighteen defects, **each of them behind a passing test suite**. They are listed
+twenty defects, **each of them behind a passing test suite**. They are listed
 because the pattern is more useful than any one of them.
 
 | What a user saw | What was true |
@@ -808,6 +808,8 @@ because the pattern is more useful than any one of them.
 | Seven taps down a drawer to reach one file | `src`, `main`, `java`, `com`, `example`, `tabscheck`, then the file -- five of those rows hold exactly one thing, and the indentation had pushed the name a fifth of the way across the screen. Every desktop IDE folds these; a phone, where the tree is a drawer and each tap redraws it, has more reason to |
 | A breadcrumb that did nothing when tapped | Its KDoc said "interactive breadcrumb bar" and nothing was ever wired to it -- true-looking to anyone who did not tap. The same shape as the editor theme and the terminal resize before it |
 | A Java editor with no completion, no errors, no definitions, and no explanation | The platform download was offered on **build**; Kotlin's was offered on **open**, with a KDoc arguing exactly why. Java is the template's default. Go to definition returned silently on the same path, so the first thing a new user tried did nothing and said nothing. Driving the fix then showed the download size printed twice, from a sentence the dialog appended only under the SDK licence |
+| A settings switch half off the right edge, and a Remove button with its label running down the screen | A `Row` holding a label beside a control, with no `weight` on the label: the control is measured in what is left, which is often nothing -- `Rect(0, 0, 0, 0)` for the switch, 61 px against 197 for the button. **Seven instances across the app**, found by grepping for the shape once the first two turned up |
+| A dock covering half the editor with no way to close it | The same, at 360 dp: five tabs took the row, "Terminal" wrapped into a column of letters, and the close button drew nothing. Every instrumented test runs at the emulator's default width, where it looks fine |
 
 **None of these would have been found by more tests**, and several had tests
 asserting the exact behaviour that was wrong — a slot rather than a colour, a
@@ -830,13 +832,13 @@ stage, commit `81e99f0`); the terminal (`ls`, `stty size`); both run engines
 from a cold install; and the language chips and terminal key row at tablet
 width, both of which I expected to be broken and neither of which was.
 
-Three of the eighteen were things I first mis-diagnosed. The chat panel's chips
+Three of the twenty were things I first mis-diagnosed. The chat panel's chips
 and the terminal's key row both looked clipped and both already scroll; a
 `Row`'s last chip looked like it overflowed and was in fact squeezed. **Read the
 code before believing the screenshot, and the screenshot before believing the
 code.**
 
-**The second session, 2026-09-08**, found three more and one it could not
+**The second session, 2026-09-08**, found five more and one it could not
 pin down. The three share a shape with the first session's: two were KDocs
 describing behaviour nobody had written, and the third was a capability wired
 for one language and not for the language the templates default to. The one it
@@ -846,9 +848,13 @@ session and would not do it again in nine attempts. Screenshots were compared
 by counting coloured pixels rather than by eye, which is what made "not
 reproduced" a measurement instead of an impression.
 
-**Also driven and found clean**: the new-project dialog at phone width (four
-language chips, all readable, the `FlowRow` fix holding), creating a project
-end to end, and the editor tab bar and gutter. **And a trap worth knowing**:
+**Also driven and found clean**: the new-project dialog at phone width and at
+360 dp (four language chips, all readable, the `FlowRow` fix holding), creating
+a project end to end, the editor tab bar and gutter, the chat panel's header
+and suggestion chips at 360 dp, and the whole AI settings section -- per
+provider endpoints persist and do not leak across chips, blanking a saved
+endpoint restores the default, and each provider shows its own model and its
+own signup URL. **And a trap worth knowing**:
 `connectedAndroidTest` uninstalls the app, which deletes the projects under
 external app storage -- so a project made by hand to drive the app is gone
 after the next suite, and the symptom is the launcher rather than an error.
