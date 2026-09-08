@@ -838,6 +838,23 @@ and the terminal's key row both looked clipped and both already scroll; a
 code before believing the screenshot, and the screenshot before believing the
 code.**
 
+**A green sweep was skipping 76 of its 636 tests, 2026-09-08.** Five modules
+skipped *every* test they have -- `lsp:node` 8 of 8, `engine:node` 6,
+`engine:mono` 6, `spike:nodejs` 8, `spike:mono` 7 -- and `toolchain:native`
+skipped 16 of 25 and `app` 6. All of it was M10's work, and all of it reported
+BUILD SUCCESSFUL. The cause was one list: `gradle/stage-device-archives.gradle.kts`
+searches three directories for the archives it pushes to the device, that list
+was written for M7 and M9, and M10 added `node.tar` and `mono.tar` without
+extending it. The archives were on the machine the whole time, one directory
+over. **This is the failure that file's own header describes**, one milestone
+later -- which is what makes the list worth naming as a thing to extend rather
+than a default to inherit.
+
+With the two directories added: 637 tests, **19 skipped**, 0 failures. What
+still skips is honest -- eight live-API tests in `:ai:core` waiting on billing
+credit, nine in `spike:rootfs` needing a rootfs nothing builds any more, and
+two singletons.
+
 **The second session, 2026-09-08**, found five more and one it could not
 pin down. The three share a shape with the first session's: two were KDocs
 describing behaviour nobody had written, and the third was a capability wired

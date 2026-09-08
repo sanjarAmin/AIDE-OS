@@ -53,10 +53,24 @@ val stageDeviceArchives by tasks.registering {
     val home: String = System.getProperty("user.home")
     val searchPath: List<String> = (
         System.getenv("DEVICE_ARCHIVES")
+            // **Extend this when a milestone adds an archive.** It was
+            // written for M7 and M9 and not touched when M10 brought Node and
+            // Mono, so `node.tar` and `mono.tar` were on the machine and not on
+            // the path -- and five modules skipped *every* test they have
+            // (`lsp:node` 8 of 8, `engine:node` 6, `engine:mono` 6,
+            // `spike:nodejs` 8, `spike:mono` 7) while the sweep said BUILD
+            // SUCCESSFUL. That is the failure this file's own header describes,
+            // one milestone later.
+            //
+            // x86_64 throughout, matching the emulator these run on; the
+            // aarch64 directories sit beside them and are selected by pointing
+            // DEVICE_ARCHIVES at them, per the note above about ABIs.
             ?: listOf(
                 "$home/aide-os-spikes/m9/stage",
                 "$home/aide-os-spikes/clang-x86_64",
                 "$home/aide-os-spikes/analysisapi",
+                "$home/aide-os-spikes/node-x86_64",
+                "$home/aide-os-spikes/mono-x86_64",
             ).joinToString(File.pathSeparator)
         )
         .split(File.pathSeparator)
