@@ -123,6 +123,30 @@ failed to load still produces a clean compile.
   code out in thirty seconds, and its absence rules the platform out just as
   fast. `tools/analysisapi/FINDINGS.md` §23.
 
+- **A skip reports as OK, so read the skip count and not just the failure
+  count.** A sweep of 636 tests with 0 failures was skipping 76 of them, and
+  five modules — every one of M10's — were skipping *all* of their tests
+  because `gradle/stage-device-archives.gradle.kts` had never been told where
+  `node.tar` and `mono.tar` live. The archives were on the machine. Nothing in
+  the output said so louder than a warning nobody reads.
+
+  ```sh
+  # after a sweep: what actually ran
+  python3 - <<'EOF'
+  import glob, re
+  for f in glob.glob('**/build/outputs/androidTest-results/connected/**/*.xml', recursive=True):
+      s = open(f).read()
+      t = int(re.search(r'tests="(\d+)"', s).group(1))
+      k = int(re.search(r'skipped="(\d+)"', s).group(1))
+      if k: print(f.split('/build/')[0], k, 'of', t, 'skipped')
+  EOF
+  ```
+
+  Nineteen skips is the honest floor here: eight live-API tests in `:ai:core`
+  waiting on billing credit, nine spikes needing a rootfs nothing builds any
+  more, and two singletons. **Anything above that is an archive on the wrong
+  path, and a milestone's worth of coverage doing nothing.**
+
 - **`adb shell run-as` is not the app.** It runs in `runas_app`, which *may*
   `execve` out of app-private storage — so a hand probe through it will
   cheerfully do things the app is forbidden to do, and appear to disprove a
