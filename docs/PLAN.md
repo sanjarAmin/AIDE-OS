@@ -785,7 +785,7 @@ Made 2026-09-02:
 
 Every milestone is met, so the useful question stopped being "what is missing"
 and became "what is wrong". One session of opening the app and using it found
-eleven defects, **each of them behind a passing test suite**. They are listed
+fifteen defects, **each of them behind a passing test suite**. They are listed
 because the pattern is more useful than any one of them.
 
 | What a user saw | What was true |
@@ -803,6 +803,8 @@ because the pattern is more useful than any one of them.
 | The engine chosen once and never again | One field in the descriptor, written at creation, with no way to change it |
 | No terminal on a tablet | The wide layout's side pane is Build over Git, stacked, by a deliberate choice that silently dropped the other three tabs. Every test runs at the emulator's default size |
 | Tap find, type, nothing happens | The bar is opened by a toolbar button, so the tap that opens it is not a tap into it, and the field never took focus |
+| The gutter sliding off the left edge | sora's `setPinLineNumber` defaults to false, so the numbers scroll horizontally with the text. Fine for an editor that wraps; this one deliberately does not, so scrolling sideways is how a long line is read, and the numbers are what diagnostics point into |
+| The assistant saying there is nothing to add | Inline completion sent the buffer from the *view model* and the cursor from the *widget*. An edit lands in a pending map and `document.text` keeps what was last saved, so the assistant was shown the line before the one being typed, and the comment above the line claimed the opposite of what the code did. Six input tokens short of an identical `curl` — the typed line, exactly |
 
 **None of these would have been found by more tests**, and several had tests
 asserting the exact behaviour that was wrong — a slot rather than a colour, a
@@ -825,7 +827,7 @@ stage, commit `81e99f0`); the terminal (`ls`, `stty size`); both run engines
 from a cold install; and the language chips and terminal key row at tablet
 width, both of which I expected to be broken and neither of which was.
 
-Three of the eleven were things I first mis-diagnosed. The chat panel's chips
+Three of the fifteen were things I first mis-diagnosed. The chat panel's chips
 and the terminal's key row both looked clipped and both already scroll; a
 `Row`'s last chip looked like it overflowed and was in fact squeezed. **Read the
 code before believing the screenshot, and the screenshot before believing the

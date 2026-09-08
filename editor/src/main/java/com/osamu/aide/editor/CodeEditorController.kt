@@ -77,12 +77,6 @@ class CodeEditorController {
     // -- Navigation -------------------------------------------------------
 
     /**
-     * Puts the cursor on a 1-based [line] and [column] and scrolls it into
-     * view. Out-of-range positions are clamped: a diagnostic can name a line
-     * past the end of a file the user has since edited, and that is not worth
-     * an exception.
-     */
-    /**
      * Where the caret is, as a character index into the buffer.
      *
      * Null when no editor is attached. A language service works in offsets
@@ -91,6 +85,25 @@ class CodeEditorController {
      */
     fun cursorOffset(): Int? = editor?.cursor?.left
 
+    /**
+     * The buffer as the widget has it, or null when nothing is attached.
+     *
+     * **Read from the same object as [cursorOffset], deliberately.** Anything
+     * that slices text around the cursor needs the two to agree, and the
+     * view model's copy is not the buffer: an edit lands in a pending map and
+     * `document.text` keeps what was last saved. Slicing *that* at a live
+     * offset produces a context describing a file the user is not looking at,
+     * which is how inline completion came to send the assistant the version of
+     * the line before the one being typed.
+     */
+    fun text(): String? = editor?.text?.toString()
+
+    /**
+     * Puts the cursor on a 1-based [line] and [column] and scrolls it into
+     * view. Out-of-range positions are clamped: a diagnostic can name a line
+     * past the end of a file the user has since edited, and that is not worth
+     * an exception.
+     */
     fun jumpTo(line: Int, column: Int = 1) {
         val editor = editor ?: return
         val targetLine = (line - 1).coerceIn(0, editor.text.lineCount - 1)

@@ -197,14 +197,19 @@ fun WorkspaceScreen(
     val completeAtCursor: () -> Unit = {
         val open = state.active
         val cursor = editorController.cursorOffset()
-        if (open != null && cursor != null) {
+        // **Both from the editor.** The comment here used to say "the buffer as
+        // the editor has it, not as it is on disk" and then passed
+        // `open.document.text`, which is exactly the disk copy: an edit lands in
+        // the view model's pending map and `document.text` keeps what was last
+        // saved. Slicing that at a live cursor offset described a file the user
+        // was not looking at -- the assistant received the line *before* the one
+        // being typed, saw nothing to add, and said so.
+        val buffer = editorController.text()
+        if (open != null && cursor != null && buffer != null) {
             assistant.complete(
                 path = open.file.relativeToProject(projectDir),
-                // The buffer as the editor has it, not as it is on disk: the
-                // user may not have saved, and completing against the saved
-                // copy would continue code they have already changed.
-                text = open.document.text,
-                cursor = cursor,
+                text = buffer,
+                cursor = cursor.coerceIn(0, buffer.length),
                 onInsert = editorController::insert,
             )
         }
