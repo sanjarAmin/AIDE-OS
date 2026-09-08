@@ -137,7 +137,15 @@ private fun SettingSwitch(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Column(Modifier.padding(end = 12.dp)) {
+        // **`weight`, or the switch goes off the edge of the screen.** Without
+        // it the text measures at whatever width it wants and the Switch is
+        // given what is left, which for a two-line detail is less than a Switch
+        // -- "Wrap long lines" had its track running past the right edge and
+        // half its touch target outside the window, while "Line numbers", whose
+        // detail is shorter, sat correctly. The weight makes the text wrap into
+        // the space the switch does not need, which is the direction the give
+        // belongs in.
+        Column(Modifier.weight(1f).padding(end = 12.dp)) {
             Text(title, style = MaterialTheme.typography.bodyLarge)
             Text(
                 text = detail,
