@@ -131,15 +131,9 @@ failed to load still produces a clean compile.
   the output said so louder than a warning nobody reads.
 
   ```sh
-  # after a sweep: what actually ran
-  python3 - <<'EOF'
-  import glob, re
-  for f in glob.glob('**/build/outputs/androidTest-results/connected/**/*.xml', recursive=True):
-      s = open(f).read()
-      t = int(re.search(r'tests="(\d+)"', s).group(1))
-      k = int(re.search(r'skipped="(\d+)"', s).group(1))
-      if k: print(f.split('/build/')[0], k, 'of', t, 'skipped')
-  EOF
+  # after a sweep: which modules skipped, and how much. One line on purpose --
+  # an indented multi-line -c string is an IndentationError when it is pasted.
+  python3 -c "import glob,re;print('\n'.join(f\"{f.split('/build/')[0]} {re.search(r'skipped=.(\d+).',open(f).read()).group(1)} of {re.search(r'tests=.(\d+).',open(f).read()).group(1)} skipped\" for f in glob.glob('**/build/outputs/androidTest-results/connected/**/*.xml',recursive=True) if re.search(r'skipped=.([1-9]\d*).',open(f).read())))"
   ```
 
   Nineteen skips is the honest floor here: eight live-API tests in `:ai:core`
