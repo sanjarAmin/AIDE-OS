@@ -131,7 +131,13 @@ private fun ToolchainRow(entry: InstalledToolchain, onRemove: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Column(Modifier.padding(end = 12.dp)) {
+        // **`weight`, or Remove is squeezed to nothing by a long name.** The
+        // same defect EditorSection had: with no weight the column measures at
+        // whatever width the text wants and the button gets what is left, which
+        // for "C/C++ toolchain (clang 21.1.8)" on a phone is not enough for a
+        // button. Here the control that vanishes is the only way to reclaim the
+        // space this screen exists to report.
+        Column(Modifier.weight(1f).padding(end = 12.dp)) {
             Text(entry.displayName, style = MaterialTheme.typography.bodyLarge)
             Text(
                 text = buildString {

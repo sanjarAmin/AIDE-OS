@@ -12,6 +12,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.osamu.aide.core.common.DefaultDispatcherProvider
 import com.osamu.aide.toolchain.manager.ToolchainManager
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -41,10 +42,27 @@ class ToolchainSectionTest {
     private val fixture: File
         get() = File(context.filesDir, "toolchains/zz-test-fixture")
 
+    /**
+     * A second one whose name is as long as a real component's.
+     *
+     * Nothing claims this id either, so the row shows the directory name --
+     * which is the point: the longest label this screen ever renders is a
+     * component name like "C/C++ toolchain (clang 21.1.8)", and the layout has
+     * to survive it.
+     */
+    private val longNamed: File
+        get() = File(context.filesDir, "toolchains/zz-a-toolchain-with-a-very-long-name-indeed")
+
     @Before
     fun setUp() {
-        fixture.deleteRecursively()
-        File(fixture, "bin/thing").apply {
+        longNamed.deleteRecursively()
+        stage(fixture)
+    }
+
+    /** 3 MB under [root], which is what the listing reports it as. */
+    private fun stage(root: File) {
+        root.deleteRecursively()
+        File(root, "bin/thing").apply {
             parentFile?.mkdirs()
             writeBytes(ByteArray(3 * 1024 * 1024))
         }
@@ -53,7 +71,46 @@ class ToolchainSectionTest {
     @After
     fun tearDown() {
         fixture.deleteRecursively()
+        longNamed.deleteRecursively()
     }
+
+    /**
+     * Remove is the same size whatever the name beside it.
+     *
+     * Its column had no `weight`, so a long name measured at whatever width it
+     * wanted and the button was laid out in what remained -- collapsing the one
+     * control that reclaims the space this screen exists to report. Asserted
+     * against the sibling row rather than against the container, for the reason
+     * `EditorSectionTest` and `CreateProjectDialogTest` both record: a `Row`
+     * never reports bounds past its own edge, so only the two being different
+     * sizes shows it.
+     */
+    @Test
+    fun a_long_name_does_not_squeeze_remove_away() {
+        // Staged here rather than in setUp: a second row carries the same size
+        // text as the first, and the listing tests match that text uniquely.
+        stage(longNamed)
+
+        compose.setContent { ToolchainSection(toolchain, dispatchers) }
+        compose.waitUntil(TIMEOUT_MILLIS) {
+            compose.onAllNodesWithText("Remove").fetchSemanticsNodes().size >= 2
+        }
+
+        val short = removeButton(fixture.name)
+        val long = removeButton(longNamed.name)
+
+        assertEquals(
+            "Remove is not the same width in both rows: $short against $long",
+            short.width,
+            long.width,
+            0.5f,
+        )
+    }
+
+    private fun removeButton(displayName: String) = compose
+        .onNodeWithContentDescription("Remove $displayName")
+        .fetchSemanticsNode()
+        .boundsInRoot
 
     @Test
     fun it_lists_what_is_on_disk_with_its_size_and_removes_it() {
