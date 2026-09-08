@@ -120,8 +120,16 @@ private fun IdentityFields(identities: GitIdentityStore) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // **Weighted, both branches**, because the status is the variable half
+        // and Save is the half that has to stay tappable: a real name --
+        // "Commits are signed as Alexandra Konstantinopoulos-Wilkinson" -- takes
+        // the whole row otherwise and the button is measured in what is left.
+        // It is the same defect EditorSection and ToolchainSection had.
         if (stored != null) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Icon(
                     Icons.Filled.CheckCircle,
                     contentDescription = null,
@@ -137,6 +145,7 @@ private fun IdentityFields(identities: GitIdentityStore) {
                 text = "No identity set, so committing is blocked.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.weight(1f),
             )
         }
 
@@ -182,7 +191,9 @@ private fun TokenFields(credentials: GitCredentialStore) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(saved, style = MaterialTheme.typography.bodyMedium)
+            // A host is as long as somebody's self-hosted forge, and the
+            // button beside it is how a token is revoked.
+            Text(saved, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
             IconButton(
                 onClick = {
                     credentials.forget(saved)

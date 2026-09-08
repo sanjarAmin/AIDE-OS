@@ -1,5 +1,7 @@
 package com.osamu.aide.ui.settings
 
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -113,6 +115,64 @@ class GitSectionTest {
         compose.onNodeWithText("ada@example.com").assertExists()
     }
 
+    /**
+     * A long name does not take Save with it, and a long host does not take
+     * the button that revokes its token.
+     *
+     * Both rows put a variable-width label beside a fixed control with no
+     * `weight` on the label, which is the defect `EditorSectionTest` and
+     * `ToolchainSectionTest` record: the label measures at whatever width it
+     * wants and the control is laid out in what remains, down to nothing.
+     * Compared against the same control in a short-labelled state rather than
+     * against the container, because a `Row` never reports bounds past its own
+     * edge.
+     */
+    @Test
+    fun a_long_label_does_not_squeeze_the_control_beside_it() {
+        identities.save(GitIdentity("Ada Lovelace", "ada@example.com"))
+        // The section reads the store once, at composition, so the way to see
+        // it with a different name is to rebuild it -- and `setContent` can
+        // only be called once per rule, hence the key rather than a second
+        // call.
+        val rebuild = mutableStateOf(0)
+        compose.setContent { key(rebuild.value) { GitSection(identities, credentials) } }
+
+        val withShortName = bounds("Save git identity")
+
+        identities.save(
+            GitIdentity("Alexandra Konstantinopoulos-Wilkinson", "alexandra@example.com"),
+        )
+        compose.runOnUiThread { rebuild.value = 1 }
+        compose.waitForIdle()
+        val withLongName = bounds("Save git identity")
+
+        assertEquals(
+            "Save was squeezed by the name beside it: $withShortName against $withLongName",
+            withShortName.width,
+            withLongName.width,
+            TOLERANCE,
+        )
+    }
+
+    @Test
+    fun a_long_host_does_not_squeeze_its_remove_button() {
+        credentials.save("git.example.com", "token-one")
+        credentials.save("git.internal.engineering.a-very-long-company.example", "token-two")
+        section()
+
+        assertEquals(
+            "the two revoke buttons are not the same size",
+            bounds("Remove token for git.example.com").width,
+            bounds("Remove token for git.internal.engineering.a-very-long-company.example").width,
+            TOLERANCE,
+        )
+    }
+
+    private fun bounds(contentDescription: String) = compose
+        .onNodeWithContentDescription(contentDescription)
+        .fetchSemanticsNode()
+        .boundsInRoot
+
     @Test
     fun a_typed_token_is_encrypted_and_the_field_is_cleared() {
         section()
@@ -146,5 +206,8 @@ class GitSectionTest {
 
     private companion object {
         const val TOKEN = "ghp_notARealTokenButItLooksLikeOne01234567890"
+
+        /** Pixels. The control is laid out the same in both rows or it is not. */
+        const val TOLERANCE = 0.5f
     }
 }
