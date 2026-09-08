@@ -28,6 +28,16 @@ import java.security.MessageDigest
  * ```
  * ./gradlew :toolchain:manager:test -Ppins=true
  * ```
+ *
+ * **That command did nothing for a while, and said BUILD SUCCESSFUL.** A
+ * Gradle *project* property is not a system property, so `getProperty("pins")`
+ * was null, `assumeTrue` skipped, and a skip is not a failure -- the documented
+ * invocation returned green in three seconds having checked nothing, which is
+ * the worst way a network-gated test can behave and exactly the failure this
+ * class was written to prevent one level down. The module's build file wires
+ * the property through now, and declares it an input so that flipping the flag
+ * reruns the task instead of finding it up to date. Takes about seven minutes;
+ * if it returns in seconds, it did not run.
  */
 class PinnedReleaseTest {
 
