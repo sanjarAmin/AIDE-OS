@@ -324,6 +324,11 @@ private fun ExitedRow(status: Int, onRestart: () -> Unit) {
             },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            // Weighted: without it the sentence measures at whatever width it
+            // wants and Restart is laid out in what is left, which on a narrow
+            // phone is nothing -- and Restart is the only way back from a dead
+            // shell. The same defect the settings rows had.
+            modifier = Modifier.weight(1f),
         )
         TextButton(
             onClick = onRestart,

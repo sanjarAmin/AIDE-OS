@@ -2,6 +2,8 @@ package com.osamu.aide.ui.workspace
 
 import android.content.Intent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -106,7 +108,18 @@ fun BottomToolDock(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
+                // **Weighted and scrolling.** Five tabs do not fit a 360 dp
+                // phone, and without either of these the row took the whole
+                // width and squeezed what was left: "Terminal" wrapped into a
+                // column of one and two letters -- 176 px tall against its
+                // siblings' 48 -- and the close button beside it was measured
+                // at nothing and disappeared, leaving the dock covering half
+                // the editor with no way to shut it. The same remedy the chat
+                // suggestions and the terminal key row already use.
                 Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
