@@ -49,6 +49,17 @@ class CodeEditorController {
         editor.subscribeEvent(PublishSearchResultEvent::class.java) { _, _ -> refreshSearch() }
     }
 
+    /**
+     * The widget itself, for tests in this module.
+     *
+     * `internal`, and only that: sora's built-in components -- the diagnostic
+     * tooltip, the completion window -- are reachable only from the `CodeEditor`
+     * the composable built, and a test asserting on one has no other handle. It
+     * is not part of the imperative surface the screen uses; everything the UI
+     * needs is a method on this class.
+     */
+    internal fun attached(): CodeEditor? = editor
+
     internal fun detach() {
         editor = null
         search = SearchState()

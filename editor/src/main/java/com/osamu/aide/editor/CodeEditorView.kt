@@ -2,6 +2,7 @@ package com.osamu.aide.editor
 
 import android.graphics.Typeface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.rememberUpdatedState
@@ -14,6 +15,7 @@ import io.github.rosemoe.sora.widget.CodeEditor
 import io.github.rosemoe.sora.widget.schemes.EditorColorScheme
 import io.github.rosemoe.sora.widget.schemes.SchemeDarcula
 import io.github.rosemoe.sora.widget.component.EditorAutoCompletion
+import io.github.rosemoe.sora.widget.component.EditorDiagnosticTooltipWindow
 import io.github.rosemoe.sora.widget.getComponent
 import java.io.File
 
@@ -66,6 +68,10 @@ fun CodeEditorView(
     val currentCursorListener = rememberUpdatedState(onCursorMoved)
     val buffers = remember { EditorBuffers() }
     val currentController = rememberUpdatedState(controller)
+
+    // The diagnostics the widget was last given, so a change can be told from a
+    // recomposition. See the tooltip note in the update block.
+    val shownDiagnostics = remember { mutableStateOf<List<Diagnostic>>(emptyList()) }
 
     // Resolved here because isSystemInDarkTheme is a composable read, and the
     // update block below is not one. It also means a change of system theme
@@ -140,6 +146,22 @@ fun CodeEditorView(
                     projectRoot = projectRoot,
                     content = editor.text,
                 )
+            }
+
+            // **The tooltip does not know the container was replaced.** sora
+            // opens `EditorDiagnosticTooltipWindow` when the caret lands on a
+            // diagnostic and updates it from selection changes; nothing tells it
+            // when the diagnostics themselves change underneath. Fix the error
+            // and its message stays on screen, anchored where the old error was
+            // -- seen reading "';' expected" over two lines that no longer
+            // contained one, with Problems already down to a single unrelated
+            // entry.
+            //
+            // Only when the set actually changes: dismissing on every
+            // recomposition would shut a tooltip the user is still reading.
+            if (diagnostics != shownDiagnostics.value) {
+                shownDiagnostics.value = diagnostics
+                editor.getComponent<EditorDiagnosticTooltipWindow>().dismiss()
             }
         },
         onRelease = { editor ->
