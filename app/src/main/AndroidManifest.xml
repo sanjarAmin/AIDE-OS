@@ -27,6 +27,29 @@
     <uses-permission android:name="android.permission.READ_LOGS" />
 
     <!--
+      The last step of the loop this app exists for: build, install, run.
+
+      ApkInstaller has always handled the refusal properly, checking
+      canRequestPackageInstalls() and offering the user
+      ACTION_MANAGE_UNKNOWN_APP_SOURCES. That offer was a dead end, because an
+      app that has not declared this does not appear on that Settings page at
+      all: the build produced a signed APK and then stopped, with a remedy that
+      could not work.
+
+      It went unnoticed because the install step has only ever been proven with
+      privileges the app does not have. ApkInstallerTest flips appops to make
+      canInstall() true, and the milestone's own acceptance test installs
+      through shell `pm install` and says so in a comment: "what is being tested
+      here is the APK, not the class."
+
+      This is the permission R5 in docs/PLAN.md is about. Play scrutinises it,
+      and the plan already treats F-Droid and a direct APK as the primary
+      channels. The argument for declaring it is the one the project rests on:
+      an IDE that cannot install what it compiles is not one.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!--
         D8 dexes a whole project's classes in this process, and the Kotlin front
         end will want considerably more when M4 wires it in. A default heap is
         sized for an app, not for a compiler holding a program's type graph.

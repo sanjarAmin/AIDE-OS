@@ -334,24 +334,6 @@ fun BottomToolDock(
     }
 }
 
-/** An empty tool tab that is honest about being empty. */
-@Composable
-private fun NotBuiltYet(explanation: String) {
-    Column(Modifier.fillMaxWidth().padding(8.dp)) {
-        Text(
-            text = "Not built yet",
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        Text(
-            text = explanation,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 4.dp),
-        )
-    }
-}
-
 /**
  * Which engine builds this project.
  *
