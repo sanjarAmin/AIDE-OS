@@ -201,6 +201,14 @@ data class WorkspaceUiState(
      * the difference between a user expecting an install and getting output.
      */
     val projectLanguage: SourceLanguage? = null,
+    /**
+     * The id the built app installs under, once the descriptor has been read.
+     *
+     * The Logcat tab prefills its filter with it: an unprivileged app cannot
+     * resolve another package's pid, so a text match is what there is.
+     * `tools/logcat/FINDINGS.md` section 4.
+     */
+    val projectApplicationId: String? = null,
     /** The engine that will build it, once the descriptor has been read. */
     val projectEngine: BuildEngine? = null,
 ) {
@@ -330,6 +338,7 @@ class WorkspaceViewModel(
                         it.copy(
                             projectName = result.value.name,
                             projectLanguage = result.value.language,
+                            projectApplicationId = result.value.applicationId,
                             projectEngine = result.value.engine,
                         )
                     }

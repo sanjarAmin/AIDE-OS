@@ -119,6 +119,8 @@ fun WorkspaceScreen(
     // Also its own: it owns a running shell, which is a child process and has
     // to be killed when the screen goes away.
     terminal: TerminalViewModel = koinViewModel(),
+    // The same: it owns a running `logcat`, which is a child process.
+    logcat: LogcatViewModel = koinViewModel(),
     // A single instance for the whole app: it holds the compiled tree-sitter
     // queries, and rebuilding them per screen is the cost the cache exists to
     // avoid.
@@ -132,6 +134,7 @@ fun WorkspaceScreen(
     val isCompleting by assistant.completing.collectAsStateWithLifecycle()
     val gitState by git.state.collectAsStateWithLifecycle()
     val terminalState by terminal.state.collectAsStateWithLifecycle()
+    val logcatState by logcat.state.collectAsStateWithLifecycle()
     val editorSettings by editorPreferences.settings.collectAsStateWithLifecycle()
 
     // **Re-read git when the screen comes back.** The panel's own empty state
@@ -177,6 +180,15 @@ fun WorkspaceScreen(
             initialise = git::initialise,
             showDiff = git::showDiff,
             dismissDiff = git::dismissDiff,
+        )
+    }
+
+    val logcatActions = remember(logcat) {
+        LogcatActions(
+            start = logcat::start,
+            stop = logcat::stop,
+            clear = logcat::clear,
+            setFilter = logcat::setFilter,
         )
     }
 
@@ -413,6 +425,9 @@ fun WorkspaceScreen(
                                     gitActions = gitActions,
                                     terminalState = terminalState,
                                     terminalActions = terminalActions,
+                                    logcatState = logcatState,
+                                    logcatActions = logcatActions,
+                                    applicationId = state.projectApplicationId,
                                     onDiagnosticClick = viewModel::openDiagnostic,
                                     onFixDiagnostic = askToFix,
                                 )
@@ -455,6 +470,8 @@ fun WorkspaceScreen(
                             gitActions = gitActions,
                             terminalState = terminalState,
                             terminalActions = terminalActions,
+                            logcatState = logcatState,
+                            logcatActions = logcatActions,
                         )
                     },
                 )
@@ -559,6 +576,8 @@ private fun EditorArea(
     gitActions: GitActions,
     terminalState: TerminalUiState,
     terminalActions: TerminalActions,
+    logcatState: LogcatUiState,
+    logcatActions: LogcatActions,
 ) {
     Column(Modifier.fillMaxSize()) {
         if (state.openFiles.isNotEmpty()) {
@@ -642,6 +661,9 @@ private fun EditorArea(
                 gitActions = gitActions,
                 terminalState = terminalState,
                 terminalActions = terminalActions,
+                logcatState = logcatState,
+                logcatActions = logcatActions,
+                applicationId = state.projectApplicationId,
                 onDiagnosticClick = onDiagnosticClick,
                 onFixDiagnostic = onFixDiagnostic,
                 onLaunchIntent = onLaunchIntent,
@@ -1112,6 +1134,9 @@ private fun SideToolTabs(
     gitActions: GitActions,
     terminalState: TerminalUiState,
     terminalActions: TerminalActions,
+    logcatState: LogcatUiState,
+    logcatActions: LogcatActions,
+    applicationId: String?,
     onDiagnosticClick: (Diagnostic) -> Unit,
     onFixDiagnostic: (Diagnostic) -> Unit,
 ) {
@@ -1135,18 +1160,27 @@ private fun SideToolTabs(
                     state = terminalState,
                     actions = terminalActions,
                 )
+                SideTool.LOGCAT -> LogcatPanel(
+                    state = logcatState,
+                    actions = logcatActions,
+                    applicationId = applicationId,
+                )
             }
         }
     }
 }
 
 /**
- * Logcat is deliberately absent: it is not built, and `tools/logcat/FINDINGS.md`
- * records why. A tab that only ever says "not built yet" is a tab that costs
- * width on the one layout where width is already the scarce thing.
+ * Logcat joined these when it stopped being a placeholder.
+ *
+ * It was left out while it only ever said "not built yet" -- a tab that costs
+ * width on the one layout where width is already scarce. Leaving it out now
+ * that it works would be the tablet's terminal all over again: a shipped
+ * feature with no way in on a whole class of device.
  */
 private enum class SideTool(val title: String) {
     GIT("Git"),
     PROBLEMS("Problems"),
     TERMINAL("Terminal"),
+    LOGCAT("Logcat"),
 }

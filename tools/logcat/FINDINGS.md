@@ -62,6 +62,41 @@ under.
   trust decision about the product, not a technical one, so the manifest is
   unchanged and this document is the deliverable.
 
+## 3b. Built 2026-09-09 — and section 2 did not reproduce
+
+The permission is declared and the tab exists. Section 3's question was
+answered by the user: declare it and build it.
+
+What was seen driving the finished tab, on the API 34 emulator:
+
+- The tab streams `logcat -v uid -v threadtime` into a monospace pane that
+  tails, filters, pauses and clears. That part works.
+- **Android never showed the consent dialog.** Section 2 records it appearing
+  as soon as the permission was declared; it did not here, and
+  `dumpsys package com.osamu.aide` reported
+  `android.permission.READ_LOGS: granted=false` throughout.
+- `adb shell pm grant com.osamu.aide android.permission.READ_LOGS` now succeeds
+  (section 2 is right that it refuses while undeclared) and reports
+  `granted=true`. **The tab still saw only its own lines** after a restart.
+
+So on this device an app that `execve`s `/system/bin/logcat` gets logd's own
+uid filtering and no dialog, whichever way the permission reads. The likely
+difference from section 2 is *how* the log was asked for: that observation came
+from typing `logcat` into the app's terminal, which is the same binary but a
+different process tree, and it is worth re-running before trusting either
+result. A framework path rather than the binary may be what raises the dialog.
+
+Until that is settled the tab is honest rather than capable: it detects the
+case and says so, in the panel, with a button to ask again.
+
+**Detecting it is a uid comparison, and pid is the trap.** The obvious signal
+-- a line whose pid is not ours -- is wrong, because the log buffer holds this
+app's *own earlier processes*. A restarted AIDE-OS sees a dozen foreign pids
+that are all itself and concludes it has access it does not have; that shipped
+for one build and was caught by driving it. `-v uid` adds the column that is
+per app rather than per run, and `LogcatLineTest` pins the parse, including
+that a named uid (`wifi`, `system`) comes back as its name.
+
 ## 4. Filtering to the built app is the remaining unknown
 
 `logcat --pid=` needs a pid, and an unprivileged app cannot resolve another

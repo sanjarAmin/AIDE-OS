@@ -11,6 +11,20 @@
     -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!--
+      The Logcat tab. An app sees only its own lines without this, so the tab
+      could not show the log of the app the user just built, which runs under a
+      different uid. With it declared, Android itself asks the user, one read
+      at a time: "Allow AIDE-OS to access all device logs?" with "Allow
+      one-time access" as the only yes. No root, no adb, no desktop.
+
+      The cost is that every install carries an app that can ask, and the
+      system dialog tells the user to allow it "only [for] apps you trust".
+      That is why it sat out of the manifest for a milestone, with
+      tools/logcat/FINDINGS.md as the deliverable instead. It is in now as a
+      deliberate product decision, not because it became technically easier.
+    -->
+    <uses-permission android:name="android.permission.READ_LOGS" />
 
     <!--
         D8 dexes a whole project's classes in this process, and the Kotlin front

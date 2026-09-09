@@ -80,6 +80,10 @@ fun BottomToolDock(
     gitActions: GitActions,
     terminalState: TerminalUiState,
     terminalActions: TerminalActions,
+    logcatState: LogcatUiState,
+    logcatActions: LogcatActions,
+    /** Prefills the log filter: the id the built app installs under. */
+    applicationId: String?,
     onDiagnosticClick: (Diagnostic) -> Unit,
     onFixDiagnostic: (Diagnostic) -> Unit,
     onLaunchIntent: (Intent) -> Unit,
@@ -315,10 +319,10 @@ fun BottomToolDock(
                     // every log on the phone. `tools/logcat/FINDINGS.md` has
                     // the evidence, including that the grant is one-time.
                     ToolTab.GIT -> GitPanel(state = gitState, actions = gitActions)
-                    ToolTab.LOGCAT -> NotBuiltYet(
-                        "An app can only read its own log lines. Showing the app you " +
-                            "built needs permission to read every log on the phone, " +
-                            "which is not a permission this app asks for yet.",
+                    ToolTab.LOGCAT -> LogcatPanel(
+                        state = logcatState,
+                        actions = logcatActions,
+                        applicationId = applicationId,
                     )
                     ToolTab.TERMINAL -> TerminalPanel(
                         state = terminalState,
