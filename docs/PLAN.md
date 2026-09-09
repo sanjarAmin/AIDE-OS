@@ -785,7 +785,7 @@ Made 2026-09-02:
 
 Every milestone is met, so the useful question stopped being "what is missing"
 and became "what is wrong". One session of opening the app and using it found
-twenty defects, **each of them behind a passing test suite**. They are listed
+twenty-two defects, **each of them behind a passing test suite**. They are listed
 because the pattern is more useful than any one of them.
 
 | What a user saw | What was true |
@@ -810,6 +810,8 @@ because the pattern is more useful than any one of them.
 | A Java editor with no completion, no errors, no definitions, and no explanation | The platform download was offered on **build**; Kotlin's was offered on **open**, with a KDoc arguing exactly why. Java is the template's default. Go to definition returned silently on the same path, so the first thing a new user tried did nothing and said nothing. Driving the fix then showed the download size printed twice, from a sentence the dialog appended only under the SDK licence |
 | A settings switch half off the right edge, and a Remove button with its label running down the screen | A `Row` holding a label beside a control, with no `weight` on the label: the control is measured in what is left, which is often nothing -- `Rect(0, 0, 0, 0)` for the switch, 61 px against 197 for the button. **Seven instances across the app**, found by grepping for the shape once the first two turned up |
 | A dock covering half the editor with no way to close it | The same, at 360 dp: five tabs took the row, "Terminal" wrapped into a column of letters, and the close button drew nothing. Every instrumented test runs at the emulator's default width, where it looks fine |
+| A message for an error that had just been fixed | sora opens `EditorDiagnosticTooltipWindow` when the caret lands on a diagnostic and updates it from selection changes. **Nothing tells it the diagnostics changed underneath**, so "';' expected" went on hovering over two lines that no longer contained one, anchored where the old error had been, while Problems had already dropped to a single unrelated entry |
+| A file with errors in it opening clean | `analyse` was reachable from `onTextChanged` and from two install callbacks, and from nothing else. An empty gutter, "No problems found in project", and then every error at once on the first keystroke -- any keystroke, including one immediately undone. Opening a file to see why it will not build is the ordinary reason to open it |
 | *(not a defect)* The terminal's exited row | It has the same shape -- a message beside Restart, unweighted -- and I said so in a commit before measuring it. At 320 dp the button is laid out identically either way, because both messages the row can carry are short and fixed. The weight stayed as the right idiom; the test that could not fail did not |
 
 **None of these would have been found by more tests**, and several had tests
@@ -833,7 +835,7 @@ stage, commit `81e99f0`); the terminal (`ls`, `stty size`); both run engines
 from a cold install; and the language chips and terminal key row at tablet
 width, both of which I expected to be broken and neither of which was.
 
-Three of the twenty were things I first mis-diagnosed. The chat panel's chips
+Three of the twenty-two were things I first mis-diagnosed. The chat panel's chips
 and the terminal's key row both looked clipped and both already scroll; a
 `Row`'s last chip looked like it overflowed and was in fact squeezed. **Read the
 code before believing the screenshot, and the screenshot before believing the
@@ -856,8 +858,8 @@ still skips is honest -- eight live-API tests in `:ai:core` waiting on billing
 credit, nine in `spike:rootfs` needing a rootfs nothing builds any more, and
 two singletons.
 
-**The second session, 2026-09-08**, found five more and one it could not
-pin down. The three share a shape with the first session's: two were KDocs
+**The second session, 2026-09-08 and 09**, found seven more and two it could
+not pin down. The three share a shape with the first session's: two were KDocs
 describing behaviour nobody had written, and the third was a capability wired
 for one language and not for the language the templates default to. The one it
 could not pin down is written up in `editor/FINDINGS.md` as unresolved rather
