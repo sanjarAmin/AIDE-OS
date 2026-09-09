@@ -136,10 +136,19 @@ failed to load still produces a clean compile.
   python3 -c "import glob,re;print('\n'.join(f\"{f.split('/build/')[0]} {re.search(r'skipped=.(\d+).',open(f).read()).group(1)} of {re.search(r'tests=.(\d+).',open(f).read()).group(1)} skipped\" for f in glob.glob('**/build/outputs/androidTest-results/connected/**/*.xml',recursive=True) if re.search(r'skipped=.([1-9]\d*).',open(f).read())))"
   ```
 
-  Nineteen skips is the honest floor here: eight live-API tests in `:ai:core`
-  waiting on billing credit, nine spikes needing a rootfs nothing builds any
-  more, and two singletons. **Anything above that is an archive on the wrong
-  path, and a milestone's worth of coverage doing nothing.**
+  **Twenty-four skips is the honest floor**, measured on a full sweep: eight
+  live-API tests in `:ai:core` waiting on billing credit, nine spikes needing a
+  rootfs nothing builds any more, five in `:toolchain:manager` gated behind
+  `-Pandroid.testInstrumentationRunnerArguments.downloadTests=true` because they
+  pull real archives from Google and GitHub, and two singletons. **Anything
+  above that is an archive on the wrong path, and a milestone's worth of
+  coverage doing nothing.**
+
+  Count from a *full* sweep, not from whatever XML happens to be on disk: a
+  targeted `-Pandroid.testInstrumentationRunnerArguments.class=...` run
+  overwrites that module's results file with its own handful of tests, so a
+  census taken afterwards silently omits the module. That is how the floor was
+  first recorded as nineteen.
 
 - **`adb shell run-as` is not the app.** It runs in `runas_app`, which *may*
   `execve` out of app-private storage — so a hand probe through it will
