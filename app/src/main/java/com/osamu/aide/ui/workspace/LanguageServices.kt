@@ -100,6 +100,34 @@ class LanguageServices(
     }
 
     /**
+     * Drops the warm Java service, so the next request builds a new one.
+     *
+     * **A build writes sources javac has already decided do not exist.**
+     * `aapt2` generates `R.java` under the build's `generated/java`, which is
+     * on this service's source path from the moment it is constructed -- but a
+     * `StandardJavaFileManager` caches what it finds at a location, so a
+     * service created before the first build has an empty listing for that
+     * directory and keeps it. The file appears on disk and `R` stays
+     * unresolved: a red underline on the template's own `R.string.greeting`,
+     * on a project that builds and installs perfectly well, for the life of
+     * the session.
+     *
+     * Bisected rather than guessed: with the build run in-process and the same
+     * output root, a service constructed *after* it resolves `R` and the warm
+     * one does not. `WorkspaceViewModelTest.a_build_clears_the_R_error_whose_source_it_generates`.
+     *
+     * Only the Java service. clangd re-reads `compile_flags.txt` itself, Node
+     * shells out per request, and the Kotlin session is rebuilt with its own
+     * classpath; none of them hold a cached directory listing of a directory
+     * a build writes into.
+     */
+    @Synchronized
+    fun invalidateAfterBuild() {
+        current?.second?.close()
+        current = null
+    }
+
+    /**
      * The service that handles [file], or null if nothing here does.
      *
      * The editor asks this rather than choosing, so adding a language is a

@@ -374,6 +374,60 @@ class WorkspaceViewModelTest {
         }
     }
 
+    /**
+     * The bisect for `tools/javals/FINDINGS.md`'s unresolved `R`.
+     *
+     * In the app, a successful build writes `R.java` and the editor goes on
+     * reporting `package R does not exist` -- on three separate projects,
+     * surviving a restart. `GeneratedRResolvesTest` does the same thing with a
+     * hand-written `R.java` and passes, so the plumbing works when a test
+     * drives it.
+     *
+     * **The bisect that found it**, kept as the regression test. The build runs
+     * in this process rather than the `:build` one the app spawns, which ruled
+     * that out first; then a service constructed *after* the build resolved
+     * `R` while the warm one did not, which named the cause: a
+     * `StandardJavaFileManager` caches what it finds at a location, so a
+     * service built before the first build holds an empty listing of the
+     * directory aapt2 is about to write `R.java` into, and keeps it.
+     *
+     * `LanguageServices.invalidateAfterBuild` drops it. This fails without
+     * that call.
+     */
+    @Test
+    fun a_build_clears_the_R_error_whose_source_it_generates() {
+        assumeTrue("no android.jar staged; language services are disabled", hasPlatform)
+
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(mainActivitySource) }
+        awaitState("the R error to appear before any build") { state ->
+            state.analysis.diagnostics.any { "R" in it.message && "does not exist" in it.message }
+        }
+
+        onMain { viewModel.build() }
+        awaitState("the build to finish", timeoutMillis = 240_000) { state ->
+            !state.build.isRunning && state.build.outcome != null
+        }
+        assertTrue(
+            "the build did not succeed, so this proves nothing: " +
+                "${viewModel.state.value.build.outcome}",
+            viewModel.state.value.build.succeeded,
+        )
+
+        val generated = File(
+            File(context.cacheDir, "builds-test"),
+            "${project.rootDir.name}/generated/java/com/example/demo/R.java",
+        )
+        assertTrue("aapt2 wrote no R.java at $generated", generated.isFile)
+
+        // The build wrote R.java; nothing re-analyses on its own, so ask.
+        onMain { viewModel.onTextChanged(mainActivitySource.readText()) }
+        awaitState("the R error to clear now that R.java exists", timeoutMillis = 60_000) { state ->
+            state.analysis.file == mainActivitySource &&
+                state.analysis.diagnostics.none { "R" in it.message && "does not exist" in it.message }
+        }
+    }
+
     @Test
     fun revealing_a_directory_expands_everything_above_it() {
         onMain { viewModel.open(project.rootDir) }

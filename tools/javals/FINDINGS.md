@@ -248,7 +248,7 @@ every test in three modules while showing the user nothing at all -- twice, for
 two unrelated reasons (`engine/fast/FINDINGS.md` section 10, and sora cancelling
 by thread interrupt). A green suite is not a rendered popup.
 
-## Unresolved: `R` stays unresolved after a build that generates it
+## `R` stays unresolved after a build, because the compiler is warm
 
 Established 2026-09-09, reproduced on three separate template projects and not
 explained. Written down because the reproduction is cheap and the explanation
@@ -295,11 +295,38 @@ on external storage and a hand-written `R.java` under the generated root — and
 **passes**, with a control case proving it fails when `R.java` is removed. So
 the mechanism works when a test drives it and does not when the app does.
 
-The next thing to try is the difference the test does not model: the app's
-`R.java` is written by the **`:build` process** rather than by the process doing
-the resolving. Same uid and the same `cacheDir` path, so it should not matter,
-and the probe reads the file back from the main process happily — but it is
-what is left.
+**Solved 2026-09-09, by bisecting rather than reasoning.** Two experiments,
+each halving the search:
 
-Until then the user-visible effect is one stale error on a file that builds,
-which is worth knowing is not the user's fault.
+1. *Is the separate process the difference?* Run the same sequence with the
+   build **in-process** — `BuildRunner { projectBuilder.build(it) }`, same
+   output root. It still failed. So `:build` is not the cause, and the note
+   that used to stand here calling it the one thing left to try was wrong.
+2. *Is it the artefact or the service?* After that build, ask two services the
+   same question: the view model's, constructed before the build, and a fresh
+   one constructed after it. **The fresh one resolves `R`. The warm one does
+   not.**
+
+So the cause is the warm compiler, not the file. `ResidentCompiler` holds a
+`StandardJavaFileManager`, and a file manager **caches what it finds at a
+location**. A service built before the first build has an empty listing for the
+build's `generated/java` and keeps it: `R.java` appears on disk and javac goes
+on reporting `package R does not exist` for the life of the session.
+
+`LanguageServices.invalidateAfterBuild` closes and drops the Java service when
+a build succeeds, and `WorkspaceViewModel` re-analyses the open file afterwards,
+because nothing else does.
+`WorkspaceViewModelTest.a_build_clears_the_R_error_whose_source_it_generates`
+is the bisect kept as the regression test; it fails without that call.
+
+Only the Java service needs it. clangd re-reads `compile_flags.txt` itself,
+Node shells out per request, and a Kotlin session is rebuilt when its classpath
+changes — none of them cache a directory listing of a directory a build writes
+into.
+
+**Why the earlier read of this was wrong.** It looked as though a restarted app
+failed too, which pointed away from caching. That observation was taken across
+`connectedAndroidTest` runs, and those uninstall the app — wiping `android.jar`
+with everything else in `filesDir`. With no platform there is no service at all,
+`analyse` returns early, and the editor keeps drawing the diagnostics it already
+had. **A stale render looks exactly like a stale compiler.**

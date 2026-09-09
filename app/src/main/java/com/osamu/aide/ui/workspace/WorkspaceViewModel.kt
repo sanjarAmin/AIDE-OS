@@ -1161,7 +1161,21 @@ class WorkspaceViewModel(
                 ),
             )
         }
-        if (result is BuildResult.Success) install(result.apk)
+        if (result is BuildResult.Success) {
+            // **The build just wrote sources the warm compiler cannot see.**
+            // aapt2's `R.java` lands under the build's generated/java, which is
+            // already on javac's source path -- but the file manager cached
+            // that directory as empty when the service was built, so `R` stays
+            // unresolved until something drops it. See
+            // LanguageServices.invalidateAfterBuild.
+            languageServices.invalidateAfterBuild()
+            // And nothing re-analyses on its own, so the file on screen would
+            // keep the error it has just stopped deserving.
+            _state.value.active?.let { active ->
+                analyse(active.file, pendingText[active.file] ?: active.document.text)
+            }
+            install(result.apk)
+        }
     }
 
     /**
