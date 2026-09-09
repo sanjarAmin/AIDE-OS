@@ -437,18 +437,28 @@ class WorkspaceViewModel(
             _state.update { it.copy(openingFile = file, documentError = null) }
 
             when (val result = documents.open(file)) {
-                is AppResult.Success -> _state.update {
-                    it.copy(
-                        // Guard against two opens racing: whichever read
-                        // finishes second must not append a duplicate tab.
-                        openFiles = if (it.openFiles.any { open -> open.file == file }) {
-                            it.openFiles
-                        } else {
-                            it.openFiles + OpenFile(result.value)
-                        },
-                        activeFile = file,
-                        openingFile = null,
-                    )
+                is AppResult.Success -> {
+                    _state.update {
+                        it.copy(
+                            // Guard against two opens racing: whichever read
+                            // finishes second must not append a duplicate tab.
+                            openFiles = if (it.openFiles.any { open -> open.file == file }) {
+                                it.openFiles
+                            } else {
+                                it.openFiles + OpenFile(result.value)
+                            },
+                            activeFile = file,
+                            openingFile = null,
+                        )
+                    }
+                    // **Analysed on open, not only on edit.** `analyse` was
+                    // reachable from `onTextChanged` and from two install
+                    // callbacks, and from nothing else -- so a file with errors
+                    // in it opened clean and stayed clean until the first
+                    // keystroke. Opening a file to look at why it will not
+                    // build is the ordinary reason to open it, and the gutter
+                    // was empty for exactly that user.
+                    analyse(file, result.value.text)
                 }
                 is AppResult.Failure -> _state.update {
                     it.copy(openingFile = null, documentError = result.error.message)

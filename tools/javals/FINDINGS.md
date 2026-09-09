@@ -247,3 +247,59 @@ output rather than on something seen. The completion path had already passed
 every test in three modules while showing the user nothing at all -- twice, for
 two unrelated reasons (`engine/fast/FINDINGS.md` section 10, and sora cancelling
 by thread interrupt). A green suite is not a rendered popup.
+
+## Unresolved: `R` stays unresolved after a build that generates it
+
+Established 2026-09-09, reproduced on three separate template projects and not
+explained. Written down because the reproduction is cheap and the explanation
+is not, and because the code and `docs/PLAN.md` both assert the opposite.
+
+**The claim.** `LanguageServices.forProject` puts the build's generated sources
+on javac's source path:
+
+```kotlin
+sourcePath = listOf(
+    File(projectRoot, "src/main/java"),
+    File(buildOutputRoot, "${projectRoot.name}/generated/java"),
+)
+```
+
+with a comment saying "After one build it resolves", and `AppModule` keeps one
+definition of that root so the build and the language service cannot disagree.
+
+**What happens.** Create a Java project, open `MainActivity.java`, build it
+successfully, and `R.string.greeting` keeps its red underline and its Problems
+entry — `error: package R does not exist` — for as long as the project is open,
+**and after a full restart of the app**, which builds a new compiler.
+
+**What is ruled out.**
+
+- *Not* the path. A probe in `forProject` at the moment of construction printed
+  `generated=/data/user/0/com.osamu.aide/cache/builds/Rthr/generated/java
+  exists=true files=.../com/example/rthr/R.java`.
+- *Not* the generated file. aapt2's `R.java` declares `package com.example.rthr`
+  and `public final class R` with both `app_name` and `greeting`, at the path
+  its package requires.
+- *Not* a stale warm compiler. The error survives a process restart, and the
+  file manager is `lazy` — it is built after `R.java` exists.
+- *Not* javac failing generally. The same analysis resolves `Activity`,
+  `Bundle` and `TextView` out of `android.jar` and reports nothing else.
+- *Not* an option overriding the location: `OPTIONS` is
+  `-source 8 -target 8 -proc:none`, with no `-sourcepath`.
+- *Not* the analysis being stale. A probe on the diagnostics list shows javac
+  returning exactly `package R does not exist` on every run.
+
+**And the strange part**: `GeneratedRResolvesTest` does the same thing in the
+same process — same `LanguageServices`, same two source-path entries, a project
+on external storage and a hand-written `R.java` under the generated root — and
+**passes**, with a control case proving it fails when `R.java` is removed. So
+the mechanism works when a test drives it and does not when the app does.
+
+The next thing to try is the difference the test does not model: the app's
+`R.java` is written by the **`:build` process** rather than by the process doing
+the resolving. Same uid and the same `cacheDir` path, so it should not matter,
+and the probe reads the file back from the main process happily — but it is
+what is left.
+
+Until then the user-visible effect is one stale error on a file that builds,
+which is worth knowing is not the user's fault.

@@ -345,6 +345,35 @@ class WorkspaceViewModelTest {
         }
     }
 
+    /**
+     * A file with an error in it reports it on open, without being typed in.
+     *
+     * `analyse` was reachable from `onTextChanged` and from two install
+     * callbacks, and from nothing else. So a broken file opened clean: the
+     * gutter was empty, Problems said "No problems found in project", and the
+     * first keystroke -- any keystroke, even one immediately undone -- made
+     * every error appear at once. Opening a file to see why it will not build
+     * is the ordinary reason to open it.
+     */
+    @Test
+    fun opening_a_file_analyses_it_without_waiting_for_a_keystroke() {
+        assumeTrue("no android.jar staged; language services are disabled", hasPlatform)
+
+        val broken = mainActivitySource.readText()
+            .replace("setContentView(text);", "setContentView(text); int x = notAThing;")
+        mainActivitySource.writeText(broken)
+
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(mainActivitySource) }
+
+        // No edit anywhere in this test: the only thing that has happened is
+        // that the file was opened.
+        awaitState("analysis to report the undefined symbol on open") { state ->
+            state.analysis.file == mainActivitySource &&
+                state.analysis.diagnostics.any { "notAThing" in it.message }
+        }
+    }
+
     @Test
     fun revealing_a_directory_expands_everything_above_it() {
         onMain { viewModel.open(project.rootDir) }
