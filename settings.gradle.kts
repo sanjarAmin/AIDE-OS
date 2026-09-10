@@ -134,3 +134,8 @@ include(":vcs:git")
 // Spike R6 -- JGit on ART, which M8 is designed around. Not part of the app.
 include(":spike:git")
 
+// The debugger. Spike R15 asks the permission question first: whether an
+// unprivileged app may attach to another app's JDWP at all, which decides
+// whether :debugger is a JDWP client or something else entirely.
+include(":spike:jdwp")
+
