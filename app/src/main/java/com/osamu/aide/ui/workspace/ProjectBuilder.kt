@@ -11,6 +11,7 @@ import com.osamu.aide.core.fs.ProjectLayout
 import com.osamu.aide.engine.fast.FastBuildSystem
 import com.osamu.aide.core.fs.BuildEngine
 import com.osamu.aide.engine.fast.NativeToolchainProvider
+import com.osamu.aide.engine.fast.ReleaseKeystoreStore
 import com.osamu.aide.engine.gradle.GradleToolchainProvider
 import com.osamu.aide.engine.fast.KotlinCompiler
 import com.osamu.aide.toolchain.manager.ToolchainComponent
@@ -58,6 +59,14 @@ class ProjectBuilder(
     private val gradle: GradleToolchainProvider,
     private val dispatchers: DispatcherProvider,
     /**
+     * The user's release key, when they have set one up.
+     *
+     * Null for callers that only build debug -- several tests -- and the
+     * engine refuses a release request without it rather than quietly signing
+     * with the device's throwaway key.
+     */
+    private val releaseKeys: ReleaseKeystoreStore? = null,
+    /**
      * Cache, not the project directory. Intermediates are large, regenerable,
      * and the system may clear them whenever it likes -- which is exactly the
      * contract a build directory wants.
@@ -83,7 +92,7 @@ class ProjectBuilder(
         return ToolchainComponent.nativeToolchain(Build.SUPPORTED_ABIS.first())
     }
 
-    fun build(project: Project): Flow<BuildEvent> = flow {
+    fun build(project: Project, debuggable: Boolean = true): Flow<BuildEvent> = flow {
         // **Which engine is a property of the project**, recorded when it was
         // created or imported. Checked before anything else because the Gradle
         // path needs none of what follows: it resolves its own dependencies and
@@ -126,12 +135,14 @@ class ProjectBuilder(
             dispatchers,
             kotlin.compiler(),
             native.toolchain(),
+            releaseKeys,
         )
         emitAll(
             engine.build(
                 BuildRequest(
                     project = project,
                     outputDir = outputFor(project),
+                    debuggable = debuggable,
                     dependencies = resolved,
                 ),
             ),

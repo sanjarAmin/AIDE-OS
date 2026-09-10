@@ -461,6 +461,7 @@ fun WorkspaceScreen(
                             onLaunchIntent = activityLauncher::launch,
                             onCloseDock = viewModel::closeBuildPanel,
                             onInstallDependencies = viewModel::installDependencies,
+                            onBuildRelease = { viewModel.build(debuggable = false) },
                             onSelectEngine = viewModel::setEngine,
                             editorSettings = editorSettings,
                             // The wide layout already has a side tool pane; a
@@ -569,6 +570,7 @@ private fun EditorArea(
     onLaunchIntent: (Intent) -> Unit,
     onCloseDock: () -> Unit,
     onInstallDependencies: () -> Unit,
+    onBuildRelease: () -> Unit,
     onSelectEngine: (BuildEngine) -> Unit,
     editorSettings: EditorSettings,
     showDock: Boolean,
@@ -673,6 +675,10 @@ private fun EditorArea(
                 // disabled is worse than no button.
                 onInstallDependencies = onInstallDependencies
                     .takeIf { state.projectLanguage == SourceLanguage.JAVASCRIPT },
+                // Only where the product is an APK: JavaScript and C# start a
+                // program, and there is nothing to sign.
+                onBuildRelease = onBuildRelease
+                    .takeIf { state.projectLanguage in BUILDS_AN_APK },
                 // Null for the languages with no engine: JavaScript and C#
                 // run rather than build, and offering them a choice between
                 // two APK pipelines would be offering a choice that does

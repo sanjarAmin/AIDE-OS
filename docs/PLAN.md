@@ -785,7 +785,7 @@ Made 2026-09-02:
 
 Every milestone is met, so the useful question stopped being "what is missing"
 and became "what is wrong". One session of opening the app and using it found
-twenty-four defects, **each of them behind a passing test suite**. They are listed
+twenty-five defects, **each of them behind a passing test suite**. They are listed
 because the pattern is more useful than any one of them.
 
 | What a user saw | What was true |
@@ -814,6 +814,7 @@ because the pattern is more useful than any one of them.
 | A file with errors in it opening clean | `analyse` was reachable from `onTextChanged` and from two install callbacks, and from nothing else. An empty gutter, "No problems found in project", and then every error at once on the first keystroke -- any keystroke, including one immediately undone. Opening a file to see why it will not build is the ordinary reason to open it |
 | A build that finished, and then stopped | `ApkInstaller` reported "AIDE-OS is not allowed to install apps yet" and offered `ACTION_MANAGE_UNKNOWN_APP_SOURCES`. **`REQUEST_INSTALL_PACKAGES` had never been declared**, and an app that has not declared it does not appear on that Settings page at all -- so the remedy was a dead end and the last two steps of build → install → run did not work for anyone. It went unseen because the install step had only ever been proven with privileges the app lacks: `ApkInstallerTest` flips appops, and M2's own acceptance test installs through shell `pm install` and says so. **Both this table's M2 row and R3 claimed the APK installs**; they were describing the test, not the app |
 | A red error on a project that builds and installs fine | `R.string.greeting` kept `package R does not exist` after a successful build that generates `R.java` -- for the life of the session, on every new project. **The compiler was warm, not the file wrong**: a `StandardJavaFileManager` caches what it finds at a location, so a service built before the first build holds an empty listing of the directory aapt2 is about to write into, and keeps it. Found by bisecting after a long wrong guess -- running the build in-process ruled out the `:build` process the finding had nominated, then asking a fresh service and the warm one the same question named it in one run |
+| A release APK signed with the throwaway debug key | Tapping "Build release APK" on a device with no `android.jar` offers the download, and the install resumed through `AfterInstall.BUILD` -- which is `build()`, which defaults to debug. Nothing said so: the only visible difference is the certificate on the finished file, and it took `keytool -printcert` on the APK to see `CN=AIDE-OS Debug` where `CN=AIDE-OS` belonged. **That is the exact thing `AfterInstall` exists to prevent** -- its own KDoc says what the user asked for "is not recoverable from the state the install is about to change" -- and it had three cases where it needed four. Mine, shipped and caught the first time it was driven |
 | *(not a defect)* The terminal's exited row | It has the same shape -- a message beside Restart, unweighted -- and I said so in a commit before measuring it. At 320 dp the button is laid out identically either way, because both messages the row can carry are short and fixed. The weight stayed as the right idiom; the test that could not fail did not |
 
 **None of these would have been found by more tests**, and several had tests
@@ -837,7 +838,7 @@ stage, commit `81e99f0`); the terminal (`ls`, `stty size`); both run engines
 from a cold install; and the language chips and terminal key row at tablet
 width, both of which I expected to be broken and neither of which was.
 
-Three of the twenty-four were things I first mis-diagnosed. The chat panel's chips
+Three of the twenty-five were things I first mis-diagnosed. The chat panel's chips
 and the terminal's key row both looked clipped and both already scroll; a
 `Row`'s last chip looked like it overflowed and was in fact squeezed. **Read the
 code before believing the screenshot, and the screenshot before believing the

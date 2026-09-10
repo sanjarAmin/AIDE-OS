@@ -90,6 +90,11 @@ fun BottomToolDock(
     onClose: () -> Unit,
     /** Null for a project npm has nothing to do with, which is most of them. */
     onInstallDependencies: (() -> Unit)? = null,
+    /**
+     * Builds signed with the user's key rather than the device's. Null for the
+     * languages that produce no APK.
+     */
+    onBuildRelease: (() -> Unit)? = null,
     /** Which engine builds this project, and how to change it. Null for the
      *  languages that have no engine because they do not build an APK. */
     engine: BuildEngine? = null,
@@ -279,6 +284,18 @@ fun BottomToolDock(
                                     onClick = onInstallDependencies,
                                     enabled = !buildState.isRunning,
                                 ) { Text("Install dependencies") }
+                            }
+                            // Only where an APK is the product. A Node or C#
+                            // project is started, not signed, and a release
+                            // button there would offer nothing.
+                            if (onBuildRelease != null) {
+                                TextButton(
+                                    onClick = onBuildRelease,
+                                    enabled = !buildState.isRunning,
+                                    modifier = Modifier.semantics {
+                                        contentDescription = "Build a release APK"
+                                    },
+                                ) { Text("Build release APK") }
                             }
                             if (buildState.log.isEmpty() && buildState.install == null) {
                                 Text(

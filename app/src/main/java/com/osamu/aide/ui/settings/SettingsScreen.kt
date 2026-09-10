@@ -50,7 +50,9 @@ fun SettingsScreen(onNavigateBack: () -> Unit) {
         // rather than of the app -- two projects on one phone can want
         // different ones -- so it lives in the workspace's Build tab beside the
         // output it produces.
-        SettingsSection("Build", "JDK level, and the keys a release APK is signed with."),
+        // Signing moved out of this list when it became real; what is left of
+        // "Build" is the JDK level.
+        SettingsSection("Build", "The JDK level a project is compiled against."),
     )
 
     val keys = koinInject<ApiKeyStore>()
@@ -78,6 +80,8 @@ fun SettingsScreen(onNavigateBack: () -> Unit) {
             item { GitSection(identities, credentials) }
             item { HorizontalDivider() }
             item { ToolchainSection(toolchain, dispatchers) }
+            item { HorizontalDivider() }
+            item { SigningSection(koinInject()) }
             item { HorizontalDivider() }
             item { EditorSection(editorPreferences) }
             item { HorizontalDivider() }

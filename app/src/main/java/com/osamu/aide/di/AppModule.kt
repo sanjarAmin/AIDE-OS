@@ -17,6 +17,7 @@ import com.osamu.aide.engine.deps.DependencyResolver
 import com.osamu.aide.engine.fast.ApkInstaller
 import com.osamu.aide.engine.fast.KotlinToolchainProvider
 import com.osamu.aide.engine.fast.NativeToolchainProvider
+import com.osamu.aide.engine.fast.ReleaseKeystoreStore
 import com.osamu.aide.engine.gradle.GradleToolchainProvider
 import com.osamu.aide.toolchain.manager.ToolchainManager
 import com.osamu.aide.toolchain.nativetools.NativeToolRunner
@@ -63,6 +64,10 @@ val appModule = module {
     // ApiKeyStore is a singleton because it holds a handle to a Keystore entry,
     // not the key itself; Assistant reads through it on every session so a key
     // changed in settings takes effect on the next message.
+    // The release keystore, held once: it owns a file in app-private storage
+    // and a platform-keystore secret, and the settings screen and the build
+    // must agree about both.
+    single { ReleaseKeystoreStore(get()) }
     single { ApiKeyStore(get()) }
     single { Assistant(get(), get()) }
 
@@ -121,6 +126,7 @@ val appModule = module {
             native = get(),
             gradle = get(),
             dispatchers = get(),
+            releaseKeys = get(),
             outputRoot = get(named(BUILD_OUTPUT_ROOT)),
         )
     }

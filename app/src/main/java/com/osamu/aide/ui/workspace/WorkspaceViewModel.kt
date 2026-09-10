@@ -70,6 +70,16 @@ enum class AfterInstall {
     /** The user tapped ▶. Build or run, whichever their project means. */
     BUILD,
 
+    /**
+     * The user tapped "Build release APK" and needed the platform first.
+     *
+     * Separate from [BUILD] for the reason this enum exists at all: resuming
+     * with the wrong one produces a *debug*-signed APK from a release request,
+     * silently, and the difference only shows up in the certificate on the
+     * finished file. Which it did, the first time this was driven.
+     */
+    BUILD_RELEASE,
+
     /** The user opened a Kotlin file and accepted a download for completion. */
     ANALYSE,
 
@@ -300,7 +310,8 @@ class WorkspaceViewModel(
      * asked for is not recoverable from the state the install is about to
      * change, which is the same lesson [offerComponentInstall] records.
      */
-    private var afterInstall = AfterInstall.BUILD
+    internal var afterInstall = AfterInstall.BUILD
+        private set
     private var analysisJob: Job? = null
     private var signatureJob: Job? = null
 
@@ -753,7 +764,17 @@ class WorkspaceViewModel(
         _state.update { it.copy(isSearchOpen = false) }
     }
 
-    fun build() {
+    /**
+     * Builds and installs, signed with the device's own key.
+     *
+     * [debuggable] false is the release path: the same pipeline, signed with
+     * the user's key instead. It is a separate action rather than a mode
+     * because the two produce different artefacts and only one of them is
+     * shippable -- and because a release build is refused outright when no key
+     * is set up, which a toggle silently sitting in the wrong position would
+     * make baffling.
+     */
+    fun build(debuggable: Boolean = true) {
         if (_state.value.build.isRunning) return
         buildJob = viewModelScope.launch {
             // A tap can beat the descriptor read -- the screen opened a moment
@@ -804,10 +825,13 @@ class WorkspaceViewModel(
                 return@launch
             }
             if (!builder.isPlatformInstalled()) {
-                offerPlatformInstall()
+                // Carried, not inferred: see AfterInstall.BUILD_RELEASE.
+                offerPlatformInstall(
+                    if (debuggable) AfterInstall.BUILD else AfterInstall.BUILD_RELEASE,
+                )
                 return@launch
             }
-            runBuild(project)
+            runBuild(project, debuggable)
         }
     }
 
@@ -1037,12 +1061,12 @@ class WorkspaceViewModel(
         }
     }
 
-    private suspend fun runBuild(project: Project) {
+    private suspend fun runBuild(project: Project, debuggable: Boolean = true) {
         try {
             _state.update {
                 it.copy(isBuildPanelOpen = true, build = BuildUiState(isRunning = true))
             }
-            runner.build(project).collect(::onBuildEvent)
+            runner.build(project, debuggable).collect(::onBuildEvent)
         } finally {
             _state.update {
                 it.copy(
@@ -1252,8 +1276,9 @@ class WorkspaceViewModel(
         )
     }
 
-    fun offerPlatformInstall() = offerComponentInstall(
+    fun offerPlatformInstall(then: AfterInstall = AfterInstall.BUILD) = offerComponentInstall(
         component = ToolchainComponent.ANDROID_PLATFORM,
+        then = then,
         rationale = "Building needs android.jar, which is about " +
             "${ToolchainComponent.ANDROID_PLATFORM.archiveBytes / (1024 * 1024)} MB " +
             "to download. It cannot be shipped inside AIDE-OS, so it is " +
@@ -1371,6 +1396,9 @@ class WorkspaceViewModel(
             // What the user asked for was a build; the download was the toll.
             // Starting it saves them tapping Build again.
             AfterInstall.BUILD -> build()
+
+            // The same, signed with the user's key rather than the device's.
+            AfterInstall.BUILD_RELEASE -> build(debuggable = false)
         }
     }
 

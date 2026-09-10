@@ -115,7 +115,7 @@ class WorkspaceViewModelTest {
             builder = projectBuilder,
             // The same builder, in this process: these tests are about a
             // device with no toolchains, not about where a build runs.
-            runner = BuildRunner { projectBuilder.build(it) },
+            runner = BuildRunner { project, debuggable -> projectBuilder.build(project, debuggable) },
             toolchain = toolchain,
             installer = ApkInstaller(context, dispatchers),
             languageServices = LanguageServices(
@@ -425,6 +425,43 @@ class WorkspaceViewModelTest {
         awaitState("the R error to clear now that R.java exists", timeoutMillis = 60_000) { state ->
             state.analysis.file == mainActivitySource &&
                 state.analysis.diagnostics.none { "R" in it.message && "does not exist" in it.message }
+        }
+    }
+
+    /**
+     * A release build interrupted by a download is still a release build.
+     *
+     * **This shipped and was caught by driving it.** Tapping "Build release
+     * APK" on a device with no `android.jar` offers the download, and the
+     * install used to resume through `AfterInstall.BUILD` -- which is
+     * `build()`, which defaults to debug. The APK came out signed with the
+     * device's throwaway key instead of the user's, and nothing said so: the
+     * only visible difference is the certificate on the finished file.
+     *
+     * That is exactly why `AfterInstall` exists, in its own words: what the
+     * user asked for "is not recoverable from the state the install is about
+     * to change". It had three cases and needed a fourth.
+     */
+    @Test
+    fun a_release_build_that_waits_for_a_download_resumes_as_a_release_build() {
+        // The platform is what a release build waits for, so this test is about
+        // a device that has none -- which is every device before the first
+        // build.
+        val jar = File(context.filesDir, "toolchains/platforms-android-36/android.jar")
+        val staged = jar.isFile
+        if (staged) jar.delete()
+        try {
+            onMain { viewModel.open(project.rootDir) }
+            onMain { viewModel.build(debuggable = false) }
+
+            awaitState("the platform download to be offered") { it.platform != null }
+            assertEquals(
+                "the release request was forgotten while the download was offered",
+                AfterInstall.BUILD_RELEASE,
+                viewModel.afterInstall,
+            )
+        } finally {
+            if (staged) stagePlatformJar()
         }
     }
 
