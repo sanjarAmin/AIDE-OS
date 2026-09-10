@@ -139,3 +139,8 @@ include(":spike:git")
 // whether :debugger is a JDWP client or something else entirely.
 include(":spike:jdwp")
 
+// The app R15 debugs. A second package on purpose: whether one app may reach
+// another's loopback JDWP port is the question that decides the debugger's
+// shape, and one process talking to itself cannot answer it.
+include(":spike:jdwpdebuggee")
+

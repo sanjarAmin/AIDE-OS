@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        **The debuggee needs this, and that is a finding, not a detail.**
+        `libjdwp` speaks `dt_socket` and nothing else on Android, so the JDWP
+        server is a TCP listener, and a process without INTERNET cannot call
+        `socket()`. The agent does not report that: it writes to a stdout nobody
+        is reading and calls `exit(2)`, so the app vanishes between
+        `nativeloader` and its own first log line, with `EXIT_SELF` and no
+        exception. Diagnosed here by adding the permission, exactly as
+        `JdwpReachabilityTest` was.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:label="JDWP debuggee"
+        android:allowBackup="false">
+        <activity
+            android:name=".DebuggeeActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
