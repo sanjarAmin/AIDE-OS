@@ -72,28 +72,56 @@ This cannot attach to another app: the agent loads into the caller. But AIDE-OS
 controls what it builds, so a stub linked into a debug build could open a
 channel from *inside* the debuggee to the IDE.
 
+## 4. Somebody has already answered the open question — Shizuku
+
+**CodeOnTheGo** (appdevforall, GPL-3.0, the other AndroidIDE fork) ships an
+on-device debugger and has described how. From its Show HN thread: they
+*"attach the JDWP agent to the target process at launch and route its output to
+our debugger over a local socket"*, using *"a scoped adaptation of the
+[Shizuku](https://shizuku.rikka.app/) project to get the necessary system
+access without requiring root."*
+
+That is §2's branch, taken and working. Shizuku's whole trick is to run a
+helper process **as `shell`**, started either by root or — the part that
+matters here — by the user pairing over **wireless debugging on the device
+itself**, no PC involved. From `shell` the things an app cannot do become
+available: `am set-debug-app`, reading `/proc`, and reaching JDWP.
+
+So the answer to "can an unprivileged app debug another app" is: *not as
+itself*, but **yes through a shell-privileged helper the user grants once**.
+The connection §2 observed was real; what was missing was the authentication,
+and pairing is how that is done.
+
+This changes the recommendation below. It does not remove the phone test — what
+still needs measuring is what the pairing flow costs a *user* (how many steps,
+how often it must be redone, what happens across reboots), because that cost is
+the feature's real price and it cannot be judged from an emulator.
+
 ## What this makes `:debugger`
 
-Routes 1 and 3 together say the module is **not a JDWP client attaching to
-arbitrary processes**. That shape is unavailable to an unprivileged app, and
+Routes 1 and 3 say the module is **not a JDWP client attaching to arbitrary
+processes on its own**. That shape is unavailable to an unprivileged app, and
 `docs/PLAN.md`'s one-line description assumes otherwise.
 
-What is available is **cooperative debugging of apps AIDE-OS built**: a debug
-build carries a stub, the stub speaks to the IDE, and the IDE drives it. That
-is narrower than Android Studio and is close to the whole requirement — the
-apps a user wants to debug here are the ones they just built.
+Two shapes remain, and §4 makes the first the likely one:
 
-The open question, before committing to that, is §2's second caveat: if an app
-can authenticate to adbd over wireless debugging, the JDWP route reopens for
-*any* debuggable app, and the cooperative stub becomes unnecessary. That needs
-a physical device, and it is worth an hour before the stub is designed.
+1. **A shell-privileged helper, Shizuku-style.** The user pairs once over
+   wireless debugging; the helper launches the debuggee with a JDWP agent and
+   pipes it back. Debugs any debuggable app, matches what CodeOnTheGo does, and
+   costs the user a pairing flow to be measured on hardware.
+2. **A stub in the build template.** A debug build AIDE-OS produces carries an
+   agent that opens a channel from inside. No pairing, no privileged helper,
+   and it only ever debugs apps built here — which for this product is close to
+   the whole requirement.
 
-Order of work, therefore:
+They are not exclusive: (2) is a smaller first step that works with no user
+setup at all, and (1) is the upgrade that generalises it. Starting with (2)
+would give a working debugger for the case that matters while the pairing cost
+of (1) is being measured.
 
-1. On a phone: enable wireless debugging, and find out whether an app can pair
-   and authenticate. This is the branch point.
-2. If it can — `:debugger` is a JDWP client over adb, and works on any
-   debuggable app.
-3. If it cannot — `:debugger` is a stub in the build template plus a client,
-   and works on apps built here. Say so plainly in the UI, because "debug"
-   meaning something narrower than usual is a promise worth keeping honest.
+Order of work:
+
+1. On a phone: run the wireless-debugging pairing flow by hand and count what
+   it asks of the user. That is the input the choice above needs.
+2. Build (2) far enough to step a line in an app AIDE-OS built.
+3. Decide whether (1) is worth its setup cost, with both numbers in hand.
