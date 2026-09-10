@@ -139,6 +139,11 @@ include(":spike:git")
 // whether :debugger is a JDWP client or something else entirely.
 include(":spike:jdwp")
 
+// The debugger. Spike R15 answered the permission question first, and the
+// answer moved the module: it is a JDWP *client*, and the debuggee is a debug
+// build we produced, which attaches the platform's own agent to itself.
+include(":debugger")
+
 // The app R15 debugs. A second package on purpose: whether one app may reach
 // another's loopback JDWP port is the question that decides the debugger's
 // shape, and one process talking to itself cannot answer it.

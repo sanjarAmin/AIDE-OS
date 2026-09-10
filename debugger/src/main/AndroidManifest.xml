@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        The debugger connects to the debuggee over loopback TCP, because
+        dt_socket is the only transport ART's libjdwp offers. Declared by the
+        library so that any app hosting the debugger gets it: without it
+        socket() fails with EPERM and the failure reads as the debuggee
+        refusing the connection. tools/jdwp/FINDINGS.md, sections 2 and 3.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+</manifest>
