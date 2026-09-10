@@ -50,6 +50,15 @@ class FastBuildSystem(
      * all. A project with C sources on a device without it is refused by name.
      */
     private val clang: ClangToolchain? = null,
+    /**
+     * Where the user's release key lives, when they have one.
+     *
+     * Null for a caller that only ever builds debug -- the tests, mostly.
+     * A *release* request without it is refused by name, the same way a Kotlin
+     * project without a compiler is, rather than reaching the signing stage
+     * and failing inside apksig with nothing pointing at the cause.
+     */
+    private val releaseKeys: ReleaseKeystoreStore? = null,
 ) : BuildSystem {
 
     private val resources = ResourceStage(runner)
@@ -205,7 +214,11 @@ class FastBuildSystem(
             }
 
             stage(BuildStage.SIGN, diagnostics) {
-                val key = withContext(dispatchers.io) { DebugSigningKey.load() }
+                // Debug is the device's own key, which never leaves it. Release
+                // is the user's, which must: see ReleaseSigningKey.
+                val key = withContext(dispatchers.io) {
+                    if (request.debuggable) DebugSigningKey.load() else releaseKeys!!.signingKey()
+                }
                 signer.sign(workspace.unsignedApk, workspace.outputApk, key, minSdk)
             }
 
@@ -265,6 +278,18 @@ class FastBuildSystem(
 
         layout.javaSources().isEmpty() && layout.kotlinSources().isEmpty() ->
             "This project has no sources."
+
+        // Both halves, because they are different problems with different
+        // answers: no key at all is a trip to Settings, while a key whose
+        // passphrase is not remembered is a prompt the caller has to raise
+        // before starting the build.
+        !request.debuggable && releaseKeys?.isConfigured() != true ->
+            "This is a release build and there is no release signing key. " +
+                "Add one in Settings."
+
+        !request.debuggable && releaseKeys?.hasRememberedPassphrase() == false ->
+            "This release key's passphrase is not remembered, so the build " +
+                "cannot sign without being asked for it."
 
         else -> platform.validate()
     }
