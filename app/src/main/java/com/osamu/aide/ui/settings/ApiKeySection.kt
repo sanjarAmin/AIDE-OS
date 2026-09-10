@@ -3,6 +3,7 @@ package com.osamu.aide.ui.settings
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -47,6 +48,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.osamu.aide.ai.core.AiProviderType
 import com.osamu.aide.ai.core.ApiKeyStore
@@ -57,23 +59,42 @@ import com.osamu.aide.ai.core.parseEndpoint
 /**
  * Choosing an assistant and giving it a key.
  *
- * **Ordered as the job is done, not as the data is stored.** Three groups, each
- * answering one question: which assistant, what key, and how it behaves. The
- * previous version was one flat column of controls under a single Save button,
- * so nothing said which control that button applied to -- and it applied to two
- * of them.
+ * **The provider is a container, not a chip.** Everything a chip changes --
+ * the key, the model, the address requests go to -- is drawn inside one surface
+ * headed with that provider's name, and everything the chip does *not* change
+ * sits outside it under a heading that says so. The previous version was one
+ * flat column in which the strongest rule on the screen fell between the model
+ * and the key, which are both per-provider, while "Share project context",
+ * which is one app-wide preference, sat inside the same block as the selected
+ * provider's credentials. Nothing said what tapping a chip changed, and the one
+ * plausible reading -- that context sharing was Anthropic's, and Gemini had its
+ * own -- was wrong.
  *
- * Three things here are deliberately factual rather than decorative:
+ * The card's title repeats the word already showing on the selected chip. That
+ * repetition is the mechanism: it is what binds the rows to the selection
+ * without a sentence explaining the binding, and it is why
+ * "Each service remembers its own model" could be deleted rather than reworded.
+ *
+ * **Three properties, one row each, values always visible.** Key, model and
+ * endpoint were a status row, a dropdown and a disclosure -- three shapes for
+ * three things of the same kind, one of which hid its value until asked. They
+ * are now the same row, and each shows what it is currently set to, so the
+ * question this screen exists to answer -- *where does my key go?* -- is
+ * answered by reading rather than by tapping Advanced. That change is what
+ * surfaced [endpointDetail]'s last case: a Custom provider with no address set
+ * sends its requests to OpenAI, which was true before and invisible.
+ *
+ * Three things kept from the previous version, each for a reason recorded then:
  *
  *  - **The tick on a provider chip** answers "which of these can I use", which
  *    otherwise took four taps to find out. It means a key is stored, not that
  *    the key works; only a successful request proves that.
- *  - **Remove names its provider**, because it now removes only that provider's
- *    key. It used to call [ApiKeyStore.clear], which wipes all four and deletes
- *    the Keystore alias, while the label said "a key".
- *  - **Two Save buttons, each naming what it writes.** With one button a typo in
- *    the endpoint blocked saving the key, and saving a key silently rewrote the
- *    endpoint.
+ *  - **Remove names one provider.** It used to call [ApiKeyStore.clear], which
+ *    wipes all four and deletes the Keystore alias, while the label said
+ *    "a key".
+ *  - **Two Save buttons, each naming what it writes.** With one button a typo
+ *    in the endpoint blocked saving the key, and saving a key silently rewrote
+ *    the endpoint.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -91,7 +112,7 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
     // the previous provider's state under the new provider's name.** That is
     // ai/core/FINDINGS.md section 17's bug, where one provider's key appeared
     // under another, and it was being prevented by re-reading each of these by
-    // hand in the chip's `onClick` -- correct, and a trap: a sixth piece of
+    // hand in the chip's `onClick` -- correct, and a trap: a seventh piece of
     // per-provider state added here and forgotten there brings the bug back,
     // silently, in a screen about credentials. The key does it structurally,
     // and a new value is right by construction.
@@ -106,12 +127,18 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
     }
     var endpointDraft by remember(activeProvider) { mutableStateOf(storedEndpoint) }
 
-    // Open when there is already something to see, or when the provider is the
-    // one whose entire purpose is a custom address. Otherwise the endpoint is a
-    // field almost nobody wants, sitting between the key and the switch.
-    var showAdvanced by remember {
-        mutableStateOf(storedEndpoint.isNotEmpty() || activeProvider == AiProviderType.CUSTOM)
+    // Open when there is no key, because on a fresh install typing one is the
+    // only thing this screen is for. Once a key is stored the row collapses to
+    // its state: a full-width field labelled "Replace key" was the largest
+    // thing on the screen in the state where nothing needs doing.
+    var editingKey by remember(activeProvider) {
+        mutableStateOf(!keys.hasProviderKey(activeProvider))
     }
+    // Never open by default any more. It used to be, whenever an endpoint was
+    // stored, so that a custom address could not be forgotten and blamed on the
+    // network -- the row now shows the address whether or not it is open, which
+    // is the same guarantee without the field.
+    var editingEndpoint by remember(activeProvider) { mutableStateOf(false) }
 
     val endpoint = parseEndpoint(endpointDraft)
     val normalised = when (endpoint) {
@@ -135,7 +162,7 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
             )
-            Text("AI Assistant", style = MaterialTheme.typography.titleMedium)
+            Text("AI assistant", style = MaterialTheme.typography.titleMedium)
         }
 
         Text(
@@ -143,12 +170,12 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
             // that does not exist is worse than naming none. See
             // GoogleAuthManager.SIGN_IN_ENABLED.
             text = "Bring a key from one of these services. Keys are encrypted by the " +
-                "device's hardware keystore, and are sent only to the service you pick.",
+                "device's hardware keystore and sent only to the service you pick.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        // == 1. Which assistant ==============================================
+        // == The picker ======================================================
 
         // FlowRow, not Row: four chips do not fit the width of a phone, and a
         // Row shrinks the last one until its label wraps one character per
@@ -162,17 +189,10 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                 FilterChip(
                     selected = activeProvider == provider,
                     onClick = {
-                        // The store first: everything above reads it on the
+                        // The store first: everything below reads it on the
                         // recomposition this line causes.
                         keys.setActiveProvider(provider)
                         activeProvider = provider
-                        // Not keyed, deliberately: the disclosure is sticky.
-                        // Opened once, it stays open across a provider switch,
-                        // where a keyed remember would shut it again on any
-                        // provider that happens to have no endpoint stored.
-                        showAdvanced = showAdvanced ||
-                            keys.providerBaseUrl(provider).orEmpty().isNotEmpty() ||
-                            provider == AiProviderType.CUSTOM
                     },
                     label = { Text(provider.displayName) },
                     leadingIcon = if (keys.hasProviderKey(provider)) {
@@ -190,249 +210,176 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
             }
         }
 
-        // The Google card is a real second way in, so it stays a card -- but
-        // only when it can do something. Rendering a signed-out card with no
-        // button, which is what SIGN_IN_ENABLED = false leaves, advertises a
-        // route that does not exist.
-        if (activeProvider == AiProviderType.GEMINI &&
-            (isGoogleSignedIn || GoogleAuthManager.SIGN_IN_ENABLED)
+        // == What the picker selects =========================================
+
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            ),
+            modifier = Modifier.fillMaxWidth(),
         ) {
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
-                ),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Icon(
-                            Icons.Default.AccountCircle,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
-                        Column {
-                            Text(
-                                text = if (isGoogleSignedIn) {
-                                    "Signed in as ${googleEmail ?: "a Google Account"}"
-                                } else {
-                                    "Google Account"
-                                },
-                                style = MaterialTheme.typography.titleSmall,
+            Column(Modifier.padding(vertical = 6.dp)) {
+                Text(
+                    // The selected chip's own word, on purpose. See the class
+                    // comment: this is what scopes the rows below it.
+                    text = activeProvider.displayName,
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp),
+                )
+
+                // The Google card is a real second way in, so it stays a card --
+                // but only when it can do something. Rendering a signed-out card
+                // with no button, which is what SIGN_IN_ENABLED = false leaves,
+                // advertises a route that does not exist. It sits inside the
+                // provider's surface because it is Gemini's, not the screen's.
+                if (activeProvider == AiProviderType.GEMINI &&
+                    (isGoogleSignedIn || GoogleAuthManager.SIGN_IN_ENABLED)
+                ) {
+                    GoogleAccount(
+                        signedIn = isGoogleSignedIn,
+                        email = googleEmail,
+                        scopes = googleScopes,
+                        onSignIn = {
+                            val authManager = GoogleAuthManager(keys)
+                            val request = authManager.createAuthorizationRequest()
+                            context.startActivity(
+                                Intent(Intent.ACTION_VIEW, Uri.parse(request.authUrl)),
                             )
-                            // **The scopes Google granted, not the ones asked
-                            // for.** A dropped scope is invisible until the
-                            // first request fails with
-                            // ACCESS_TOKEN_SCOPE_INSUFFICIENT, which names the
-                            // method and not the scope -- and a toast was
-                            // truncated on the device this was diagnosed on,
-                            // which emits no logcat either. It lives here
-                            // because here it can be read.
-                            if (isGoogleSignedIn) {
-                                Text(
-                                    text = "Granted: " + (
-                                        googleScopes
-                                            ?.split(' ')
-                                            ?.joinToString(", ") { it.substringAfterLast('/') }
-                                            ?: "not reported"
-                                        ),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        },
+                        onSignOut = {
+                            keys.signOutGoogle()
+                            isGoogleSignedIn = false
+                            googleEmail = null
+                            googleScopes = null
+                            saved = keys.hasProviderKey(activeProvider)
+                        },
+                    )
+                }
+
+                // -- Key ---------------------------------------------------
+
+                ProviderProperty(
+                    label = "Key",
+                    value = if (saved) "Saved on this device" else "Not set",
+                    expanded = editingKey,
+                    onToggle = { editingKey = !editingKey },
+                ) {
+                    OutlinedTextField(
+                        value = draft,
+                        onValueChange = { draft = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics { contentDescription = "API key" },
+                        label = { Text(if (saved) "Replace key" else "API key") },
+                        placeholder = { Text(keyPlaceholder(activeProvider)) },
+                        supportingText = { Text(whereToGetAKey(activeProvider)) },
+                        singleLine = true,
+                        visualTransformation = if (revealed) {
+                            VisualTransformation.None
+                        } else {
+                            PasswordVisualTransformation()
+                        },
+                        trailingIcon = {
+                            IconButton(onClick = { revealed = !revealed }) {
+                                Icon(
+                                    if (revealed) {
+                                        Icons.Default.VisibilityOff
+                                    } else {
+                                        Icons.Default.Visibility
+                                    },
+                                    contentDescription = if (revealed) "Hide key" else "Show key",
                                 )
                             }
-                        }
-                    }
-
-                    if (isGoogleSignedIn) {
-                        Text(
-                            "Gemini does not accept a Google sign-in for chat requests. " +
-                                "Add an API key below instead.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        OutlinedButton(
-                            onClick = {
-                                keys.signOutGoogle()
-                                isGoogleSignedIn = false
-                                googleEmail = null
-                                googleScopes = null
-                                saved = keys.hasProviderKey(activeProvider)
-                            },
-                        ) {
-                            Text("Sign out")
-                        }
-                    } else {
+                        },
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
                             onClick = {
-                                val authManager = GoogleAuthManager(keys)
-                                val request = authManager.createAuthorizationRequest()
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(request.authUrl))
-                                context.startActivity(intent)
+                                val trimmed = draft.trim()
+                                when (activeProvider) {
+                                    // Only Anthropic writes the legacy slot.
+                                    // Every provider used to write it, so saving
+                                    // a Gemini key put that key in Anthropic's
+                                    // store and lit Anthropic's tick.
+                                    AiProviderType.ANTHROPIC -> keys.save(trimmed)
+                                    AiProviderType.GEMINI -> keys.saveGeminiApiKey(trimmed)
+                                    AiProviderType.OPENAI -> keys.saveOpenAiApiKey(trimmed)
+                                    AiProviderType.CUSTOM -> keys.saveCustomApiKey(trimmed)
+                                }
+                                saved = true
+                                draft = ""
+                                revealed = false
+                                editingKey = false
                             },
-                        ) {
-                            Text("Sign in with Google")
+                            enabled = draft.isNotBlank(),
+                        ) { Text("Save key") }
+
+                        if (saved) {
+                            TextButton(
+                                onClick = {
+                                    keys.clearProviderKey(activeProvider)
+                                    saved = keys.hasProviderKey(activeProvider)
+                                    draft = ""
+                                    // Left open: there is now nothing stored,
+                                    // and the field is what to do about it.
+                                    editingKey = true
+                                },
+                            ) { Text("Remove") }
                         }
                     }
                 }
-            }
-        }
 
-        var showModelDropdown by remember { mutableStateOf(false) }
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text("Model", style = MaterialTheme.typography.bodyMedium)
-                Text(
-                    "Each service remembers its own model.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Box {
-                OutlinedButton(
-                    onClick = { showModelDropdown = true },
-                    modifier = Modifier.semantics { contentDescription = "Model" },
-                ) {
-                    Text(activeModel)
-                }
-                DropdownMenu(
-                    expanded = showModelDropdown,
-                    onDismissRequest = { showModelDropdown = false },
-                ) {
-                    activeProvider.availableModels.forEach { model ->
-                        DropdownMenuItem(
-                            text = { Text(model) },
-                            onClick = {
-                                activeModel = model
-                                keys.setActiveModel(activeProvider, model)
-                                showModelDropdown = false
-                            },
-                        )
+                PropertyDivider()
+
+                // -- Model -------------------------------------------------
+
+                var showModelDropdown by remember { mutableStateOf(false) }
+                Box {
+                    ProviderProperty(
+                        label = "Model",
+                        value = activeModel,
+                        // The menu covers the row, so there is no expanded
+                        // state to show underneath it.
+                        expanded = false,
+                        onToggle = { showModelDropdown = true },
+                        rowSemantics = "Model",
+                    )
+                    DropdownMenu(
+                        expanded = showModelDropdown,
+                        onDismissRequest = { showModelDropdown = false },
+                    ) {
+                        activeProvider.availableModels.forEach { model ->
+                            DropdownMenuItem(
+                                text = { Text(model) },
+                                onClick = {
+                                    activeModel = model
+                                    keys.setActiveModel(activeProvider, model)
+                                    showModelDropdown = false
+                                },
+                            )
+                        }
                     }
                 }
-            }
-        }
 
-        HorizontalDivider()
+                PropertyDivider()
 
-        // == 2. Its key ======================================================
+                // -- Endpoint ----------------------------------------------
 
-        if (saved) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Icon(
-                    Icons.Default.CheckCircle,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-                Text(
-                    text = "${activeProvider.displayName} key saved",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(
-                    onClick = {
-                        keys.clearProviderKey(activeProvider)
-                        saved = keys.hasProviderKey(activeProvider)
-                        draft = ""
-                    },
-                ) { Text("Remove") }
-            }
-        }
-
-        OutlinedTextField(
-            value = draft,
-            onValueChange = { draft = it },
-            modifier = Modifier
-                .fillMaxWidth()
-                .semantics { contentDescription = "API key" },
-            label = { Text(if (saved) "Replace key" else "API key") },
-            placeholder = { Text(keyPlaceholder(activeProvider)) },
-            supportingText = { Text(whereToGetAKey(activeProvider)) },
-            singleLine = true,
-            visualTransformation = if (revealed) VisualTransformation.None else PasswordVisualTransformation(),
-            trailingIcon = {
-                IconButton(onClick = { revealed = !revealed }) {
-                    Icon(
-                        if (revealed) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                        contentDescription = if (revealed) "Hide key" else "Show key",
-                    )
-                }
-            },
-        )
-
-        Button(
-            onClick = {
-                val trimmed = draft.trim()
-                when (activeProvider) {
-                    // Only Anthropic writes the legacy slot. Every provider used
-                    // to write it, so saving a Gemini key put that key in
-                    // Anthropic's store and lit Anthropic's tick.
-                    AiProviderType.ANTHROPIC -> keys.save(trimmed)
-                    AiProviderType.GEMINI -> keys.saveGeminiApiKey(trimmed)
-                    AiProviderType.OPENAI -> keys.saveOpenAiApiKey(trimmed)
-                    AiProviderType.CUSTOM -> keys.saveCustomApiKey(trimmed)
-                }
-                saved = true
-                draft = ""
-                revealed = false
-            },
-            enabled = draft.isNotBlank(),
-        ) { Text("Save key") }
-
-        HorizontalDivider()
-
-        // == 3. How it behaves ===============================================
-
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text("Share project context", style = MaterialTheme.typography.bodyMedium)
-                Text(
-                    "Send your file tree and compiler errors along with each question.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Switch(
-                checked = shareContext,
-                onCheckedChange = {
-                    shareContext = it
-                    keys.setShareProjectContext(it)
-                },
-            )
-        }
-
-        TextButton(onClick = { showAdvanced = !showAdvanced }) {
-            Text(if (showAdvanced) "Hide advanced" else "Advanced")
-            Icon(
-                if (showAdvanced) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                contentDescription = null,
-            )
-        }
-
-        AnimatedVisibility(visible = showAdvanced) {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (activeProvider == AiProviderType.GEMINI) {
+                ProviderProperty(
+                    label = "Endpoint",
+                    value = endpointValue(activeProvider, storedEndpoint),
+                    detail = endpointDetail(activeProvider, storedEndpoint),
+                    expanded = editingEndpoint,
                     // GeminiAiClient takes no base URL, so a field here would be
-                    // one that accepts an address and ignores it.
-                    Text(
-                        "Gemini always goes to Google's own endpoint. " +
-                            "Pick Custom to use a service of your own.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
+                    // one that accepts an address and ignores it. The row still
+                    // appears, saying where Gemini goes: a row that is missing
+                    // reads as a setting hidden somewhere else.
+                    onToggle = if (activeProvider == AiProviderType.GEMINI) {
+                        null
+                    } else {
+                        { editingEndpoint = !editingEndpoint }
+                    },
+                ) {
                     OutlinedTextField(
                         value = endpointDraft,
                         onValueChange = { endpointDraft = it },
@@ -440,16 +387,7 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                             .fillMaxWidth()
                             .semantics { contentDescription = "API endpoint" },
                         label = { Text("API endpoint") },
-                        placeholder = {
-                            Text(
-                                when (activeProvider) {
-                                    AiProviderType.GEMINI -> "Google AI (default)"
-                                    AiProviderType.ANTHROPIC -> "Anthropic (default)"
-                                    AiProviderType.OPENAI -> "OpenAI (default)"
-                                    AiProviderType.CUSTOM -> "https://my-proxy.local"
-                                },
-                            )
-                        },
+                        placeholder = { Text("https://my-proxy.local") },
                         singleLine = true,
                         isError = endpoint is Endpoint.Rejected,
                         supportingText = {
@@ -457,7 +395,8 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                                 text = when (endpoint) {
                                     is Endpoint.Rejected -> endpoint.reason
                                     is Endpoint.Custom -> "Your key will be sent to this address."
-                                    Endpoint.Default -> "Leave blank for the default service endpoint."
+                                    Endpoint.Default ->
+                                        "Leave blank for the default service endpoint."
                                 },
                             )
                         },
@@ -472,6 +411,196 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                     ) { Text("Save endpoint") }
                 }
             }
+        }
+
+        // == What the picker does not select =================================
+
+        HorizontalDivider(Modifier.padding(top = 6.dp))
+
+        Text(
+            // The fix for this screen's worst reading. One preference, one
+            // heading, outside the card -- so it cannot be read as Anthropic's.
+            text = "Applies to every assistant",
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            // Weighted, or the Switch is measured in what a two-line detail
+            // leaves and draws at zero width. CLAUDE.md, seven instances.
+            Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                Text("Share project context", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "Send your file tree and compiler errors along with each question.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = shareContext,
+                onCheckedChange = {
+                    shareContext = it
+                    keys.setShareProjectContext(it)
+                },
+                modifier = Modifier.semantics { contentDescription = "Share project context" },
+            )
+        }
+    }
+}
+
+/**
+ * One property of the selected provider: what it is, what it is set to, and a
+ * way to change it.
+ *
+ * **Values live under their label, never to the right of it.** The right-hand
+ * slot holds a fixed-size chevron and nothing else, because a variable-width
+ * value opposite a variable-width label is the row this codebase has shipped
+ * broken seven times -- a `Row` squeezes rather than overflows, and the half
+ * that loses is whichever one is not weighted. Here the label column is
+ * weighted and the only other child cannot be compressed, so there is no width
+ * for the layout to get wrong. [ProviderPropertyTest] asserts it by comparing
+ * this chevron against the same chevron in a row whose label is one word.
+ */
+@Composable
+private fun ProviderProperty(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    detail: String? = null,
+    expanded: Boolean = false,
+    onToggle: (() -> Unit)? = null,
+    rowSemantics: String? = null,
+    editor: @Composable () -> Unit = {},
+) {
+    Column(modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(if (onToggle != null) Modifier.clickable(onClick = onToggle) else Modifier)
+                .then(
+                    if (rowSemantics != null) {
+                        Modifier.semantics { contentDescription = rowSemantics }
+                    } else {
+                        Modifier
+                    },
+                )
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                Text(label, style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    text = value,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    // Two lines, not one: an endpoint is the value most likely
+                    // to be long, and a URL ellipsised in the middle is worse
+                    // than a URL on two lines.
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (detail != null) {
+                    Text(
+                        text = detail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            if (onToggle != null) {
+                Icon(
+                    if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        AnimatedVisibility(visible = expanded) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) { editor() }
+        }
+    }
+}
+
+/** Inset, so it separates the rows without cutting the card in half. */
+@Composable
+private fun PropertyDivider() {
+    HorizontalDivider(
+        modifier = Modifier.padding(horizontal = 16.dp),
+        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+    )
+}
+
+@Composable
+private fun GoogleAccount(
+    signedIn: Boolean,
+    email: String?,
+    scopes: String?,
+    onSignIn: () -> Unit,
+    onSignOut: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                Icons.Default.AccountCircle,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = if (signedIn) {
+                        "Signed in as ${email ?: "a Google Account"}"
+                    } else {
+                        "Google Account"
+                    },
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                // **The scopes Google granted, not the ones asked for.** A
+                // dropped scope is invisible until the first request fails with
+                // ACCESS_TOKEN_SCOPE_INSUFFICIENT, which names the method and
+                // not the scope -- and a toast was truncated on the device this
+                // was diagnosed on, which emits no logcat either. It lives here
+                // because here it can be read.
+                if (signedIn) {
+                    Text(
+                        text = "Granted: " + (
+                            scopes
+                                ?.split(' ')
+                                ?.joinToString(", ") { it.substringAfterLast('/') }
+                                ?: "not reported"
+                            ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+
+        if (signedIn) {
+            Text(
+                "Gemini does not accept a Google sign-in for chat requests. " +
+                    "Add a key below instead.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedButton(onClick = onSignOut) { Text("Sign out") }
+        } else {
+            Button(onClick = onSignIn) { Text("Sign in with Google") }
         }
     }
 }
@@ -494,5 +623,34 @@ private fun whereToGetAKey(provider: AiProviderType): String = when (provider) {
     AiProviderType.GEMINI -> "Create one at aistudio.google.com/apikey"
     AiProviderType.ANTHROPIC -> "Create one at console.anthropic.com under API keys"
     AiProviderType.OPENAI -> "Create one at platform.openai.com/api-keys"
-    AiProviderType.CUSTOM -> "Any OpenAI-compatible service. Set its address under Advanced."
+    AiProviderType.CUSTOM -> "Any OpenAI-compatible service."
+}
+
+/** What the endpoint row reads when it is closed, which is most of the time. */
+private fun endpointValue(provider: AiProviderType, stored: String): String = when {
+    provider == AiProviderType.GEMINI -> "Google's own, and fixed"
+    stored.isNotEmpty() -> stored
+    else -> "Default"
+}
+
+/**
+ * The sentence under the endpoint, where there is one worth reading.
+ *
+ * **The last case is a real defect this row made visible.** `Assistant` builds
+ * Custom out of `OpenAiClient`, which falls back to `DEFAULT_BASE_URL` when it
+ * is given no address -- so picking Custom and stopping there sends the key to
+ * OpenAI. That was true while the endpoint lived behind an "Advanced"
+ * disclosure and nothing said it; a row that always shows its value has to say
+ * something, and the honest thing to say is where the requests go.
+ */
+private fun endpointDetail(provider: AiProviderType, stored: String): String? = when {
+    provider == AiProviderType.GEMINI ->
+        "Pick Custom to send requests to a service of your own."
+
+    stored.isNotEmpty() -> "Your key is sent here."
+
+    provider == AiProviderType.CUSTOM ->
+        "Until you set one, requests go to OpenAI's API."
+
+    else -> "Requests go to ${provider.displayName}'s own API."
 }

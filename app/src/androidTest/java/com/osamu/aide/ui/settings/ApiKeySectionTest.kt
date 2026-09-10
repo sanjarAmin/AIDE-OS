@@ -6,7 +6,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -83,11 +85,34 @@ class ApiKeySectionTest {
         Column(Modifier.verticalScroll(rememberScrollState())) { ApiKeySection(keys) }
     }
 
-    /** The endpoint is behind a disclosure unless one is already stored. */
-    private fun revealEndpoint() {
-        compose.onNodeWithText("Advanced").performScrollTo().performClick()
+    /**
+     * Opens the row a property is edited in.
+     *
+     * Each of the three per-provider properties is a row showing its current
+     * value, and the editor is behind it. **The value is on screen either way**
+     * -- that is the point of the shape, and it is why the tests that assert a
+     * *stored* endpoint is visible do not call this.
+     */
+    private fun reveal(property: String) {
+        compose.onNodeWithText(property).performScrollTo().performClick()
         compose.waitForIdle()
     }
+
+    /**
+     * The key editor, which is open already when no key is stored.
+     *
+     * Tapping it in that state would close it, so this checks first: a helper
+     * that toggles is a helper that half the tests have to not call.
+     */
+    private fun revealKey() {
+        if (compose.onAllNodesWithContentDescription("API key")
+                .fetchSemanticsNodes().isEmpty()
+        ) {
+            reveal("Key")
+        }
+    }
+
+    private fun revealEndpoint() = reveal("Endpoint")
 
     @Test
     fun a_typed_key_is_saved_to_the_keystore() {
@@ -133,8 +158,11 @@ class ApiKeySectionTest {
         keys.save("sk-ant-secret")
         showSection()
 
-        compose.onNodeWithText("Anthropic key saved").assertExists()
+        compose.onNodeWithText("Saved on this device").assertExists()
         compose.onNodeWithText("sk-ant-secret").assertDoesNotExist()
+        // Nor is there a field to type into: with a key stored the row is
+        // closed, and opening it is the deliberate act.
+        compose.onNodeWithContentDescription("API key").assertDoesNotExist()
     }
 
     /**
@@ -249,14 +277,19 @@ class ApiKeySectionTest {
         compose.waitForIdle()
 
         assertEquals("https://gateway.internal", keys.baseUrl())
-        compose.onNodeWithText("https://gateway.internal").performScrollTo().assertExists()
+        // The field, not any node with that text: the row above it now shows
+        // the stored value too, and the claim here is about what is *typed*.
+        compose.onNodeWithContentDescription("API endpoint")
+            .performScrollTo()
+            .assertTextContains("https://gateway.internal")
     }
 
     /**
-     * A stored endpoint opens the disclosure it lives in.
+     * A stored endpoint is readable without opening anything.
      *
      * A custom address is the kind of setting that is forgotten and then blamed
-     * on the network, so it is never hidden once it is set.
+     * on the network, so it is never hidden once it is set. It used to force a
+     * disclosure open; now the row shows it as its value.
      */
     @Test
     fun an_endpoint_that_is_already_set_is_shown_without_being_asked_for() {
@@ -271,6 +304,7 @@ class ApiKeySectionTest {
     fun blanking_the_endpoint_restores_the_default() {
         keys.saveBaseUrl(Endpoint.Custom("https://gateway.internal"))
         showSection()
+        revealEndpoint()
 
         compose.onNodeWithContentDescription("API endpoint").performScrollTo().performTextClearance()
         compose.onNodeWithText("Save endpoint").performScrollTo().performClick()
@@ -316,6 +350,7 @@ class ApiKeySectionTest {
     fun a_custom_providers_endpoint_is_stored_where_its_client_reads_it() {
         keys.setActiveProvider(AiProviderType.CUSTOM)
         showSection()
+        revealEndpoint()
 
         compose.onNodeWithContentDescription("API endpoint")
             .performScrollTo()
@@ -327,6 +362,25 @@ class ApiKeySectionTest {
 
         assertEquals("https://ollama.local", keys.customBaseUrl())
         assertNull("Anthropic's endpoint was written instead", keys.baseUrl())
+    }
+
+    /**
+     * Custom with no address says where requests go, which is OpenAI.
+     *
+     * `Assistant` builds Custom out of `OpenAiClient`, whose fallback base URL
+     * is api.openai.com. That was always true and never stated -- the endpoint
+     * lived behind a disclosure -- so a user who picked Custom, pasted a key
+     * for their own server, and skipped the address was sending that key to
+     * OpenAI with nothing on screen to say so.
+     */
+    @Test
+    fun a_custom_provider_without_an_address_says_it_goes_to_openai() {
+        keys.setActiveProvider(AiProviderType.CUSTOM)
+        showSection()
+
+        compose.onNodeWithText("Until you set one, requests go to OpenAI's API.")
+            .performScrollTo()
+            .assertExists()
     }
 
     /** A custom endpoint is where the key goes, so the screen says so. */
@@ -348,12 +402,14 @@ class ApiKeySectionTest {
     fun removing_clears_the_stored_key() {
         keys.save("sk-ant-secret")
         showSection()
+        revealKey()
 
-        compose.onNodeWithText("Remove").performClick()
+        compose.onNodeWithText("Remove").performScrollTo().performClick()
         compose.waitForIdle()
 
         assertFalse(keys.hasKey())
-        compose.onNodeWithText("Anthropic key saved").assertDoesNotExist()
+        compose.onNodeWithText("Saved on this device").assertDoesNotExist()
+        compose.onNodeWithText("Not set").assertExists()
     }
 
     /**
@@ -367,8 +423,9 @@ class ApiKeySectionTest {
         keys.save("sk-ant-secret")
         keys.saveGeminiApiKey("AIzaKept")
         showSection()
+        revealKey()
 
-        compose.onNodeWithText("Remove").performClick()
+        compose.onNodeWithText("Remove").performScrollTo().performClick()
         compose.waitForIdle()
 
         assertFalse(keys.hasProviderKey(AiProviderType.ANTHROPIC))
