@@ -1,5 +1,13 @@
 # Build output
 build/
+# **Except a source package that happens to be called `build`.** The rule above
+# matches any directory of that name, and `com.osamu.aide.build` -- BuildService,
+# the `:build` process, and the runner that talks to it -- was never committed
+# because of it. Tracked files import it and the manifest names its service, so
+# a clean clone did not compile, and nothing on this machine could show it: the
+# files were on disk the whole time. `settings.gradle.kts` records the same trap
+# for the `:engine` module's name.
+!**/src/**/build/
 .gradle
 .kotlin
 /captures
