@@ -4,6 +4,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.osamu.aide.core.common.DefaultDispatcherProvider
 import com.osamu.aide.engine.api.BuildRequest
 import com.osamu.aide.engine.api.BuildResult
+import com.osamu.aide.engine.api.DebuggerRequest
 import com.osamu.aide.engine.api.awaitResult
 import com.osamu.aide.toolchain.nativetools.NativeTool
 import kotlinx.coroutines.runBlocking
@@ -47,7 +48,7 @@ class DebugAgentTest {
 
     private fun build(
         debuggable: Boolean = true,
-        debugPort: Int? = null,
+        debugger: DebuggerRequest? = null,
         extraSource: Pair<String, String>? = null,
     ): BuildResult {
         val project = fixture.project()
@@ -63,9 +64,9 @@ class DebugAgentTest {
             engine.build(
                 BuildRequest(
                     project = project,
-                    outputDir = File(fixture.workDir, "out-$debuggable-$debugPort"),
+                    outputDir = File(fixture.workDir, "out-$debuggable-${debugger?.port}-${debugger?.handshakeAuthority}"),
                     debuggable = debuggable,
-                    debugPort = debugPort,
+                    debugger = debugger,
                 ),
             ).awaitResult()
         }
@@ -113,7 +114,7 @@ class DebugAgentTest {
 
     @Test
     fun a_build_asked_for_a_debugger_ships_one() {
-        val result = build(debugPort = PORT)
+        val result = build(debugger = DebuggerRequest(PORT))
         assertTrue("build failed: $result", result is BuildResult.Success)
         val apk = (result as BuildResult.Success).apk
 
@@ -170,7 +171,7 @@ class DebugAgentTest {
      */
     @Test
     fun a_release_build_will_not_carry_a_debugger() {
-        val result = build(debuggable = false, debugPort = PORT)
+        val result = build(debuggable = false, debugger = DebuggerRequest(PORT))
         assertTrue("expected a refusal, got: $result", result is BuildResult.Failure)
         assertTrue(
             "the refusal does not say why: ${(result as BuildResult.Failure).message}",
@@ -201,7 +202,7 @@ class DebugAgentTest {
                 BuildRequest(
                     project = project,
                     outputDir = File(fixture.workDir, "out-untouched"),
-                    debugPort = PORT,
+                    debugger = DebuggerRequest(PORT),
                 ),
             ).awaitResult()
         }
@@ -224,7 +225,7 @@ class DebugAgentTest {
      */
     @Test
     fun a_debug_build_keeps_the_names_of_locals() {
-        val result = build(debugPort = PORT, extraSource = namedLocalSource())
+        val result = build(debugger = DebuggerRequest(PORT), extraSource = namedLocalSource())
         assertTrue("build failed: $result", result is BuildResult.Success)
         val apk = (result as BuildResult.Success).apk
 
@@ -282,7 +283,86 @@ class DebugAgentTest {
         }
     }
 
+    /**
+     * A build that names the IDE's handshake provider can see it.
+     *
+     * The generated agent asks the IDE whether a debugger is on its way, and on
+     * API 30 and up it cannot even address a provider in another package
+     * without a `<queries>` entry for it. Without one the call throws "Unknown
+     * authority", the agent reads that as "nobody is coming", and a breakpoint
+     * in `onCreate` silently never fires -- so the entry is asserted in the
+     * built manifest, and the authority in the compiled agent.
+     */
+    @Test
+    fun a_build_with_a_handshake_can_see_the_ide() {
+        val result = build(debugger = DebuggerRequest(PORT, handshakeAuthority = AUTHORITY))
+        assertTrue("build failed: $result", result is BuildResult.Success)
+        val apk = (result as BuildResult.Success).apk
+
+        val manifest = manifestOf(apk)
+        assertTrue("no <queries> in the built manifest:\n$manifest", manifest.contains("E: queries"))
+        assertTrue(
+            "the IDE's provider is not queryable from the built app:\n$manifest",
+            manifest.contains(AUTHORITY),
+        )
+        assertTrue("the agent does not know whom to ask", dexContains(apk, AUTHORITY))
+        assertTrue(
+            "the agent has no field for the debugger to release it with",
+            dexContains(apk, DebuggerRequest.RELEASE_FIELD),
+        )
+        assertTrue(
+            "the agent cannot be asked to bring the IDE forward",
+            dexContains(apk, DebuggerRequest.COME_FORWARD_FIELD),
+        )
+    }
+
+    /**
+     * The agent's provider is exported, because the IDE's hold on it is what
+     * keeps the app from being frozen.
+     *
+     * Android 14 freezes cached processes, and a frozen app answers no JDWP
+     * command: Step pressed in the IDE simply never came back. The IDE holds a
+     * reference to this provider for the session, which it cannot do to one
+     * that is not exported -- and the failure would be the same silent hang.
+     * `debugger/FINDINGS.md` section 9.
+     */
+    @Test
+    fun the_agent_provider_can_be_held_from_the_ide() {
+        val result = build(debugger = DebuggerRequest(PORT, handshakeAuthority = AUTHORITY))
+        assertTrue("build failed: $result", result is BuildResult.Success)
+        val manifest = manifestOf((result as BuildResult.Success).apk)
+
+        // One element per block: aapt2 prints an element's attributes on the
+        // lines after its "E:" line, in resource-id order rather than source
+        // order -- so a slice starting at the name can begin after `exported`.
+        val provider = manifest.split(Regex("""\n\s*E: """))
+            .firstOrNull { it.startsWith("provider") && it.contains(PROVIDER_CLASS) }
+        assertTrue("the agent provider is missing:\n$manifest", provider != null)
+        assertTrue(
+            "the agent provider is not exported, so the IDE cannot keep the app awake:\n$manifest",
+            // aapt2 prints a boolean as `=true` in this version and as a typed
+            // hex value in older ones; either is exported.
+            Regex("""exported\(0x[0-9a-f]+\)=(true|\(type 0x12\)0x(ffffffff|1))""").containsMatchIn(provider!!),
+        )
+        assertTrue(
+            "the agent's authority is not the one the IDE asks for",
+            manifest.contains(DebuggerRequest.agentAuthority("com.example.demo")),
+        )
+    }
+
+    /** Without a handshake nothing asks to see anything. */
+    @Test
+    fun a_build_without_a_handshake_declares_no_queries() {
+        val result = build(debugger = DebuggerRequest(PORT))
+        assertTrue("build failed: $result", result is BuildResult.Success)
+        assertFalse(
+            "a <queries> entry was added with no handshake to use it",
+            manifestOf((result as BuildResult.Success).apk).contains("E: queries"),
+        )
+    }
+
     private companion object {
+        const val AUTHORITY = "com.osamu.aide.debug-handshake"
         const val PORT = 8721
         const val PROVIDER_CLASS = "aide.debug.AideDebugAgent"
         const val PROVIDER_DESCRIPTOR = "Laide/debug/AideDebugAgent;"

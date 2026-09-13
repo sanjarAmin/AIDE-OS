@@ -59,6 +59,19 @@
         asks for is a separate :build process behind a bound service, which this
         does not replace.
     -->
+    <!--
+        To launch the app a debug session just installed. Package visibility
+        hides other apps from this one on API 30 and up, so without this
+        getLaunchIntentForPackage answers null for a package that is plainly
+        installed. Launcher activities only: that is all Debug ever starts.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
     <application
         android:name=".AideApplication"
         android:allowBackup="true"
@@ -102,6 +115,27 @@
             the editor and every open buffer, and an out-of-memory kill takes
             the user's unsaved work with a build they could have retried.
         -->
+        <!--
+            Asked by a debug build at startup whether a debugger is coming, so
+            a breakpoint in onCreate is placed before onCreate runs. Exported
+            because the asker is the user's app, in its own package; it answers
+            only about the calling package. In the main process, where the
+            debug session that sets the expectation lives.
+        -->
+        <provider
+            android:name=".debug.DebugHandshakeProvider"
+            android:authorities="${applicationId}.debug-handshake"
+            android:exported="true" />
+
+        <!--
+            Bound by an app under debug so the IDE is not frozen while that app
+            is in front. Exported because the binder is another package; it
+            returns an empty binder and does nothing else.
+        -->
+        <service
+            android:name=".debug.DebugSessionService"
+            android:exported="true" />
+
         <service
             android:name=".build.BuildService"
             android:process=":build"

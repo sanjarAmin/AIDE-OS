@@ -1,6 +1,6 @@
 package com.osamu.aide.engine.fast
 
-import org.w3c.dom.Document
+import com.osamu.aide.engine.api.DebuggerRequest
 import org.w3c.dom.Element
 import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
@@ -34,16 +34,13 @@ import javax.xml.transform.stream.StreamResult
  * **Never in a release build, and never unasked.** This adds a permission the
  * user did not write and opens a port on their app; doing it to every debug
  * build because it is convenient would be a decision taken on their behalf.
- * [BuildRequest.debugPort] is null unless something asked, and a release build
+ * [BuildRequest.debugger] is null unless something asked, and a release build
  * refuses it outright.
  */
 internal object DebugAgent {
 
-    /** The package the generated provider lands in. */
-    private const val PACKAGE = "aide.debug"
-
-    /** The class name, which the manifest entry has to match exactly. */
-    private const val CLASS = "AideDebugAgent"
+    private val PACKAGE = DebuggerRequest.AGENT_CLASS.substringBeforeLast('.')
+    private val CLASS = DebuggerRequest.AGENT_CLASS.substringAfterLast('.')
 
     private const val ANDROID_NAMESPACE = "http://schemas.android.com/apk/res/android"
     private const val INTERNET = "android.permission.INTERNET"
@@ -66,15 +63,22 @@ internal object DebugAgent {
      * compiler's inputs: it is written into `generated/java`, which
      * [BuildWorkspace.generatedJavaSources] already sweeps for `R.java`.
      */
-    fun install(workspace: BuildWorkspace, manifest: File, applicationId: String, port: Int): File {
+    fun install(
+        workspace: BuildWorkspace,
+        manifest: File,
+        applicationId: String,
+        request: DebuggerRequest,
+    ): File {
         val source = File(workspace.generatedJava, "${PACKAGE.replace('.', '/')}/$CLASS.java")
         source.parentFile?.mkdirs()
-        source.writeText(providerSource(port))
-        declare(manifest, applicationId)
+        source.writeText(providerSource(request))
+        declare(manifest, applicationId, request.handshakeAuthority)
         return source
     }
 
-    private fun providerSource(port: Int): String = """
+    private fun providerSource(request: DebuggerRequest): String {
+        val authority = request.handshakeAuthority?.let { "\"" + it.javaEscaped() + "\"" } ?: "null"
+        return """
         package $PACKAGE;
 
         /**
@@ -87,6 +91,19 @@ internal object DebugAgent {
         public final class $CLASS extends android.content.ContentProvider {
 
             private static final String TAG = "AideDebugAgent";
+            private static final String HANDSHAKE_AUTHORITY = $authority;
+
+            /**
+             * Set to true by the debugger once its breakpoints are in place.
+             *
+             * Written over JDWP, which is why it is a static field and not a
+             * method: the debugger can set a field in a running VM without the
+             * app having to call anything.
+             */
+            public static volatile boolean ${DebuggerRequest.RELEASE_FIELD};
+
+            /** Set by the debugger when a breakpoint is hit; see holdIfExpected. */
+            public static volatile boolean ${DebuggerRequest.COME_FORWARD_FIELD};
 
             @Override
             public boolean onCreate() {
@@ -97,15 +114,117 @@ internal object DebugAgent {
                 try {
                     android.os.Debug.attachJvmtiAgent(
                         "libjdwp.so",
-                        "transport=dt_socket,server=y,suspend=n,address=127.0.0.1:$port",
+                        "transport=dt_socket,server=y,suspend=n,address=127.0.0.1:${request.port}",
                         null);
-                    android.util.Log.i(TAG, "debugger listening on 127.0.0.1:$port");
+                    android.util.Log.i(TAG, "debugger listening on 127.0.0.1:${request.port}");
                 } catch (Throwable t) {
                     // Never fatal. A debugger that cannot start is a missing
                     // feature; an app that will not launch is a broken build.
                     android.util.Log.w(TAG, "could not start the debugger", t);
+                    return true;
                 }
+                holdIfExpected();
                 return true;
+            }
+
+            /**
+             * Waits for the debugger, but only if the IDE says one is coming.
+             *
+             * Providers are created before Application.onCreate and before any
+             * activity, so holding here is what lets a breakpoint in onCreate
+             * be placed before onCreate runs. An app launched any other way --
+             * from the launcher, long after the IDE session -- is not expected
+             * and does not wait at all.
+             */
+            private void holdIfExpected() {
+                if (HANDSHAKE_AUTHORITY == null) return;
+                boolean expected = false;
+                android.os.Bundle answer = null;
+                try {
+                    answer = getContext().getContentResolver().call(
+                            android.net.Uri.parse("content://" + HANDSHAKE_AUTHORITY),
+                            "${DebuggerRequest.HANDSHAKE_METHOD}",
+                            getContext().getPackageName(),
+                            null);
+                    expected = answer != null && answer.getBoolean("${DebuggerRequest.HANDSHAKE_EXPECTED}");
+                } catch (Throwable t) {
+                    // The IDE is not installed, not running, or not answering:
+                    // nobody is coming, so do not wait for anybody.
+                }
+                if (!expected) return;
+                keepTheIdeAwake(answer.getString("${DebuggerRequest.HANDSHAKE_IDE_SERVICE}"));
+                android.util.Log.i(TAG, "waiting for the debugger to place its breakpoints");
+                long deadline = android.os.SystemClock.uptimeMillis() + ${DebuggerRequest.STARTUP_HOLD_MS};
+                while (!${DebuggerRequest.RELEASE_FIELD} && android.os.SystemClock.uptimeMillis() < deadline) {
+                    try {
+                        Thread.sleep(10);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                }
+                android.util.Log.i(TAG, ${DebuggerRequest.RELEASE_FIELD}
+                        ? "released by the debugger"
+                        : "the debugger did not arrive; starting anyway");
+            }
+
+            /**
+             * Binds the IDE, and hands the screen back to it on request.
+             *
+             * The binding keeps the IDE from being frozen while this app is in
+             * front -- a frozen IDE never resumes a thread it holds. The
+             * thread brings the IDE forward when the debugger asks, because
+             * this app is the one on screen and so the one allowed to.
+             */
+            private void keepTheIdeAwake(String flattened) {
+                if (flattened == null) return;
+                final android.content.ComponentName ide =
+                        android.content.ComponentName.unflattenFromString(flattened);
+                if (ide == null) return;
+                final android.content.Context context = getContext().getApplicationContext();
+                try {
+                    context.bindService(
+                            new android.content.Intent().setComponent(ide),
+                            new android.content.ServiceConnection() {
+                                @Override
+                                public void onServiceConnected(android.content.ComponentName name, android.os.IBinder service) {
+                                }
+
+                                @Override
+                                public void onServiceDisconnected(android.content.ComponentName name) {
+                                }
+                            },
+                            android.content.Context.BIND_AUTO_CREATE);
+                } catch (Throwable t) {
+                    android.util.Log.w(TAG, "could not bind the IDE; it may be frozen while this app is in front", t);
+                }
+                Thread forward = new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        while (true) {
+                            if (${DebuggerRequest.COME_FORWARD_FIELD}) {
+                                ${DebuggerRequest.COME_FORWARD_FIELD} = false;
+                                android.content.Intent launch = context.getPackageManager()
+                                        .getLaunchIntentForPackage(ide.getPackageName());
+                                if (launch != null) {
+                                    launch.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                                            | android.content.Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+                                    try {
+                                        context.startActivity(launch);
+                                    } catch (Throwable t) {
+                                        android.util.Log.w(TAG, "could not bring the IDE forward", t);
+                                    }
+                                }
+                            }
+                            try {
+                                Thread.sleep(100);
+                            } catch (InterruptedException e) {
+                                return;
+                            }
+                        }
+                    }
+                }, "aide-debug-forward");
+                forward.setDaemon(true);
+                forward.start();
             }
 
             @Override
@@ -135,16 +254,24 @@ internal object DebugAgent {
                 return 0;
             }
         }
-    """.trimIndent()
+        """.trimIndent()
+    }
 
     /**
-     * Adds the provider and the permission to an already-merged manifest.
+     * Adds the provider, the permission and the IDE query to an already-merged
+     * manifest.
      *
      * Idempotent by name, because a rebuild reuses the workspace and a second
      * `<provider>` with the same authority makes the *install* fail rather than
      * the build.
+     *
+     * **The `<queries>` entry is not optional on API 30 and up.** Package
+     * visibility hides the IDE from an app that does not declare it wants to
+     * see it, and `ContentResolver.call` against an invisible provider does not
+     * fail loudly -- it throws "Unknown authority", which the agent catches as
+     * "nobody is coming", and startup breakpoints silently stop working.
      */
-    private fun declare(manifest: File, applicationId: String) {
+    private fun declare(manifest: File, applicationId: String, handshakeAuthority: String?) {
         val factory = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
         val document = factory.newDocumentBuilder().parse(manifest)
         val root = document.documentElement
@@ -158,12 +285,28 @@ internal object DebugAgent {
             )
         }
 
+        if (handshakeAuthority != null && root.childElements().none { queries ->
+                queries.tagName == "queries" && queries.childElements().any {
+                    it.tagName == "provider" &&
+                        it.getAttributeNS(ANDROID_NAMESPACE, "authorities") == handshakeAuthority
+                }
+            }
+        ) {
+            val queries = document.createElement("queries")
+            queries.appendChild(
+                document.createElement("provider").apply {
+                    setAttributeNS(ANDROID_NAMESPACE, "android:authorities", handshakeAuthority)
+                },
+            )
+            root.insertBefore(queries, root.firstChild)
+        }
+
         val application = document.getElementsByTagName("application").item(0) as? Element
             ?: throw IllegalStateException(
                 "this project's manifest has no <application>, so there is nowhere " +
                     "to put the debugger",
             )
-        val name = "$PACKAGE.$CLASS"
+        val name = DebuggerRequest.AGENT_CLASS
         if (application.childElements().none {
                 it.tagName == "provider" &&
                     it.getAttributeNS(ANDROID_NAMESPACE, "name") == name
@@ -178,9 +321,13 @@ internal object DebugAgent {
                     setAttributeNS(
                         ANDROID_NAMESPACE,
                         "android:authorities",
-                        "$applicationId.aide-debug-agent",
+                        DebuggerRequest.agentAuthority(applicationId),
                     )
-                    setAttributeNS(ANDROID_NAMESPACE, "android:exported", "false")
+                    // Exported so the IDE can hold a reference to it, which is
+                    // what keeps this app from being frozen while the IDE is in
+                    // front. Every operation returns nothing, so reaching it
+                    // gains a caller nothing else.
+                    setAttributeNS(ANDROID_NAMESPACE, "android:exported", "true")
                 },
             )
         }
@@ -188,6 +335,8 @@ internal object DebugAgent {
         TransformerFactory.newInstance().newTransformer()
             .transform(DOMSource(document), StreamResult(manifest))
     }
+
+    private fun String.javaEscaped(): String = replace("\\", "\\\\").replace("\"", "\\\"")
 
     private fun Element.hasPermission(permission: String): Boolean =
         childElements().any {

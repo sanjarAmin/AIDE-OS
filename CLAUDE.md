@@ -227,6 +227,18 @@ failed to load still produces a clean compile.
   `/data/tombstones` unchanged is the tell that nothing died. **Drive after the
   test runs, not between them.**
 
+- **Android freezes background apps, and a frozen app looks like a hung
+  protocol.** Android 14's cached-app freezer stops a process that is not on
+  screen and not referenced by one that is. It keeps its sockets open and
+  answers nothing: the debugger's Step simply never came back, with no log and
+  no exception. The tell is `do_freezer_trap` in
+  `/proc/<pid>/task/<pid>/wchan`, or `cch` in `dumpsys activity processes`.
+  SIGQUIT and `debuggerd -b` both fail on a frozen process, which is itself a
+  clue. Anything here that talks to *another app* -- the debugger today -- has
+  to keep it referenced from the foreground, and **not by binding a service in
+  it**: service creation runs on that app's main thread, which may be the thread
+  being debugged, and the app is killed for an ANR. `debugger/FINDINGS.md` §9.
+
 - **`ls a* b*` in zsh aborts on the first pattern that matches nothing**, and
   `2>/dev/null` hides the reason. `ls LICENSE* NOTICE*` printed nothing at all
   in a repo that has had a `LICENSE` since its second commit, because `NOTICE*`

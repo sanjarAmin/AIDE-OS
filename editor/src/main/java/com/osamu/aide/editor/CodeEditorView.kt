@@ -9,7 +9,9 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import com.osamu.aide.engine.api.Diagnostic
+import io.github.rosemoe.sora.event.ClickEvent
 import io.github.rosemoe.sora.event.ContentChangeEvent
+import io.github.rosemoe.sora.event.EditorMotionEvent
 import io.github.rosemoe.sora.event.SelectionChangeEvent
 import io.github.rosemoe.sora.widget.CodeEditor
 import io.github.rosemoe.sora.widget.schemes.EditorColorScheme
@@ -54,6 +56,15 @@ fun CodeEditorView(
      * made in Settings reaches the widget already on screen.
      */
     settings: EditorSettings = EditorSettings(),
+    /** 1-based lines holding a breakpoint in this document. */
+    breakpointLines: Set<Int> = emptySet(),
+    /** The 1-based line a debugger is stopped on in this document, if any. */
+    executionLine: Int? = null,
+    /**
+     * A tap on a line number, with the 1-based line. Null leaves the gutter
+     * doing what sora does with it, which is to move the caret.
+     */
+    onLineNumberTap: ((Int) -> Unit)? = null,
 ) {
     // Identity, not contents. Recomposition must not push text back into the
     // widget: setText resets the cursor, the scroll position and the undo
@@ -66,6 +77,7 @@ fun CodeEditorView(
     // one that happened to be in scope when the view was created.
     val currentListener = rememberUpdatedState(onTextChanged)
     val currentCursorListener = rememberUpdatedState(onCursorMoved)
+    val currentGutterTap = rememberUpdatedState(onLineNumberTap)
     val buffers = remember { EditorBuffers() }
     val currentController = rememberUpdatedState(controller)
 
@@ -82,7 +94,7 @@ fun CodeEditorView(
     AndroidView(
         modifier = modifier,
         factory = { context ->
-            CodeEditor(context).apply {
+            DebugGutterEditor(context).apply {
                 typefaceText = Typeface.MONOSPACE
                 typefaceLineNumber = Typeface.MONOSPACE
 
@@ -98,11 +110,26 @@ fun CodeEditorView(
                 subscribeEvent(SelectionChangeEvent::class.java) { event, _ ->
                     currentCursorListener.value(event.editor.cursor.left)
                 }
+                // The line-number column is where every IDE puts breakpoints,
+                // so a tap there toggles one instead of moving the caret --
+                // intercepted, or sora also selects the line, and a user
+                // setting a breakpoint mid-edit loses their place.
+                subscribeEvent(ClickEvent::class.java) { event, _ ->
+                    val onTap = currentGutterTap.value ?: return@subscribeEvent
+                    if (event.motionRegion == EditorMotionEvent.REGION_LINE_NUMBER) {
+                        onTap(event.line + 1)
+                        event.intercept()
+                    }
+                }
                 currentController.value?.attach(this)
             }
         },
         update = { editor ->
             editor.setEditable(editable)
+            (editor as? DebugGutterEditor)?.let {
+                it.breakpointLines = breakpointLines
+                it.executionLine = executionLine
+            }
             // Set here rather than in the factory: these are the four things a
             // user can change while a file is open, and a widget built before
             // the change would otherwise keep the old value until the tab was

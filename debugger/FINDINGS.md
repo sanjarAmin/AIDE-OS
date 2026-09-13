@@ -151,15 +151,127 @@ A field read at the wrong offset or out of the wrong object cannot match by
 accident. The string field takes the other path — its value is an object id,
 turned into text by `StringReference.Value`.
 
-## 7. What is not built yet
+## 7. Breakpoints travel under a source key, not a class name
 
-- **A UI.** Breakpoints in the editor gutter, a stopped-thread view, locals and
-  Continue/Step. The library is the whole debugger; nothing in the app calls it.
-- **Stopping before `main`.** The agent is attached with `suspend=n`, because
-  `suspend=y` blocks in the provider until a client connects and Android kills
-  an app that does not draw. Debugging startup needs a different arrangement.
-- **Inherited fields, arrays, expression evaluation, watchpoints, exception
-  breakpoints.** All are further JDWP commands against the same connection.
-- **Kotlin line mapping for inline functions.** A breakpoint in an inlined body
-  lives in the caller's line table under an SMAP remapping, and `breakpointAt`
-  only matches literal line numbers.
+An editor knows a file; a VM knows classes. The only identity they share is
+the **package path joined to the file name** — `com/example/Main.kt`. The
+editor gets the package from the file's own `package` declaration (not its
+directory: Kotlin does not require them to agree); the VM gets it from each
+class's signature plus its `SourceFile` attribute. A class name will not do,
+because a Kotlin file compiles to `MainKt`, every class it declares, and a
+synthetic class per lambda.
+
+`DebugController` places each line into every loaded class whose key matches
+(`VirtualMachine.AllClasses`, filtered by package before spending a
+`SourceFile` round trip per class), and asks for a held `ClassPrepare` on each
+package that has a breakpoint, so later classes are covered before their code
+runs. A mismatch between the two keys is silent — the breakpoint is placed
+nowhere and never fires — which is why `SourceKeysTest` builds both from the
+same file.
+
+## 8. A breakpoint in `onCreate` needs the app to wait, and only when asked
+
+Providers are created before `Application.onCreate`, so the generated agent can
+hold startup until the debugger has placed its breakpoints. It must not hold
+every launch: a debug build outlives the session, and the agent cannot tell a
+launch from the Debug button from a launcher tap an hour later.
+
+So it **asks the IDE**. `DebugHandshakeProvider.call("isDebuggerExpected")`
+answers yes only for the calling package, only if the IDE registered it just
+before launching, and only once. If yes, the agent waits (bounded, 15 s) for a
+static `released` flag the debugger sets over `ClassType.SetValues`. Driven:
+
+```
+debugger listening on 127.0.0.1:37465
+waiting for the debugger to place its breakpoints
+released by the debugger          <- 670 ms later
+Paused at MainActivity.java:12 on main
+```
+
+and a cold start from the launcher afterwards, with no session: 454 ms, no
+wait. On API 30 and up the debug build needs `<queries><provider
+android:authorities=…/>` to see the IDE at all; without it the call throws
+"Unknown authority", which the agent must read as "nobody is coming", and
+startup breakpoints silently stop working. `DebugAgentTest` asserts the entry.
+
+## 9. Android freezes whichever app is not on screen, and both must stay awake
+
+**This is the finding that decides whether on-device debugging works at all.**
+Android 14 freezes cached processes (`CachedAppOptimizer`). During a session one
+of the two apps is always in the background, and each freezes differently:
+
+- **The debuggee frozen** — the IDE in front. Every JDWP command goes unanswered.
+  Found that way: Step pressed, nothing happened, no log, no exception. `jdb` on
+  the IDE showed its reader thread idle; the debuggee's main thread showed
+  `do_freezer_trap` in `/proc/<pid>/task/<pid>/wchan`, `dumpsys activity
+  processes` listed it `cch`, and bringing it forward logged `quick sync
+  unfreeze` — after which the Step that had been waiting for a minute completed
+  at once. SIGQUIT and `debuggerd -b` both fail on a frozen process, which is a
+  clue in itself.
+- **The IDE frozen** — the debuggee in front. Every `ClassPrepare` holds the
+  loading thread until the IDE resumes it, so the app hangs on its next class
+  load, and a breakpoint hit goes unnoticed.
+
+Android Studio never meets this: its debugger is on another machine.
+
+The fix keeps each process referenced by the other, since a process whose
+component is held by the app on screen is not cached:
+
+- **The debuggee binds the IDE's `DebugSessionService`** from the agent, during
+  the handshake.
+- **The IDE holds an unstable `ContentProviderClient` on the agent's provider.**
+  Measured: the debuggee sat at `fg … BTOP (provider)` for 25 s while suspended
+  in `onCreate`, and Step answered within a second.
+
+Two wrong turns worth recording, because both look right:
+
+- **The IDE binding a service in the debuggee killed it.** `BIND_AUTO_CREATE`
+  creates the service on the debuggee's *main thread* — the thread a breakpoint
+  in `onCreate` has suspended — so it never finished starting, and twenty
+  seconds later: `bg anr: executing service …AideDebugKeepAlive`, killed, and
+  the system scheduled a restart of the process for the binding. A provider was
+  published before any app code ran and needs nothing from the main thread.
+- **A *stable* provider reference** would do the same job and get the *client*
+  killed when the provider's process dies. The client is the IDE; the provider's
+  process is an app being debugged, which dies constantly.
+
+And one defence regardless: every JDWP request now times out (10 s) as a
+`JdwpTimeoutException`, so an unanswered command reports "the app did not
+answer" instead of holding the controller's lock — and every later button —
+forever.
+
+## 10. The IDE cannot bring itself forward; the app on screen can
+
+A breakpoint is hit while the debuggee covers the IDE, so the IDE should come
+back to front. From the IDE this is refused on API 34:
+
+```
+Background activity launch blocked [callingPackage: com.osamu.aide; … BAL_BLOCK
+```
+
+The debuggee *is* in front, and a breakpoint suspends only its own thread. So
+the debugger sets the agent's static `comeForward` flag, and a daemon thread in
+the agent launches the IDE:
+
+```
+START … cmp=com.osamu.aide/.MainActivity … from uid 10969 (BAL_ALLOW_VISIBLE_WINDOW) result code=2
+```
+
+`result code=2` is the existing task brought forward, not a new instance. The
+launch flags must be the launcher's (`NEW_TASK | RESET_TASK_IF_NEEDED`): a bare
+`am start -n` from the shell stacks a *second* `MainActivity` with its own view
+models, which looked exactly like the session having been lost.
+
+## 11. What is not built yet
+
+- **Breakpoints are not persisted.** They live in the Debug view model and are
+  gone when the workspace closes.
+- **Breakpoints do not follow edits.** A line inserted above one leaves it on
+  the old line number. The gutter mark and the debugger agree, because both
+  read the same set; the code moved under both.
+- **Kotlin inline functions.** A body inlined into its caller is in the
+  caller's line table under an SMAP remapping, and lines are matched literally.
+- **Inherited fields, arrays' elements, expression evaluation, watchpoints,
+  exception breakpoints.** Further JDWP command sets on the same connection.
+- **The Gradle engine.** The agent is generated by the fast pipeline, and a
+  project built with Gradle is told so rather than debugged without one.

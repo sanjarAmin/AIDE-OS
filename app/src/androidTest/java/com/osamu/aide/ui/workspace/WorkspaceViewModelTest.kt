@@ -3,6 +3,7 @@ package com.osamu.aide.ui.workspace
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.osamu.aide.build.BuildRunner
+import com.osamu.aide.engine.api.DebuggerRequest
 import com.osamu.aide.core.common.AppResult
 import com.osamu.aide.core.common.DefaultDispatcherProvider
 import com.osamu.aide.core.fs.BuildEngine
@@ -115,7 +116,10 @@ class WorkspaceViewModelTest {
             builder = projectBuilder,
             // The same builder, in this process: these tests are about a
             // device with no toolchains, not about where a build runs.
-            runner = BuildRunner { project, debuggable -> projectBuilder.build(project, debuggable) },
+            runner = object : BuildRunner {
+                override fun build(project: Project, debuggable: Boolean, debugger: DebuggerRequest?) =
+                    projectBuilder.build(project, debuggable, debugger)
+            },
             toolchain = toolchain,
             installer = ApkInstaller(context, dispatchers),
             languageServices = LanguageServices(

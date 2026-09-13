@@ -12,6 +12,7 @@ import android.os.Message
 import android.os.Messenger
 import com.osamu.aide.core.fs.Project
 import com.osamu.aide.engine.api.BuildEvent
+import com.osamu.aide.engine.api.DebuggerRequest
 import com.osamu.aide.engine.api.BuildResult
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -28,7 +29,11 @@ class RemoteBuildRunner(
     private val context: Context,
 ) : BuildRunner {
 
-    override fun build(project: Project, debuggable: Boolean): Flow<BuildEvent> = callbackFlow {
+    override fun build(
+        project: Project,
+        debuggable: Boolean,
+        debugger: DebuggerRequest?,
+    ): Flow<BuildEvent> = callbackFlow {
         val thread = HandlerThread("build-client").apply { start() }
 
         // Replies arrive on this thread, not the caller's: a build emits while
@@ -60,6 +65,10 @@ class RemoteBuildRunner(
                 val data = Bundle().apply {
                     putBundle(BuildProtocol.KEY_PROJECT, BuildProtocol.encodeProject(project))
                     putBoolean(BuildProtocol.KEY_DEBUGGABLE, debuggable)
+                    debugger?.let {
+                        putInt(BuildProtocol.KEY_DEBUG_PORT, it.port)
+                        putString(BuildProtocol.KEY_DEBUG_HANDSHAKE, it.handshakeAuthority)
+                    }
                 }
                 runCatching {
                     service.send(

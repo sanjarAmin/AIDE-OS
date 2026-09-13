@@ -2,6 +2,7 @@ package com.osamu.aide.build
 
 import com.osamu.aide.core.fs.Project
 import com.osamu.aide.engine.api.BuildEvent
+import com.osamu.aide.engine.api.DebuggerRequest
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -18,6 +19,13 @@ import kotlinx.coroutines.flow.Flow
  * download to offer — and those are cheap, synchronous and wanted on the UI
  * side. Only the expensive part crosses the boundary.
  */
-fun interface BuildRunner {
-    fun build(project: Project, debuggable: Boolean): Flow<BuildEvent>
+interface BuildRunner {
+    /**
+     * [debugger] builds a debugger into the app; see [DebuggerRequest].
+     *
+     * Defaulted, which is why this stopped being a `fun interface`: a
+     * functional interface's method may not have a default, and every build
+     * that is not a Debug has no debugger to pass.
+     */
+    fun build(project: Project, debuggable: Boolean, debugger: DebuggerRequest? = null): Flow<BuildEvent>
 }

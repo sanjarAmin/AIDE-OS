@@ -74,10 +74,23 @@ class DebugSessionTest {
         live.close()
     }
 
-    private fun canConnect(): Boolean = runCatching {
-        Socket().use { it.connect(InetSocketAddress("127.0.0.1", PORT), 2_000) }
-        true
-    }.getOrDefault(false)
+    /**
+     * Whether a debuggee is listening, waiting out libjdwp's gap between
+     * sessions -- see `DebugControllerTest.canConnect` for the ~50 ms it
+     * closes its socket for, and the run of skips a single attempt produced.
+     */
+    private fun canConnect(): Boolean {
+        val deadline = System.currentTimeMillis() + 5_000
+        while (System.currentTimeMillis() < deadline) {
+            val connected = runCatching {
+                Socket().use { it.connect(InetSocketAddress("127.0.0.1", PORT), 500) }
+                true
+            }.getOrDefault(false)
+            if (connected) return true
+            Thread.sleep(100)
+        }
+        return false
+    }
 
     @Test
     fun attaching_reports_the_vm_on_the_other_end() {

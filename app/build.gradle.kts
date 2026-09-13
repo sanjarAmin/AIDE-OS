@@ -80,6 +80,7 @@ dependencies {
     implementation(project(":core:common"))
     implementation(project(":core:fs"))
     implementation(project(":core:ui"))
+    implementation(project(":debugger"))
     implementation(project(":editor"))
     implementation(project(":engine:api"))
     implementation(project(":engine:deps"))

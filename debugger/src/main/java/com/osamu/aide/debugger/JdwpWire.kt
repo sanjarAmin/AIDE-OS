@@ -284,6 +284,18 @@ object Jdwp {
  * means an id outlived the resume that invalidated it. Those are different
  * bugs, and a client that only knows "it failed" cannot tell them apart.
  */
+/**
+ * A command the VM did not answer in time.
+ *
+ * An `IOException`, not a cancellation, so that callers treat it as a failed
+ * round trip -- which it is -- rather than as their own coroutine going away.
+ */
+class JdwpTimeoutException(val commandSet: Int, val command: Int) :
+    java.io.IOException(
+        "the app did not answer JDWP command $commandSet/$command. It may be frozen " +
+            "in the background, or stopped in native code.",
+    )
+
 class JdwpErrorException(
     val code: Int,
     val commandSet: Int,

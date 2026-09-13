@@ -7,8 +7,9 @@
 
 ## Status
 
-*As of 2026-09-09. **Every milestone M0–M11 is met.** M12, the debugger, is
-built as a library and driven end to end; it has no UI yet.*
+*As of 2026-09-13. **Every milestone M0–M11 is met.** M12, the debugger, is
+driven end to end in the app: a breakpoint in `onCreate` stops the built app,
+and it steps, shows variables, resumes and detaches.*
 
 | | Milestone | State |
 |---|---|---|
@@ -287,7 +288,7 @@ Bring-your-own-key, no backend infrastructure, no per-user liability for you.
 | **M9** Gradle path | ~~Rootfs bootstrap~~ → Termux's **Bionic-built OpenJDK 21**, a launcher of our own, and `:engine:gradle` | **Met.** An unmodified Android Studio project builds on device through the `BuildSystem` interface, on both ABIs and with more than one module. Every part installs itself: OpenJDK from this repo's releases, Gradle pinned to its own publisher, build-tools from Google, and an SDK root composed from the last two |
 | **M10** JS / C# | ~~QuickJS +~~ Node from Termux (R13) and **mono** rather than the .NET SDK, which Termux does not publish (R14). Both are **published and pinned** as installable components, and `NodeToolchain` / `MonoToolchain` drive them | **Met.** Both languages are wired end to end: the picker offers them, the template writes a real Node or C# project, and ▶ runs it through `RunSystem` — `:engine:node` starts a program, `:engine:mono` compiles with `mcs` and then starts what it produced — into the build panel, offering the download when the runtime is missing |
 | **M11** Kotlin intelligence | `:lsp:kotlin` — the Analysis API resident on device, behind the same `LanguageService` the editor already talks to | Completion, diagnostics and go-to-definition on a Kotlin buffer, inside the 200 ms budget — **met**, at ~107 ms warm |
-| **M12** Debugger | `:debugger`, a JDWP client, plus the agent the build puts inside a debug APK. **Not the shape this document assumed** — spike R15 found an app cannot reach another app's JDWP and does not have to: ART ships OpenJDK's `libjdwp.so`, and a debuggable process can attach it to itself | Breakpoint an app AIDE-OS built, stop it, read a named local, step a line, resume — **done at the library level**, driven against a built-and-installed app: `STOPPED on thread ticker at tick … counter=Primitive(tag=73, value=69)`. **No UI yet**, which is what M12 still needs |
+| **M12** Debugger | `:debugger`, a JDWP client, plus the agent the build puts inside a debug APK. **Not the shape this document assumed** — spike R15 found an app cannot reach another app's JDWP and does not have to: ART ships OpenJDK's `libjdwp.so`, and a debuggable process can attach it to itself | Breakpoint an app AIDE-OS built, stop it, read a named local, step a line, resume — **met, in the app**, 2026-09-13: a breakpoint set by tapping line 12's number, Debug, and the app stopped *in `onCreate`* (the build holds startup until the breakpoints are placed), came back in front of the IDE by itself, showed `this` and `savedInstanceState`, stepped to line 13 where `text = TextView` appeared, resumed and detached with the app still running. **What it took that nobody plans for: Android 14 freezes whichever of the two apps is off screen**, so each holds the other awake — `debugger/FINDINGS.md` §9. Not yet: persisted breakpoints, breakpoints that follow edits, Kotlin inline functions, the Gradle engine |
 
 M0–M5 is the real v1.0. Everything from M6 on is expansion.
 

@@ -37,7 +37,11 @@ sealed interface DebugState {
     data class Attaching(val message: String) : DebugState
 
     /** Attached, and nothing is stopped. [message] says what it is waiting for. */
-    data class Running(val message: String) : DebugState
+    data class Running(
+        val message: String,
+        /** A step is in flight: running, but about to stop again on its own. */
+        val stepping: Boolean = false,
+    ) : DebugState
 
     data class Stopped(
         val threadId: Long,
@@ -83,7 +87,7 @@ data class StartupGate(val classSignature: String, val releaseField: String)
  * installed into every loaded class whose package and `SourceFile` match its
  * key, and each package that holds a breakpoint gets a `ClassPrepare` request
  * that holds the loading thread, so a class that loads later gets the
- * breakpoint before any of its code runs. `FINDINGS.md` sections 5 and 8.
+ * breakpoint before any of its code runs. `FINDINGS.md` sections 5 and 7.
  */
 class DebugController(private val scope: CoroutineScope) {
 
@@ -95,6 +99,7 @@ class DebugController(private val scope: CoroutineScope) {
     private var events: Job? = null
 
     private var wanted: Set<SourceLine> = emptySet()
+    private var gate: StartupGate? = null
 
     /** Breakpoint request id -> the source line it was placed for. */
     private val placed = mutableMapOf<Int, SourceLine>()
@@ -134,6 +139,7 @@ class DebugController(private val scope: CoroutineScope) {
     ): Boolean = lock.withLock {
         if (session != null) return@withLock true
         wanted = breakpoints
+        this.gate = gate
         _state.value = DebugState.Attaching("Waiting for the app to open its debug port…")
 
         val deadline = System.currentTimeMillis() + budgetMs
@@ -203,7 +209,7 @@ class DebugController(private val scope: CoroutineScope) {
         val request = live.requestStep(stopped.threadId, depth = depth)
         step = request to stopped.threadId
         live.resumeThread(stopped.threadId)
-        _state.value = DebugState.Running("Stepping…")
+        _state.value = DebugState.Running("Stepping…", stepping = true)
     }
 
     /** Shows another frame's variables. */
@@ -233,13 +239,31 @@ class DebugController(private val scope: CoroutineScope) {
      * the app.
      */
     fun detach(message: String = "Detached. The app keeps running.") {
+        scope.launch { detachNow(message) }
+    }
+
+    /** [detach], finishing before it returns -- for a caller about to go away. */
+    suspend fun detachNow(message: String = "Detached. The app keeps running.") {
+        lock.withLock {
+            val live = session ?: return@withLock
+            events?.cancel()
+            live.dispose()
+            reset()
+            _state.value = DebugState.Ended(message)
+        }
+    }
+
+    /**
+     * Ends a session that never got as far as attaching, with a reason.
+     *
+     * For failures before the controller is involved -- no launcher activity to
+     * start -- so they are reported where the session's own failures are,
+     * rather than somewhere the Debug tab does not show.
+     */
+    fun report(message: String) {
         scope.launch {
             lock.withLock {
-                val live = session ?: return@withLock
-                events?.cancel()
-                live.dispose()
-                reset()
-                _state.value = DebugState.Ended(message)
+                if (session == null) _state.value = DebugState.Ended(message)
             }
         }
     }
@@ -251,7 +275,7 @@ class DebugController(private val scope: CoroutineScope) {
                 val stopped = _state.value as? DebugState.Stopped ?: return@withLock
                 runCatching { block(live, stopped) }.onFailure { failure ->
                     if (failure is JdwpErrorException || failure is java.io.IOException) {
-                        _state.value = stopped.copy(variablesNote = "The app did not answer: ${failure.message}")
+                        noteFailure(failure)
                     } else {
                         throw failure
                     }
@@ -260,9 +284,53 @@ class DebugController(private val scope: CoroutineScope) {
         }
     }
 
+    private fun noteFailure(failure: Throwable) {
+        val message = "The app did not answer: ${failure.message}"
+        _state.value = when (val current = _state.value) {
+            is DebugState.Stopped -> current.copy(variablesNote = message)
+            is DebugState.Running -> current.copy(message = message, stepping = false)
+            else -> current
+        }
+    }
+
+    /**
+     * Sets one of the gate's static flags in the app -- the request to bring
+     * the IDE forward, today.
+     *
+     * Allowed while threads are suspended, which is when it is wanted: a
+     * static field is written by the VM on the debugger's behalf and needs no
+     * thread of the app's to run.
+     */
+    fun raiseFlag(field: String) {
+        scope.launch {
+            lock.withLock {
+                val live = session ?: return@withLock
+                val gate = gate ?: return@withLock
+                runCatching {
+                    val agent = live.classesBySignature(gate.classSignature).firstOrNull() ?: return@runCatching
+                    val flag = live.declaredFields(agent.typeId).firstOrNull { it.name == field } ?: return@runCatching
+                    live.setStaticBoolean(agent.typeId, flag.id, true)
+                }
+            }
+        }
+    }
+
     private suspend fun consume(live: DebugSession) {
         try {
-            live.events.collect { set -> lock.withLock { handle(live, set) } }
+            live.events.collect { set ->
+                lock.withLock {
+                    // One unanswered round trip must not end the session: the
+                    // app may only have been frozen for a moment, and every
+                    // later event would otherwise have nowhere to go.
+                    try {
+                        handle(live, set)
+                    } catch (e: java.io.IOException) {
+                        noteFailure(e)
+                    } catch (e: JdwpErrorException) {
+                        noteFailure(e)
+                    }
+                }
+            }
         } finally {
             lock.withLock {
                 if (session === live) {

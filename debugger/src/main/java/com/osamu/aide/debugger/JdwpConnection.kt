@@ -4,6 +4,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.Closeable
 import java.io.DataInputStream
 import java.io.DataOutputStream
@@ -168,8 +169,14 @@ class JdwpConnection private constructor(private val socket: Socket) : Closeable
             out.flush()
         }
 
+        // **Bounded.** A debuggee that does not answer is not always a dead
+        // one: Android freezes cached processes, and a frozen app keeps its
+        // socket open and says nothing. Without a limit the caller waits
+        // forever -- and the debugger's lock with it, so every button after
+        // that one does nothing either.
         val reply = try {
-            waiter.await()
+            withTimeoutOrNull(REQUEST_TIMEOUT_MS) { waiter.await() }
+                ?: throw JdwpTimeoutException(commandSet, command)
         } finally {
             pending.remove(id)
         }
@@ -275,6 +282,7 @@ class JdwpConnection private constructor(private val socket: Socket) : Closeable
         private const val EVENT_SET = 64
         private const val EVENT_COMPOSITE = 100
         private const val CLOSE_JOIN_MS = 500L
+        private const val REQUEST_TIMEOUT_MS = 10_000L
 
         /**
          * Connects, shakes hands, and learns the VM's identifier widths.

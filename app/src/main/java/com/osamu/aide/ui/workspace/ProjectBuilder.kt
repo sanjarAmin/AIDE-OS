@@ -4,6 +4,7 @@ import com.osamu.aide.core.common.DispatcherProvider
 import com.osamu.aide.core.fs.Project
 import com.osamu.aide.engine.api.BuildEvent
 import com.osamu.aide.engine.api.BuildRequest
+import com.osamu.aide.engine.api.DebuggerRequest
 import com.osamu.aide.engine.api.BuildResult
 import com.osamu.aide.engine.fast.AndroidPlatformProvider
 import android.os.Build
@@ -92,7 +93,11 @@ class ProjectBuilder(
         return ToolchainComponent.nativeToolchain(Build.SUPPORTED_ABIS.first())
     }
 
-    fun build(project: Project, debuggable: Boolean = true): Flow<BuildEvent> = flow {
+    fun build(
+        project: Project,
+        debuggable: Boolean = true,
+        debugger: DebuggerRequest? = null,
+    ): Flow<BuildEvent> = flow {
         // **Which engine is a property of the project**, recorded when it was
         // created or imported. Checked before anything else because the Gradle
         // path needs none of what follows: it resolves its own dependencies and
@@ -143,6 +148,7 @@ class ProjectBuilder(
                     project = project,
                     outputDir = outputFor(project),
                     debuggable = debuggable,
+                    debugger = debugger,
                     dependencies = resolved,
                 ),
             ),

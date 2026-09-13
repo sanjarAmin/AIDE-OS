@@ -33,6 +33,7 @@ import com.osamu.aide.ui.workspace.LanguageServices
 import com.osamu.aide.build.BuildRunner
 import com.osamu.aide.build.RemoteBuildRunner
 import com.osamu.aide.ui.workspace.ProjectBuilder
+import com.osamu.aide.ui.workspace.DebugViewModel
 import com.osamu.aide.ui.workspace.LogcatViewModel
 import com.osamu.aide.ui.workspace.TerminalViewModel
 import com.osamu.aide.ui.workspace.ProjectDependencies
@@ -158,6 +159,9 @@ val appModule = module {
     viewModel { TerminalViewModel(get()) }
     // Its own, like the terminal's: it owns a running `logcat` child process.
     viewModel { LogcatViewModel(get()) }
+    // Its own, like the terminal's: it owns a socket into another app and may
+    // hold that app's threads suspended, and both have to be let go.
+    viewModel { DebugViewModel(get(), get()) }
     viewModel { WorkspaceViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
 }
 

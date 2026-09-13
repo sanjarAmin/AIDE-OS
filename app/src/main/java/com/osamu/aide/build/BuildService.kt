@@ -11,6 +11,7 @@ import android.os.Messenger
 import android.os.Process
 import com.osamu.aide.core.common.DispatcherProvider
 import com.osamu.aide.engine.api.BuildEvent
+import com.osamu.aide.engine.api.DebuggerRequest
 import com.osamu.aide.ui.workspace.ProjectBuilder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -94,13 +95,21 @@ class BuildService : Service() {
         // Defaults to a debug build: an older client that does not send the flag
         // must not get a release one by accident.
         val debuggable = message.data?.getBoolean(BuildProtocol.KEY_DEBUGGABLE, true) ?: true
+        val debugger = message.data
+            ?.takeIf { it.containsKey(BuildProtocol.KEY_DEBUG_PORT) }
+            ?.let {
+                DebuggerRequest(
+                    port = it.getInt(BuildProtocol.KEY_DEBUG_PORT),
+                    handshakeAuthority = it.getString(BuildProtocol.KEY_DEBUG_HANDSHAKE),
+                )
+            }
 
         // One build at a time. A second request while one is running is the
         // user tapping Build twice, and two compilers in one process is the
         // memory problem this service exists to avoid.
         running?.cancel()
         running = scope.launch {
-            builder.build(project, debuggable)
+            builder.build(project, debuggable, debugger)
                 .onEach { send(reply, it) }
                 .collect()
         }

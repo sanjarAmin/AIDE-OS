@@ -39,6 +39,16 @@ object BuildProtocol {
      */
     const val KEY_DEBUGGABLE = "build.debuggable"
 
+    /**
+     * The debugger to build in, as two plain values.
+     *
+     * Absent rather than defaulted when there is none: a port of 0 or -1 would
+     * be a sentinel the service has to know, and a missing key is one it
+     * cannot misread as a request.
+     */
+    const val KEY_DEBUG_PORT = "build.debug.port"
+    const val KEY_DEBUG_HANDSHAKE = "build.debug.handshake"
+
     fun encodeProject(project: Project): Bundle = Bundle().apply {
         putString(KEY_NAME, project.name)
         putString(KEY_ROOT, project.rootDir.absolutePath)

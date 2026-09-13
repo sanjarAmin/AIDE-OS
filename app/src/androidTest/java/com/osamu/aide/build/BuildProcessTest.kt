@@ -82,7 +82,7 @@ class BuildProcessTest {
         val runner = RemoteBuildRunner(context)
 
         val events = runBlocking {
-            withTimeout(BUILD_TIMEOUT_MILLIS) { runner.build(project(), debuggable = true).toList() }
+            withTimeout(BUILD_TIMEOUT_MILLIS) { runner.build(project(), debuggable = true, debugger = null).toList() }
         }
 
         // Whatever the outcome, the contract is that a build ends with

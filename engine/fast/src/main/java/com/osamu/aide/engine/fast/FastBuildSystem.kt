@@ -123,7 +123,7 @@ class FastBuildSystem(
             // has to happen after the merge and before the link, because aapt2
             // reads the manifest once and what it is handed is what the APK
             // declares.
-            val manifestToLink = request.debugPort?.let { port ->
+            val manifestToLink = request.debugger?.let { debugger ->
                 withContext(dispatchers.io) {
                     // **merge() returns the project's own manifest when there
                     // is nothing to merge into it**, and that file is in the
@@ -136,7 +136,7 @@ class FastBuildSystem(
                         workspace = workspace,
                         manifest = workspace.mergedManifest,
                         applicationId = request.project.applicationId,
-                        port = port,
+                        request = debugger,
                     )
                     workspace.mergedManifest
                 }
@@ -308,7 +308,7 @@ class FastBuildSystem(
         // anyway -- a release build is not debuggable -- but failing here says
         // so, rather than producing an app that carries a provider that can
         // never work.
-        !request.debuggable && request.debugPort != null ->
+        !request.debuggable && request.debugger != null ->
             "A release build cannot carry a debugger."
 
         // Both halves, because they are different problems with different
