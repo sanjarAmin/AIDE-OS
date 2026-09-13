@@ -101,17 +101,65 @@ fixture is the `dexdump` output above. **It was suspected and was innocent** —
 the test passed first time, which is what pointed back at the stale debuggee in
 §3.
 
-## 5. What is not built yet
+## 5. A breakpoint in a class that has not loaded is a ClassPrepare, held
 
-- **Deferred breakpoints.** `classesBySignature` returns nothing for a class
-  that has not loaded, which is the normal state early in an app's life. Real
-  use needs a `CLASS_PREPARE` request and a set of breakpoints to install when
-  it fires.
+Early in an app's life most classes do not exist yet, and `ClassesBySignature`
+answers nothing for them. Polling until it does loses a race: by the time a
+poll sees the class, the line the breakpoint was for may have run.
+
+`requestClassPrepare` asks to be told when the class prepares, with
+**`SuspendPolicy.EVENT_THREAD`, which is the point rather than a default**: the
+thread that caused the load is held before any of the class's code runs, so a
+breakpoint installed in response is guaranteed to be there first. With `NONE`
+it is a race the debugger usually wins on an emulator. The caller must resume
+that thread afterwards or the app stays frozen.
+
+`DeferredBreakpointTest` restarts the debuggee, attaches inside a five-second
+window, **asserts the class is absent before asking**, and gets:
+
+```
+deferred breakpoint hit in com.osamu.aide.spike.jdwpdebuggee.LateLoaded.run at line 22
+```
+
+Without the absence check the test would pass on the ordinary path and prove
+nothing about this one. Two details the test needed:
+
+- **The late class is loaded by reflection.** ART's verifier may load a class as
+  soon as a method that names it is verified, which for anything the Activity
+  referred to directly means at startup. `LateLoaded` is named only as a string.
+- **It restarts the debuggee on a port of its own** (8701), so the new agent is
+  not binding a port the killed process may have left in `TIME_WAIT`, and puts
+  a debuggee back on 8700 afterwards for `DebugSessionTest`.
+
+## 6. An object's fields: three round trips, and only its own class's
+
+`fields(objectId)` is `ObjectReference.ReferenceType`, then
+`ReferenceType.Fields`, then `ObjectReference.GetValues`. **`Fields` does not
+walk superclasses** — an Activity's own state comes back and `Activity`'s does
+not — and static fields are left out, because showing a shared value under one
+instance invites reading it as that instance's.
+
+The test's assertion is agreement, not plausibility. Stopped on the first line
+of `step(counter)`, the object's `ticks` field was set from the value this call
+received as `counter`, so the two must be the same number:
+
+```
+fields of this: ticks=134 counter=134 label ok
+```
+
+A field read at the wrong offset or out of the wrong object cannot match by
+accident. The string field takes the other path — its value is an object id,
+turned into text by `StringReference.Value`.
+
+## 7. What is not built yet
+
+- **A UI.** Breakpoints in the editor gutter, a stopped-thread view, locals and
+  Continue/Step. The library is the whole debugger; nothing in the app calls it.
 - **Stopping before `main`.** The agent is attached with `suspend=n`, because
   `suspend=y` blocks in the provider until a client connects and Android kills
   an app that does not draw. Debugging startup needs a different arrangement.
-- **Expression evaluation, watchpoints, exception breakpoints.** All are
-  further JDWP command sets against the same connection.
-- **Object inspection beyond identity.** A `JdwpValue.Reference` carries an id;
-  reading fields out of it is `ObjectReference.GetValues`, not yet written.
-  `stringValue` is the one exception, because a string with no text is useless.
+- **Inherited fields, arrays, expression evaluation, watchpoints, exception
+  breakpoints.** All are further JDWP commands against the same connection.
+- **Kotlin line mapping for inline functions.** A breakpoint in an inlined body
+  lives in the caller's line table under an SMAP remapping, and `breakpointAt`
+  only matches literal line numbers.

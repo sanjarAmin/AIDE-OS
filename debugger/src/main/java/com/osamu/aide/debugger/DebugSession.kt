@@ -161,17 +161,81 @@ class DebugSession(private val connection: JdwpConnection) : Closeable {
         suspendPolicy: Int = Jdwp.SuspendPolicy.EVENT_THREAD,
     ): Breakpoint? {
         val classRef = classesBySignature(classSignature).firstOrNull() ?: return null
-        for (method in methods(classRef.typeId)) {
-            val index = runCatching { lineTable(classRef.typeId, method.id) }
+        return breakpointInType(classRef.typeTag, classRef.typeId, lineNumber, suspendPolicy)
+    }
+
+    /**
+     * Sets a breakpoint at a line of a class already identified by id.
+     *
+     * The half of [breakpointAt] that does not look the class up, because a
+     * deferred breakpoint already has the id: it arrives in the
+     * [JdwpEvent.ClassPrepare] that says the class exists, and looking it up
+     * again by signature is a round trip spent learning what the event said.
+     */
+    suspend fun breakpointInType(
+        typeTag: Int,
+        typeId: Long,
+        lineNumber: Int,
+        suspendPolicy: Int = Jdwp.SuspendPolicy.EVENT_THREAD,
+    ): Breakpoint? {
+        for (method in methods(typeId)) {
+            val index = runCatching { lineTable(typeId, method.id) }
                 .getOrDefault(emptyList())
                 .filter { it.lineNumber == lineNumber }
                 .minByOrNull { it.codeIndex }
                 ?.codeIndex
                 ?: continue
-            val location = Location(classRef.typeTag, classRef.typeId, method.id, index)
+            val location = Location(typeTag, typeId, method.id, index)
             return Breakpoint(setBreakpoint(location, suspendPolicy), location, method)
         }
         return null
+    }
+
+    /**
+     * Asks to be told when a class is prepared, **and to have the loading
+     * thread held there**.
+     *
+     * This is how a breakpoint is placed in a class that does not exist yet,
+     * which early in an app's life is most of them. [classesBySignature]
+     * answers nothing for such a class, and polling it would lose the race:
+     * by the time a poll sees the class, the code the breakpoint was for may
+     * already have run.
+     *
+     * **The suspend policy is the point, not a default.** With `EVENT_THREAD`
+     * the thread that caused the load is stopped before any of the class's
+     * code runs, so a breakpoint installed in response is guaranteed to be in
+     * place first. With `NONE` it is a race that the debugger usually wins on
+     * an emulator and loses on a slow phone. The caller must
+     * [resumeThread] once its breakpoints are in, or the app stays frozen.
+     *
+     * [qualifiedName] is a class name with dots, as `ClassMatch` expects; a
+     * leading or trailing `*` is a wildcard, which is also how inner classes
+     * (`Outer$*`) are caught.
+     */
+    suspend fun requestClassPrepare(
+        qualifiedName: String,
+        suspendPolicy: Int = Jdwp.SuspendPolicy.EVENT_THREAD,
+    ): Int {
+        val body = connection.writer()
+            .byte(Jdwp.EventKind.CLASS_PREPARE)
+            .byte(suspendPolicy)
+            .int(1) // one modifier
+            .byte(Jdwp.Modifier.CLASS_MATCH)
+            .string(qualifiedName)
+            .build()
+        return connection.request(
+            Jdwp.EventRequest.SET,
+            Jdwp.EventRequest.SET_REQUEST,
+            body,
+        ).int()
+    }
+
+    suspend fun clearClassPrepare(requestId: Int) {
+        val body = connection.writer()
+            .byte(Jdwp.EventKind.CLASS_PREPARE)
+            .int(requestId)
+            .build()
+        connection.request(Jdwp.EventRequest.SET, Jdwp.EventRequest.CLEAR, body)
     }
 
     /** Registers a breakpoint at an exact location. Returns its request id. */
@@ -302,6 +366,57 @@ class DebugSession(private val connection: JdwpConnection) : Closeable {
         return connection.request(STRING_REFERENCE_SET, STRING_REFERENCE_VALUE, body).string()
     }
 
+    /**
+     * The instance fields of an object, with their current values.
+     *
+     * Three round trips -- the object's runtime type, that type's fields, then
+     * their values -- which is why a UI should expand an object when asked and
+     * not eagerly. **Only the fields its own class declares**: `Fields` does
+     * not walk superclasses, so an Activity's own state is here and
+     * `Activity`'s is not. Walking the hierarchy is `ClassType.Superclass`
+     * and a loop, and deliberately left to the caller who wants the cost.
+     *
+     * Static fields are skipped. They belong to the class rather than the
+     * object, and showing them under an instance invites reading a shared
+     * value as this object's own.
+     */
+    suspend fun fields(objectId: Long): List<FieldValue> {
+        val typeReply = connection.request(
+            OBJECT_REFERENCE_SET,
+            OBJECT_REFERENCE_TYPE,
+            connection.writer().objectId(objectId).build(),
+        )
+        typeReply.byte() // type tag
+        val typeId = typeReply.referenceTypeId()
+
+        val fieldsReply = connection.request(
+            Jdwp.ReferenceType.SET,
+            REFERENCE_TYPE_FIELDS,
+            connection.writer().referenceTypeId(typeId).build(),
+        )
+        val declared = (0 until fieldsReply.int()).map {
+            FieldInfo(
+                id = fieldsReply.fieldId(),
+                name = fieldsReply.string(),
+                signature = fieldsReply.string(),
+                modifiers = fieldsReply.int(),
+            )
+        }.filter { it.modifiers and ACC_STATIC == 0 }
+        if (declared.isEmpty()) return emptyList()
+
+        val writer = connection.writer().objectId(objectId).int(declared.size)
+        declared.forEach { writer.fieldId(it.id) }
+        val valuesReply = connection.request(
+            OBJECT_REFERENCE_SET,
+            OBJECT_REFERENCE_GET_VALUES,
+            writer.build(),
+        )
+        val count = valuesReply.int()
+        return (0 until count).map { index ->
+            FieldValue(declared[index].name, declared[index].signature, valuesReply.value())
+        }
+    }
+
     suspend fun threadName(threadId: Long): String {
         val body = connection.writer().objectId(threadId).build()
         return connection.request(
@@ -370,6 +485,14 @@ class DebugSession(private val connection: JdwpConnection) : Closeable {
         const val STRING_REFERENCE_SET = 10
         const val STRING_REFERENCE_VALUE = 1
 
+        const val OBJECT_REFERENCE_SET = 9
+        const val OBJECT_REFERENCE_TYPE = 1
+        const val OBJECT_REFERENCE_GET_VALUES = 2
+        const val REFERENCE_TYPE_FIELDS = 4
+
+        /** `ACC_STATIC`, as JDWP reports field modifiers in JVM form. */
+        const val ACC_STATIC = 0x0008
+
         /** Tags whose value on the wire is an object id. */
         val OBJECT_TAGS = setOf(
             Jdwp.Tag.OBJECT,
@@ -421,6 +544,12 @@ internal fun parseVariableTable(reply: PacketReader): List<VariableInfo> {
         )
     }
 }
+
+/** A field as its declaring class describes it. */
+data class FieldInfo(val id: Long, val name: String, val signature: String, val modifiers: Int)
+
+/** One instance field of an object, and what it currently holds. */
+data class FieldValue(val name: String, val signature: String, val value: JdwpValue)
 
 /** A loaded class, as `ClassesBySignature` reports it. */
 data class ClassRef(val typeTag: Int, val typeId: Long, val status: Int)

@@ -236,6 +236,58 @@ class DebugSessionTest {
         debugger.resumeThread(stepped.threadId)
     }
 
+    /**
+     * An object's fields can be read, and they agree with the frame.
+     *
+     * Stopped on the first line of `step(counter)`: the previous call set
+     * `ticks = next`, and `next` is what this call received as `counter`. So
+     * the field read out of `this` and the local read out of the frame have to
+     * be **the same number** -- which a field read at the wrong offset, or from
+     * the wrong object, cannot manage by accident.
+     *
+     * The string field is there for the other path: its value is an object id
+     * and turning it into text is a further round trip.
+     */
+    @Test
+    fun an_objects_fields_can_be_read_and_agree_with_its_locals() = runBlocking {
+        val debugger = session!!
+        val signature = classSignature(DEBUGGEE_CLASS)
+        val classRef = debugger.classesBySignature(signature).single()
+        val step = debugger.methods(classRef.typeId).single { it.name == STEP_METHOD }
+        val firstLine = debugger.lineTable(classRef.typeId, step.id).minBy { it.codeIndex }
+
+        val placed = debugger.breakpointAt(signature, firstLine.lineNumber)!!
+        breakpoint = placed
+        val stopped = debugger.awaitStop(placed.requestId)
+        debugger.clearBreakpoint(placed.requestId)
+        breakpoint = null
+
+        val frame = debugger.frames(stopped.threadId).first()
+        val live = debugger.variableTable(classRef.typeId, step.id)
+            .filter { it.isLiveAt(stopped.location.index) }
+        val locals = debugger.values(stopped.threadId, frame.id, live)
+
+        val self = locals["this"] as? JdwpValue.Reference
+        assertNotNull("no `this` in ${locals.keys}", self)
+        val counter = (locals[COUNTER_VARIABLE] as JdwpValue.Primitive).value as Int
+
+        val fields = debugger.fields(self!!.id).associateBy { it.name }
+        val ticks = fields["ticks"]?.value as? JdwpValue.Primitive
+        assertNotNull("no `ticks` among ${fields.keys}", ticks)
+        assertEquals(
+            "the field and the local disagree, so one was read from the wrong place",
+            counter,
+            ticks!!.value,
+        )
+
+        val label = fields["label"]?.value as? JdwpValue.Reference
+        assertNotNull("no `label` among ${fields.keys}", label)
+        assertEquals("jdwp-debuggee", debugger.stringValue(label!!.id))
+        android.util.Log.w(TAG, "fields of this: ticks=${ticks.value} counter=$counter label ok")
+
+        debugger.resumeThread(stopped.threadId)
+    }
+
     /** Waits for the next stop belonging to [requestId]. */
     private suspend fun DebugSession.awaitStop(requestId: Int): JdwpEvent.Stopped =
         withTimeout(BREAKPOINT_TIMEOUT_MS) {

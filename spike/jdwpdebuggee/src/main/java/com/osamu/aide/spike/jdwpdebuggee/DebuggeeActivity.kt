@@ -23,6 +23,16 @@ import android.widget.TextView
  */
 class DebuggeeActivity : Activity() {
 
+    /**
+     * Fields for a debugger to read out of `this`.
+     *
+     * One primitive that changes and one string that does not, because they
+     * travel differently: the int is in the `GetValues` reply, the string is an
+     * object id that costs one more round trip to turn into text.
+     */
+    private var ticks = 0
+    private val label = "jdwp-debuggee"
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(TextView(this).apply { text = "JDWP debuggee" })
@@ -33,6 +43,24 @@ class DebuggeeActivity : Activity() {
         // own -- a debuggee that will not die is worse than one that will not
         // stop.
         Thread({ work() }, "debuggee-work").apply { isDaemon = true }.start()
+        Thread({ loadLate() }, "debuggee-late").apply { isDaemon = true }.start()
+    }
+
+    /**
+     * Loads [LateLoaded] after a delay, then keeps calling it.
+     *
+     * The delay is what gives a debugger time to attach and ask to be told when
+     * the class prepares; the loop is what makes a breakpoint inside it fire
+     * whether or not the debugger was quick. By name, so nothing loads it
+     * sooner -- see [LateLoaded].
+     */
+    private fun loadLate() {
+        Thread.sleep(LATE_LOAD_DELAY_MS)
+        val late = Class.forName(LATE_CLASS).getDeclaredConstructor().newInstance() as Runnable
+        while (true) {
+            late.run()
+            Thread.sleep(50)
+        }
     }
 
     /**
@@ -69,7 +97,8 @@ class DebuggeeActivity : Activity() {
      */
     private fun step(counter: Int): Int {
         val next = counter + 1
-        Log.d(TAG, "step $next")
+        ticks = next
+        Log.d(TAG, "step $next of $label")
         return next
     }
 
@@ -77,5 +106,7 @@ class DebuggeeActivity : Activity() {
         const val TAG = "JdwpDebuggee"
         const val EXTRA_PORT = "port"
         const val DEFAULT_PORT = 8700
+        const val LATE_LOAD_DELAY_MS = 5_000L
+        const val LATE_CLASS = "com.osamu.aide.spike.jdwpdebuggee.LateLoaded"
     }
 }

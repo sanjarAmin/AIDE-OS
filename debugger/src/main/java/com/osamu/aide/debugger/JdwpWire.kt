@@ -118,6 +118,7 @@ class PacketWriter(private val sizes: IdSizes) {
     fun objectId(value: Long) = id(value, sizes.objectId)
     fun referenceTypeId(value: Long) = id(value, sizes.referenceTypeId)
     fun methodId(value: Long) = id(value, sizes.methodId)
+    fun fieldId(value: Long) = id(value, sizes.fieldId)
     fun frameId(value: Long) = id(value, sizes.frameId)
 
     fun location(location: Location) = apply {
@@ -218,6 +219,9 @@ object Jdwp {
 
     /** Event request modifiers, which are what make a request specific. */
     object Modifier {
+        /** `ClassMatch`: a qualified name, with `*` allowed at either end. */
+        const val CLASS_MATCH = 5
+
         /** `LocationOnly`: the modifier that makes a breakpoint a breakpoint. */
         const val LOCATION_ONLY = 7
 
