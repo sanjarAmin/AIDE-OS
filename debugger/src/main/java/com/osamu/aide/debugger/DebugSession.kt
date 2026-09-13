@@ -99,6 +99,122 @@ class DebugSession(private val connection: JdwpConnection) : Closeable {
         }
     }
 
+    /**
+     * Every class the VM has loaded, with its signature.
+     *
+     * The way to find classes by **source file** rather than by name, which is
+     * what an editor has: a Kotlin file `Main.kt` compiles to `MainKt`, to each
+     * class it declares, and to a synthetic class per lambda, and no rule maps
+     * the file name to all of them. Filtering this by package and then asking
+     * each candidate for its `SourceFile` does. On an app it is a few thousand
+     * entries, most of them framework, which is why callers filter by package
+     * before spending a round trip per class.
+     */
+    suspend fun allClasses(): List<LoadedClass> {
+        val reply = connection.request(Jdwp.VirtualMachine.SET, VIRTUAL_MACHINE_ALL_CLASSES)
+        return (0 until reply.int()).map {
+            LoadedClass(
+                typeTag = reply.byte(),
+                typeId = reply.referenceTypeId(),
+                signature = reply.string(),
+                status = reply.int(),
+            )
+        }
+    }
+
+    /** A class's JVM signature, e.g. `Lcom/example/Main;`. */
+    suspend fun signature(typeId: Long): String = connection.request(
+        Jdwp.ReferenceType.SET,
+        REFERENCE_TYPE_SIGNATURE,
+        connection.writer().referenceTypeId(typeId).build(),
+    ).string()
+
+    /**
+     * The file a class was compiled from, as its `SourceFile` attribute says:
+     * a bare name such as `Main.kt`, with no directory.
+     *
+     * Null when the class carries none, which the VM reports as
+     * `ABSENT_INFORMATION` (101) rather than an empty string. That is normal
+     * for synthetic and some framework classes, and not an error to show.
+     */
+    suspend fun sourceFile(typeId: Long): String? = try {
+        connection.request(
+            Jdwp.ReferenceType.SET,
+            REFERENCE_TYPE_SOURCE_FILE,
+            connection.writer().referenceTypeId(typeId).build(),
+        ).string()
+    } catch (e: JdwpErrorException) {
+        if (e.code == ERROR_ABSENT_INFORMATION) null else throw e
+    }
+
+    /** The fields a class declares, static ones included. */
+    suspend fun declaredFields(typeId: Long): List<FieldInfo> {
+        val reply = connection.request(
+            Jdwp.ReferenceType.SET,
+            REFERENCE_TYPE_FIELDS,
+            connection.writer().referenceTypeId(typeId).build(),
+        )
+        return (0 until reply.int()).map {
+            FieldInfo(
+                id = reply.fieldId(),
+                name = reply.string(),
+                signature = reply.string(),
+                modifiers = reply.int(),
+            )
+        }
+    }
+
+    /**
+     * Sets a static `boolean` field.
+     *
+     * The one write this debugger performs, and it exists for one field: the
+     * generated agent in a debug build holds the app's startup until the
+     * debugger has placed its breakpoints and flips this. A general setter
+     * would need an untagged value per type, and nothing asks for one.
+     */
+    suspend fun setStaticBoolean(typeId: Long, fieldId: Long, value: Boolean) {
+        val body = connection.writer()
+            .referenceTypeId(typeId)
+            .int(1)
+            .fieldId(fieldId)
+            .byte(if (value) 1 else 0) // untagged: the field's type decides the width
+            .build()
+        connection.request(CLASS_TYPE_SET, CLASS_TYPE_SET_VALUES, body)
+    }
+
+    /** How many elements an array holds. */
+    suspend fun arrayLength(arrayId: Long): Int = connection.request(
+        ARRAY_REFERENCE_SET,
+        ARRAY_REFERENCE_LENGTH,
+        connection.writer().objectId(arrayId).build(),
+    ).int()
+
+    /** The runtime class of an object, which may be a subclass of its declared type. */
+    suspend fun typeOf(objectId: Long): Long {
+        val reply = connection.request(
+            OBJECT_REFERENCE_SET,
+            OBJECT_REFERENCE_TYPE,
+            connection.writer().objectId(objectId).build(),
+        )
+        reply.byte()
+        return reply.referenceTypeId()
+    }
+
+    /**
+     * Ends the session **and lets the app go on running.**
+     *
+     * `VirtualMachine.Dispose` cancels every request this debugger made and
+     * resumes every thread it suspended, which a bare socket close does not
+     * promise. Stopping a debugger must never be what freezes the app it was
+     * attached to.
+     */
+    suspend fun dispose() {
+        runCatching {
+            connection.request(Jdwp.VirtualMachine.SET, VIRTUAL_MACHINE_DISPOSE)
+        }
+        connection.close()
+    }
+
     suspend fun methods(typeId: Long): List<MethodInfo> {
         val body = connection.writer().referenceTypeId(typeId).build()
         val reply = connection.request(Jdwp.ReferenceType.SET, Jdwp.ReferenceType.METHODS, body)
@@ -381,27 +497,8 @@ class DebugSession(private val connection: JdwpConnection) : Closeable {
      * value as this object's own.
      */
     suspend fun fields(objectId: Long): List<FieldValue> {
-        val typeReply = connection.request(
-            OBJECT_REFERENCE_SET,
-            OBJECT_REFERENCE_TYPE,
-            connection.writer().objectId(objectId).build(),
-        )
-        typeReply.byte() // type tag
-        val typeId = typeReply.referenceTypeId()
-
-        val fieldsReply = connection.request(
-            Jdwp.ReferenceType.SET,
-            REFERENCE_TYPE_FIELDS,
-            connection.writer().referenceTypeId(typeId).build(),
-        )
-        val declared = (0 until fieldsReply.int()).map {
-            FieldInfo(
-                id = fieldsReply.fieldId(),
-                name = fieldsReply.string(),
-                signature = fieldsReply.string(),
-                modifiers = fieldsReply.int(),
-            )
-        }.filter { it.modifiers and ACC_STATIC == 0 }
+        val declared = declaredFields(typeOf(objectId))
+            .filter { it.modifiers and ACC_STATIC == 0 }
         if (declared.isEmpty()) return emptyList()
 
         val writer = connection.writer().objectId(objectId).int(declared.size)
@@ -485,6 +582,18 @@ class DebugSession(private val connection: JdwpConnection) : Closeable {
         const val STRING_REFERENCE_SET = 10
         const val STRING_REFERENCE_VALUE = 1
 
+        const val VIRTUAL_MACHINE_ALL_CLASSES = 3
+        const val VIRTUAL_MACHINE_DISPOSE = 6
+        const val REFERENCE_TYPE_SIGNATURE = 1
+        const val REFERENCE_TYPE_SOURCE_FILE = 7
+        const val CLASS_TYPE_SET = 3
+        const val CLASS_TYPE_SET_VALUES = 2
+        const val ARRAY_REFERENCE_SET = 13
+        const val ARRAY_REFERENCE_LENGTH = 1
+
+        /** `ABSENT_INFORMATION`: the class or method carries no such attribute. */
+        const val ERROR_ABSENT_INFORMATION = 101
+
         const val OBJECT_REFERENCE_SET = 9
         const val OBJECT_REFERENCE_TYPE = 1
         const val OBJECT_REFERENCE_GET_VALUES = 2
@@ -544,6 +653,9 @@ internal fun parseVariableTable(reply: PacketReader): List<VariableInfo> {
         )
     }
 }
+
+/** One entry of `VirtualMachine.AllClasses`. */
+data class LoadedClass(val typeTag: Int, val typeId: Long, val signature: String, val status: Int)
 
 /** A field as its declaring class describes it. */
 data class FieldInfo(val id: Long, val name: String, val signature: String, val modifiers: Int)
