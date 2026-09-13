@@ -1,5 +1,7 @@
 package com.osamu.aide.ai.ui
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -53,6 +55,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -598,6 +601,7 @@ private fun KeyPrompt(
     onAddKey: () -> Unit,
     onSignInGoogle: () -> Unit = onAddKey,
 ) {
+    val context = LocalContext.current
     Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
         Row(
             Modifier
@@ -615,6 +619,22 @@ private fun KeyPrompt(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
+            val consoleUrl = when (activeProvider) {
+                AiProviderType.GEMINI -> "https://aistudio.google.com/app/apikey"
+                AiProviderType.ANTHROPIC -> "https://console.anthropic.com/settings/keys"
+                AiProviderType.OPENAI -> "https://platform.openai.com/api-keys"
+                AiProviderType.CUSTOM -> null
+            }
+            if (consoleUrl != null) {
+                TextButton(
+                    onClick = {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(consoleUrl))
+                        context.startActivity(intent)
+                    },
+                ) {
+                    Text(if (activeProvider == AiProviderType.GEMINI) "Get free key" else "Get key")
+                }
+            }
             if (activeProvider == AiProviderType.GEMINI && GoogleAuthManager.SIGN_IN_ENABLED) {
                 TextButton(onClick = onSignInGoogle) { Text("Sign in") }
             }

@@ -1,6 +1,17 @@
 package com.osamu.aide.ui.workspace
 
 import android.content.Intent
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -15,6 +26,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ListAlt
@@ -22,6 +34,7 @@ import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.PlayCircleOutline
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.CircularProgressIndicator
@@ -33,6 +46,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,6 +54,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.material3.FilterChip
 import androidx.compose.ui.semantics.contentDescription
@@ -47,13 +62,17 @@ import androidx.compose.ui.semantics.semantics
 import com.osamu.aide.core.fs.BuildEngine
 import com.osamu.aide.core.ui.theme.CodeTextStyle
 import com.osamu.aide.engine.api.Diagnostic
+import java.io.File
 
 /** Tabs whose content needs more than a strip: see the height below. */
-private val TALL_TABS = setOf(ToolTab.GIT, ToolTab.TERMINAL)
+private val TALL_TABS = setOf(ToolTab.DEBUG, ToolTab.GIT, ToolTab.TERMINAL)
 
 enum class ToolTab(val title: String, val icon: ImageVector) {
     BUILD("Build", Icons.Default.PlayCircleOutline),
-    PROBLEMS("Problems", Icons.Default.BugReport),
+    DEBUG("Debug", Icons.Default.BugReport),
+    // Not the bug icon any more: that is Debug's, which is what every IDE uses
+    // it for, and two tabs wearing one icon is a coin toss for the user.
+    PROBLEMS("Problems", Icons.Default.ErrorOutline),
     GIT("Git", Icons.Default.AccountTree),
     LOGCAT("Logcat", Icons.AutoMirrored.Filled.ListAlt),
     TERMINAL("Terminal", Icons.Default.Terminal),
@@ -82,6 +101,19 @@ fun BottomToolDock(
     terminalActions: TerminalActions,
     logcatState: LogcatUiState,
     logcatActions: LogcatActions,
+    debugState: DebugUiState,
+    debugActions: DebugActions,
+    /** Why this project cannot be debugged, or null when it can. */
+    debugUnavailable: String?,
+    projectRoot: File?,
+    /**
+     * Brings the Debug tab forward each time it changes.
+     *
+     * A counter rather than a tab, because the same request twice in a row --
+     * two breakpoints hit, with the user on Git between them -- must still
+     * switch, and state holding `DEBUG` both times would not change.
+     */
+    debugFocus: Int = 0,
     /** Prefills the log filter: the id the built app installs under. */
     applicationId: String?,
     onDiagnosticClick: (Diagnostic) -> Unit,
@@ -102,6 +134,26 @@ fun BottomToolDock(
     modifier: Modifier = Modifier,
 ) {
     var selectedTab by remember { mutableStateOf(ToolTab.BUILD) }
+    LaunchedEffect(debugFocus) {
+        if (debugFocus > 0) selectedTab = ToolTab.DEBUG
+    }
+
+    val infiniteTransition = rememberInfiniteTransition(label = "dockPulse")
+    val buildGlowAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "buildGlowAlpha",
+    )
+
+    val animatedHeight by animateDpAsState(
+        targetValue = if (selectedTab in TALL_TABS) 340.dp else 200.dp,
+        animationSpec = tween(250),
+        label = "dockHeight",
+    )
 
     Surface(
         color = MaterialTheme.colorScheme.surface,
@@ -113,23 +165,15 @@ fun BottomToolDock(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                // **Weighted and scrolling.** Five tabs do not fit a 360 dp
-                // phone, and without either of these the row took the whole
-                // width and squeezed what was left: "Terminal" wrapped into a
-                // column of one and two letters -- 176 px tall against its
-                // siblings' 48 -- and the close button beside it was measured
-                // at nothing and disappeared, leaving the dock covering half
-                // the editor with no way to shut it. The same remedy the chat
-                // suggestions and the terminal key row already use.
                 Row(
                     modifier = Modifier
                         .weight(1f)
                         .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     ToolTab.entries.forEach { tab ->
@@ -137,36 +181,49 @@ fun BottomToolDock(
                         val badgeCount = when (tab) {
                             ToolTab.PROBLEMS -> problems.size
                             ToolTab.BUILD -> if (buildState.isRunning) 1 else 0
-                            // The number of files a commit would take: the one
-                            // figure worth carrying on a tab nobody is looking at.
                             ToolTab.GIT -> gitState.status.staged.size
+                            ToolTab.DEBUG -> if (debugState.session is com.osamu.aide.debugger.DebugState.Stopped) 1 else 0
                             else -> 0
                         }
 
                         Surface(
-                            shape = RoundedCornerShape(4.dp),
+                            shape = RoundedCornerShape(8.dp),
                             color = if (isSelected) {
                                 MaterialTheme.colorScheme.surfaceVariant
                             } else {
                                 MaterialTheme.colorScheme.surfaceContainerLow
                             },
+                            border = if (isSelected) {
+                                BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
+                            } else null,
                             modifier = Modifier.clickable { selectedTab = tab },
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
                             ) {
                                 if (tab == ToolTab.BUILD && buildState.isRunning) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(12.dp),
-                                        strokeWidth = 1.5.dp,
-                                    )
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(14.dp)
+                                                .background(
+                                                    MaterialTheme.colorScheme.secondary.copy(alpha = buildGlowAlpha * 0.4f),
+                                                    CircleShape,
+                                                ),
+                                        )
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(12.dp),
+                                            strokeWidth = 1.5.dp,
+                                            color = MaterialTheme.colorScheme.secondary,
+                                        )
+                                    }
                                 } else {
                                     Icon(
                                         imageVector = tab.icon,
                                         contentDescription = null,
-                                        modifier = Modifier.size(14.dp),
+                                        modifier = Modifier.size(15.dp),
                                         tint = if (isSelected) {
                                             MaterialTheme.colorScheme.primary
                                         } else {
@@ -177,6 +234,7 @@ fun BottomToolDock(
                                 Text(
                                     text = tab.title,
                                     style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
                                     color = if (isSelected) {
                                         MaterialTheme.colorScheme.onSurface
                                     } else {
@@ -187,15 +245,17 @@ fun BottomToolDock(
                                     Box(
                                         modifier = Modifier
                                             .background(
-                                                MaterialTheme.colorScheme.primaryContainer,
+                                                if (tab == ToolTab.PROBLEMS) MaterialTheme.colorScheme.errorContainer
+                                                else MaterialTheme.colorScheme.primaryContainer,
                                                 RoundedCornerShape(8.dp),
                                             )
-                                            .padding(horizontal = 5.dp, vertical = 1.dp),
+                                            .padding(horizontal = 6.dp, vertical = 1.dp),
                                     ) {
                                         Text(
                                             text = badgeCount.toString(),
                                             style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            color = if (tab == ToolTab.PROBLEMS) MaterialTheme.colorScheme.onErrorContainer
+                                            else MaterialTheme.colorScheme.onPrimaryContainer,
                                         )
                                     }
                                 }
@@ -218,22 +278,20 @@ fun BottomToolDock(
 
             HorizontalDivider()
 
-            // Tool Content Body
-            //
-            // **Taller for the tabs that need it.** 200dp was sized when this
-            // dock held build output and nothing else. Git spends most of that
-            // on chrome it cannot drop -- a branch line, an identity warning, a
-            // commit field -- and what was left for the changed files was about
-            // one row, overlapping the row beneath it, verified in the running
-            // app. The terminal has the same problem for the same reason: a
-            // command field and a status line leave almost nothing for output.
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(if (selectedTab in TALL_TABS) 340.dp else 200.dp)
+                    .height(animatedHeight)
                     .padding(8.dp),
             ) {
-                when (selectedTab) {
+                AnimatedContent(
+                    targetState = selectedTab,
+                    transitionSpec = {
+                        fadeIn(animationSpec = tween(200)) togetherWith fadeOut(animationSpec = tween(150))
+                    },
+                    label = "dockTabContent",
+                ) { currentTab ->
+                    when (currentTab) {
                     ToolTab.BUILD -> {
                         Column(Modifier.fillMaxWidth()) {
                             // The one build failure the user can act on: the
@@ -320,6 +378,12 @@ fun BottomToolDock(
                             }
                         }
                     }
+                    ToolTab.DEBUG -> DebugPanel(
+                        state = debugState,
+                        actions = debugActions,
+                        projectRoot = projectRoot,
+                        unavailableReason = debugUnavailable,
+                    )
                     ToolTab.PROBLEMS -> ProblemsList(
                         problems = problems,
                         onDiagnosticClick = onDiagnosticClick,
@@ -345,6 +409,7 @@ fun BottomToolDock(
                         state = terminalState,
                         actions = terminalActions,
                     )
+                }
                 }
             }
         }
@@ -409,7 +474,24 @@ internal fun ProblemsList(
     }
     LazyColumn(Modifier.fillMaxWidth()) {
         items(problems) { diagnostic ->
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    modifier = Modifier.padding(end = 8.dp),
+                ) {
+                    Text(
+                        text = "ERROR",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                    )
+                }
                 Text(
                     text = diagnostic.describe(),
                     style = CodeTextStyle,

@@ -17,6 +17,7 @@
             <option value="$PROJECT_DIR$/core/common" />
             <option value="$PROJECT_DIR$/core/fs" />
             <option value="$PROJECT_DIR$/core/ui" />
+            <option value="$PROJECT_DIR$/debugger" />
             <option value="$PROJECT_DIR$/editor" />
             <option value="$PROJECT_DIR$/engine" />
             <option value="$PROJECT_DIR$/engine/api" />
@@ -37,6 +38,8 @@
             <option value="$PROJECT_DIR$/spike/deps" />
             <option value="$PROJECT_DIR$/spike/git" />
             <option value="$PROJECT_DIR$/spike/javals" />
+            <option value="$PROJECT_DIR$/spike/jdwp" />
+            <option value="$PROJECT_DIR$/spike/jdwpdebuggee" />
             <option value="$PROJECT_DIR$/spike/kotlinls" />
             <option value="$PROJECT_DIR$/spike/mono" />
             <option value="$PROJECT_DIR$/spike/nativeexec" />

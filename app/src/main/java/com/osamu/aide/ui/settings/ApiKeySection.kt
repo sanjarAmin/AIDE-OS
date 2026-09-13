@@ -1,5 +1,7 @@
 package com.osamu.aide.ui.settings
 
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
@@ -13,7 +15,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
@@ -22,6 +26,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -33,6 +38,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -50,6 +56,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.osamu.aide.ai.core.AiProviderType
 import com.osamu.aide.ai.core.ApiKeyStore
 import com.osamu.aide.ai.core.Endpoint
@@ -139,6 +146,25 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
     // network -- the row now shows the address whether or not it is open, which
     // is the same guarantee without the field.
     var editingEndpoint by remember(activeProvider) { mutableStateOf(false) }
+
+    var clipboardKey by remember(activeProvider) { mutableStateOf<String?>(null) }
+
+    val checkClipboard: () -> Unit = {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        val clipText = clipboard?.primaryClip?.let { clip ->
+            if (clip.itemCount > 0) clip.getItemAt(0)?.text?.toString() else null
+        }?.trim()
+        clipboardKey = if (clipText != null && looksLikeKeyFor(activeProvider, clipText)) {
+            clipText
+        } else {
+            null
+        }
+    }
+
+    LifecycleResumeEffect(activeProvider) {
+        checkClipboard()
+        onPauseOrDispose { }
+    }
 
     val endpoint = parseEndpoint(endpointDraft)
     val normalised = when (endpoint) {
@@ -264,6 +290,61 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                     expanded = editingKey,
                     onToggle = { editingKey = !editingKey },
                 ) {
+                    providerConsoleUrl(activeProvider)?.let { url ->
+                        OutlinedButton(
+                            onClick = {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.OpenInNew,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Text(
+                                text = providerConsoleLabel(activeProvider),
+                                modifier = Modifier.padding(start = 8.dp),
+                            )
+                        }
+                    }
+
+                    val detectedKey = clipboardKey
+                    if (detectedKey != null && detectedKey != draft) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                                    Text(
+                                        text = "Found ${activeProvider.displayName} key in clipboard",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    )
+                                    Text(
+                                        text = detectedKey.take(8) + "..." + detectedKey.takeLast(4),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                                    )
+                                }
+                                Button(
+                                    onClick = { draft = detectedKey },
+                                    contentPadding = ButtonDefaults.TextButtonContentPadding,
+                                ) {
+                                    Text("Use key")
+                                }
+                            }
+                        }
+                    }
+
                     OutlinedTextField(
                         value = draft,
                         onValueChange = { draft = it },
@@ -292,7 +373,11 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                             }
                         },
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Button(
                             onClick = {
                                 val trimmed = draft.trim()
@@ -313,6 +398,18 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                             },
                             enabled = draft.isNotBlank(),
                         ) { Text("Save key") }
+
+                        TextButton(
+                            onClick = {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                val clipText = clipboard?.primaryClip?.let { clip ->
+                                    if (clip.itemCount > 0) clip.getItemAt(0)?.text?.toString() else null
+                                }?.trim().orEmpty()
+                                if (clipText.isNotEmpty()) {
+                                    draft = clipText
+                                }
+                            },
+                        ) { Text("Paste") }
 
                         if (saved) {
                             TextButton(
@@ -653,4 +750,33 @@ private fun endpointDetail(provider: AiProviderType, stored: String): String? = 
         "Until you set one, requests go to OpenAI's API."
 
     else -> "Requests go to ${provider.displayName}'s own API."
+}
+
+internal fun providerConsoleUrl(provider: AiProviderType): String? = when (provider) {
+    AiProviderType.GEMINI -> "https://aistudio.google.com/app/apikey"
+    AiProviderType.ANTHROPIC -> "https://console.anthropic.com/settings/keys"
+    AiProviderType.OPENAI -> "https://platform.openai.com/api-keys"
+    AiProviderType.CUSTOM -> null
+}
+
+internal fun providerConsoleLabel(provider: AiProviderType): String = when (provider) {
+    AiProviderType.GEMINI -> "Get key from Google AI Studio"
+    AiProviderType.ANTHROPIC -> "Get key from Anthropic Console"
+    AiProviderType.OPENAI -> "Get key from OpenAI Platform"
+    AiProviderType.CUSTOM -> "Get key from provider"
+}
+
+internal fun looksLikeKeyFor(provider: AiProviderType, text: CharSequence): Boolean {
+    val trimmed = text.toString().trim()
+    if (trimmed.isEmpty() || trimmed.any { it.isWhitespace() }) return false
+    return when (provider) {
+        AiProviderType.GEMINI ->
+            (trimmed.startsWith("AIzaSy") || trimmed.startsWith("AIza")) && trimmed.length in 35..45
+        AiProviderType.ANTHROPIC ->
+            trimmed.startsWith("sk-ant-") && trimmed.length >= 40
+        AiProviderType.OPENAI ->
+            trimmed.startsWith("sk-") && !trimmed.startsWith("sk-ant-") && trimmed.length >= 40
+        AiProviderType.CUSTOM ->
+            false
+    }
 }

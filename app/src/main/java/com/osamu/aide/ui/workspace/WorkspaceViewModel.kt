@@ -27,6 +27,7 @@ import com.osamu.aide.toolchain.nativetools.LinkerLaunch
 import com.osamu.aide.toolchain.nativetools.MonoToolchain
 import com.osamu.aide.toolchain.nativetools.NodeToolchain
 import com.osamu.aide.engine.api.BuildResult
+import com.osamu.aide.engine.api.DebuggerRequest
 import com.osamu.aide.engine.api.BuildStage
 import com.osamu.aide.engine.api.Diagnostic
 import com.osamu.aide.engine.fast.ApkInstaller
@@ -48,6 +49,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.net.ServerSocket
 
 /**
  * What happened when the built APK was handed to the system installer.
@@ -79,6 +81,16 @@ enum class AfterInstall {
      * finished file. Which it did, the first time this was driven.
      */
     BUILD_RELEASE,
+
+    /**
+     * The user tapped Debug and needed the platform first.
+     *
+     * Separate from [BUILD] for [BUILD_RELEASE]'s reason. Resumed as a plain
+     * build it would install an app with no debugger in it, and the session
+     * waiting to attach would report that the app never opened its port --
+     * true, and pointing nowhere near the cause.
+     */
+    DEBUG,
 
     /** The user opened a Kotlin file and accepted a download for completion. */
     ANALYSE,
@@ -148,6 +160,15 @@ sealed interface WorkspaceEvent {
 
     /** Launch this now -- the system installer's confirmation dialog. */
     data class LaunchNow(val intent: Intent) : WorkspaceEvent
+
+    /**
+     * A debug build is installed: start it, and attach on [port].
+     *
+     * An edge rather than state for the same reason the installer's intent is
+     * one. Replayed on rotation it would launch the app and attach a second
+     * time.
+     */
+    data class DebugReady(val applicationId: String, val port: Int) : WorkspaceEvent
 
     /** A snackbar. [action] is offered as its button when there is one. */
     data class Notice(
@@ -281,6 +302,17 @@ class WorkspaceViewModel(
      * dirty flag, which changes once per file rather than once per character.
      */
     private val pendingText = mutableMapOf<File, String>()
+
+    /**
+     * The port the build in flight carries a debugger on, or null for an
+     * ordinary build.
+     *
+     * Held from the tap until the install settles, because the install is
+     * where a debug build turns into something to attach to -- and cleared on
+     * every way that can fail, or the next ordinary build's install would
+     * start a debug session nobody asked for.
+     */
+    private var debugPort: Int? = null
 
     private var descriptorJob: Job? = null
     private var buildJob: Job? = null
@@ -774,7 +806,24 @@ class WorkspaceViewModel(
      * is set up, which a toggle silently sitting in the wrong position would
      * make baffling.
      */
-    fun build(debuggable: Boolean = true) {
+    fun build(debuggable: Boolean = true) = startBuild(debuggable, handshakeAuthority = null, debug = false)
+
+    /**
+     * Builds with a debugger in the app, installs it, and hands it over.
+     *
+     * [handshakeAuthority] is this app's provider, which the debug build asks
+     * at startup whether to wait; the screen knows the package name and this
+     * does not. See `DebuggerRequest`.
+     */
+    fun debug(handshakeAuthority: String) {
+        pendingHandshake = handshakeAuthority
+        startBuild(debuggable = true, handshakeAuthority, debug = true)
+    }
+
+    /** The authority the last Debug was started with, for [resumeAfterInstall]. */
+    private var pendingHandshake: String? = null
+
+    private fun startBuild(debuggable: Boolean, handshakeAuthority: String?, debug: Boolean) {
         if (_state.value.build.isRunning) return
         buildJob = viewModelScope.launch {
             // A tap can beat the descriptor read -- the screen opened a moment
@@ -809,6 +858,18 @@ class WorkspaceViewModel(
                 runCSharpProject(project)
                 return@launch
             }
+            if (debug && project.engine == BuildEngine.GRADLE) {
+                // The debugger is generated into the APK by the fast
+                // pipeline. A Gradle build would install an app without it,
+                // and the session would wait for a port that never opens.
+                _events.send(
+                    WorkspaceEvent.Notice(
+                        "Debugging needs the Fast engine. This project builds with Gradle; " +
+                            "switch engines in the Build tab to debug it.",
+                    ),
+                )
+                return@launch
+            }
             builder.missingNativeToolchain(project)?.let { component ->
                 // Offered before the build starts rather than after it fails,
                 // for the same reason the platform is: the refusal names a
@@ -827,11 +888,26 @@ class WorkspaceViewModel(
             if (!builder.isPlatformInstalled()) {
                 // Carried, not inferred: see AfterInstall.BUILD_RELEASE.
                 offerPlatformInstall(
-                    if (debuggable) AfterInstall.BUILD else AfterInstall.BUILD_RELEASE,
+                    when {
+                        debug -> AfterInstall.DEBUG
+                        debuggable -> AfterInstall.BUILD
+                        else -> AfterInstall.BUILD_RELEASE
+                    },
                 )
                 return@launch
             }
-            runBuild(project, debuggable)
+            val debugger = if (debug) {
+                // A port nothing on the device holds right now. The app opens
+                // it moments later; an ephemeral port being taken in between
+                // is possible and would show as a session that cannot attach.
+                val port = withContext(dispatchers.io) { ServerSocket(0).use { it.localPort } }
+                debugPort = port
+                DebuggerRequest(port, handshakeAuthority)
+            } else {
+                debugPort = null
+                null
+            }
+            runBuild(project, debuggable, debugger)
         }
     }
 
@@ -1061,12 +1137,19 @@ class WorkspaceViewModel(
         }
     }
 
-    private suspend fun runBuild(project: Project, debuggable: Boolean = true) {
+    private suspend fun runBuild(
+        project: Project,
+        debuggable: Boolean = true,
+        debugger: DebuggerRequest? = null,
+    ) {
         try {
             _state.update {
                 it.copy(isBuildPanelOpen = true, build = BuildUiState(isRunning = true))
             }
-            runner.build(project, debuggable).collect(::onBuildEvent)
+            runner.build(project, debuggable, debugger).collect(::onBuildEvent)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            debugPort = null
+            throw e
         } finally {
             _state.update {
                 it.copy(
@@ -1120,8 +1203,26 @@ class WorkspaceViewModel(
         _state.update { it.copy(isBuildPanelOpen = !it.isBuildPanelOpen) }
     }
 
+    /** Opens the tool dock without toggling: a stopped debugger wants it shown, never hidden. */
+    fun showToolPanel() {
+        _state.update { it.copy(isBuildPanelOpen = true) }
+    }
+
     fun closeBuildPanel() {
         _state.update { it.copy(isBuildPanelOpen = false) }
+    }
+
+    /**
+     * Opens [file] and puts the cursor on [line] -- where a debugger stopped.
+     *
+     * [file] is absolute, as the debugger resolves it; the jump carries it
+     * relative, as every other jump does, because the screen resolves jumps
+     * against the project root.
+     */
+    fun reveal(file: File, line: Int) {
+        val root = project?.rootDir ?: rootNode?.file ?: return
+        openDocument(file)
+        _jumps.trySend(EditorJump(file.relativeTo(root), line, 1))
     }
 
     /** Opens the file a diagnostic points at. Paths are project-relative. */
@@ -1185,6 +1286,7 @@ class WorkspaceViewModel(
                 ),
             )
         }
+        if (result !is BuildResult.Success) debugPort = null
         if (result is BuildResult.Success) {
             // **The build just wrote sources the warm compiler cannot see.**
             // aapt2's `R.java` lands under the build's generated/java, which is
@@ -1218,9 +1320,22 @@ class WorkspaceViewModel(
                     InstallUiState("Waiting for you to confirm the install.")
                 }
 
-                InstallStatus.Installed -> InstallUiState("Installed.")
+                InstallStatus.Installed -> {
+                    val port = debugPort
+                    val applicationId = project?.applicationId
+                    debugPort = null
+                    if (port != null && applicationId != null) {
+                        _events.send(WorkspaceEvent.DebugReady(applicationId, port))
+                        InstallUiState("Installed. Starting it under the debugger.")
+                    } else {
+                        InstallUiState("Installed.")
+                    }
+                }
 
-                is InstallStatus.Failed -> InstallUiState(status.message, status.settings)
+                is InstallStatus.Failed -> {
+                    debugPort = null
+                    InstallUiState(status.message, status.settings)
+                }
             }
             _state.update { it.copy(build = it.build.copy(install = install)) }
         }
@@ -1399,6 +1514,11 @@ class WorkspaceViewModel(
 
             // The same, signed with the user's key rather than the device's.
             AfterInstall.BUILD_RELEASE -> build(debuggable = false)
+
+            // The download interrupted a Debug; the authority it was started
+            // with is this app's own and does not change, so it is rebuilt
+            // here rather than carried through the prompt.
+            AfterInstall.DEBUG -> pendingHandshake?.let(::debug) ?: build()
         }
     }
 

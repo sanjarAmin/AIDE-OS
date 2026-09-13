@@ -63,6 +63,10 @@ class BottomToolDockTest {
                     clear = {},
                     setFilter = {},
                 ),
+                debugState = DebugUiState(),
+                debugActions = NO_DEBUG_ACTIONS,
+                debugUnavailable = null,
+                projectRoot = null,
                 applicationId = null,
                 onDiagnosticClick = {},
                 onFixDiagnostic = {},
@@ -76,8 +80,12 @@ class BottomToolDockTest {
     fun every_tab_keeps_its_label_on_one_line_on_a_small_phone() {
         dockAt(360)
 
+        // The laid-out size, not `boundsInRoot`: the row scrolls, and a tab
+        // scrolled past the edge is clipped to a height of zero without having
+        // wrapped at all. Six tabs put Logcat and Terminal there at 360 dp,
+        // which read as two tabs collapsing when Debug joined the row.
         val heights = ToolTab.entries.map { tab ->
-            compose.onNodeWithText(tab.title).fetchSemanticsNode().boundsInRoot.height
+            compose.onNodeWithText(tab.title).fetchSemanticsNode().size.height.toFloat()
         }
 
         assertEquals(

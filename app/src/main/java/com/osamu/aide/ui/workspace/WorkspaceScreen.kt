@@ -3,23 +3,33 @@ package com.osamu.aide.ui.workspace
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Chat
@@ -35,6 +45,7 @@ import androidx.compose.material.icons.filled.Redo
 import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.AlertDialog
@@ -79,7 +90,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.platform.LocalContext
 import com.osamu.aide.core.fs.BuildEngine
+import com.osamu.aide.debug.DebugHandshakeProvider
 import com.osamu.aide.core.fs.FileNode
 import com.osamu.aide.core.fs.SourceLanguage
 import com.osamu.aide.ai.ui.ChatPanel
@@ -110,7 +123,7 @@ import java.io.File
 fun WorkspaceScreen(
     projectDir: File,
     onNavigateBack: () -> Unit,
-    onOpenSettings: () -> Unit,
+    onOpenSettings: (String?) -> Unit,
     viewModel: WorkspaceViewModel,
     assistant: AssistantViewModel = koinViewModel(),
     // Its own view model rather than a slice of WorkspaceViewModel: it owns an
@@ -121,6 +134,8 @@ fun WorkspaceScreen(
     terminal: TerminalViewModel = koinViewModel(),
     // The same: it owns a running `logcat`, which is a child process.
     logcat: LogcatViewModel = koinViewModel(),
+    // And a socket into another app, whose threads it may hold suspended.
+    debug: DebugViewModel = koinViewModel(),
     // A single instance for the whole app: it holds the compiled tree-sitter
     // queries, and rebuilding them per screen is the cost the cache exists to
     // avoid.
@@ -135,6 +150,10 @@ fun WorkspaceScreen(
     val gitState by git.state.collectAsStateWithLifecycle()
     val terminalState by terminal.state.collectAsStateWithLifecycle()
     val logcatState by logcat.state.collectAsStateWithLifecycle()
+    val debugState by debug.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    // Bumped to bring the Debug tab forward; see BottomToolDock.debugFocus.
+    var debugFocus by remember { mutableStateOf(0) }
     val editorSettings by editorPreferences.settings.collectAsStateWithLifecycle()
 
     // **Re-read git when the screen comes back.** The panel's own empty state
@@ -176,7 +195,7 @@ fun WorkspaceScreen(
             setMessage = git::setMessage,
             commit = git::commit,
             push = git::push,
-            openSettings = onOpenSettings,
+            openSettings = { onOpenSettings("git") },
             initialise = git::initialise,
             showDiff = git::showDiff,
             dismissDiff = git::dismissDiff,
@@ -202,6 +221,32 @@ fun WorkspaceScreen(
             resize = terminal::resize,
         )
     }
+
+    // Why Debug is not offered, in the user's terms, or null when it is.
+    val debugUnavailable = when {
+        state.projectLanguage == null -> null
+        state.projectLanguage !in BUILDS_AN_APK ->
+            "Debugging works on apps: Java and Kotlin projects. This one runs a program instead."
+        state.projectEngine == BuildEngine.GRADLE ->
+            "Debugging needs the Fast engine. Switch engines in the Build tab to debug this project."
+        else -> null
+    }
+    val startDebugging: () -> Unit = {
+        viewModel.debug(DebugHandshakeProvider.authority(context.packageName))
+        debugFocus++
+    }
+    val debugActions = DebugActions(
+        start = startDebugging.takeIf { debugUnavailable == null && state.projectLanguage != null },
+        resume = debug::resume,
+        stepOver = debug::stepOver,
+        stepInto = debug::stepInto,
+        stepOut = debug::stepOut,
+        stop = debug::stop,
+        selectFrame = debug::selectFrame,
+        toggleExpanded = debug::toggleExpanded,
+        openBreakpoint = { viewModel.reveal(it.file, it.line) },
+        removeBreakpoint = debug::removeBreakpoint,
+    )
 
     val snackbarHostState = remember { SnackbarHostState() }
     val editorController = remember { CodeEditorController() }
@@ -235,6 +280,7 @@ fun WorkspaceScreen(
         assistant.open(projectDir)
         git.open(projectDir)
         terminal.open(projectDir)
+        debug.open(projectDir)
     }
     LaunchedEffect(viewModel) { viewModel.jumps.collect { pendingJump = it } }
 
@@ -252,6 +298,16 @@ fun WorkspaceScreen(
         pendingJump = null
     }
 
+    // **Where the debugger stopped is where the editor goes.** Keyed on the
+    // point, so selecting another frame moves the editor too, and a Resume
+    // that clears it leaves the cursor where it is rather than jumping away.
+    LaunchedEffect(debugState.executionPoint) {
+        val point = debugState.executionPoint ?: return@LaunchedEffect
+        viewModel.reveal(point.file, point.line)
+        viewModel.showToolPanel()
+        debugFocus++
+    }
+
     // The system installer's confirmation is an Activity. Its result says only
     // that the dialog closed; the outcome arrives on ApkInstaller's broadcast,
     // so there is nothing to do with it here.
@@ -267,6 +323,11 @@ fun WorkspaceScreen(
         viewModel.events.collect { event ->
             when (event) {
                 is WorkspaceEvent.LaunchNow -> activityLauncher.launch(event.intent)
+
+                is WorkspaceEvent.DebugReady -> {
+                    debug.start(event.applicationId, event.port)
+                    debugFocus++
+                }
 
                 is WorkspaceEvent.Notice -> {
                     val result = snackbarHostState.showSnackbar(
@@ -290,13 +351,70 @@ fun WorkspaceScreen(
         val body: @Composable () -> Unit = {
             Scaffold(
                 topBar = {
+                    val infiniteTransition = rememberInfiniteTransition(label = "workspacePulse")
+                    val aiPulseAlpha by infiniteTransition.animateFloat(
+                        initialValue = 0.25f,
+                        targetValue = 0.85f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(900),
+                            repeatMode = RepeatMode.Reverse,
+                        ),
+                        label = "aiPulseAlpha",
+                    )
+                    val buildPulseScale by infiniteTransition.animateFloat(
+                        initialValue = 0.92f,
+                        targetValue = 1.14f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(800),
+                            repeatMode = RepeatMode.Reverse,
+                        ),
+                        label = "buildPulseScale",
+                    )
+                    val buildPulseAlpha by infiniteTransition.animateFloat(
+                        initialValue = 0.2f,
+                        targetValue = 0.65f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(800),
+                            repeatMode = RepeatMode.Reverse,
+                        ),
+                        label = "buildPulseAlpha",
+                    )
+
                     TopAppBar(
                         title = {
-                            Text(
-                                state.projectName.ifEmpty { projectDir.name },
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                // **The name gives way, the badge does not.**
+                                // Unweighted, the name measured at full width
+                                // and the language badge was laid out in what
+                                // was left -- which, once a file was open and
+                                // Debug joined the actions, was one letter
+                                // wide: J / A / V / A down the toolbar. The
+                                // row squeeze CLAUDE.md records, eighth time.
+                                Text(
+                                    state.projectName.ifEmpty { projectDir.name },
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.weight(1f, fill = false),
+                                )
+                                state.projectLanguage?.let { lang ->
+                                    Spacer(Modifier.width(8.dp))
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = MaterialTheme.colorScheme.surfaceVariant,
+                                    ) {
+                                        Text(
+                                            text = lang.displayName.uppercase(),
+                                            maxLines = 1,
+                                            softWrap = false,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                        )
+                                    }
+                                }
+                            }
                         },
                         navigationIcon = {
                             IconButton(
@@ -323,11 +441,24 @@ fun WorkspaceScreen(
                             }
                         },
                         actions = {
-                            IconButton(onClick = { isChatOpen = true }) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.Chat,
-                                    contentDescription = "Ask the assistant",
-                                )
+                            Box(contentAlignment = Alignment.Center) {
+                                if (isCompleting) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .background(
+                                                MaterialTheme.colorScheme.primary.copy(alpha = aiPulseAlpha * 0.35f),
+                                                CircleShape,
+                                            ),
+                                    )
+                                }
+                                IconButton(onClick = { isChatOpen = true }) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.Chat,
+                                        contentDescription = "Ask the assistant",
+                                        tint = if (isCompleting) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                    )
+                                }
                             }
                             if (state.active != null) {
                                 IconButton(onClick = viewModel::openSearch) {
@@ -356,27 +487,54 @@ fun WorkspaceScreen(
                             // build and no install to wait for, it just runs.
                             val runsRatherThanBuilds =
                                 state.projectLanguage == SourceLanguage.JAVASCRIPT
-                            if (state.build.isRunning) {
-                                IconButton(onClick = viewModel::stopBuild) {
+                            // Beside Run rather than behind a menu: it is the
+                            // other way to start the app. Absent where there
+                            // is nothing to debug, and while a build or a
+                            // session is already going, so it never sits
+                            // disabled.
+                            if (!state.build.isRunning && debugActions.start != null && !debugState.isActive) {
+                                IconButton(onClick = startDebugging) {
                                     Icon(
-                                        Icons.Default.Stop,
-                                        contentDescription = if (state.build.isRun) {
-                                            "Stop the program"
-                                        } else {
-                                            "Stop the build"
-                                        },
+                                        Icons.Default.BugReport,
+                                        contentDescription = "Debug",
+                                        tint = MaterialTheme.colorScheme.primary,
                                     )
                                 }
-                            } else {
-                                IconButton(onClick = viewModel::build) {
-                                    Icon(
-                                        Icons.Default.PlayArrow,
-                                        contentDescription = if (runsRatherThanBuilds) {
-                                            "Run"
-                                        } else {
-                                            "Build and run"
-                                        },
+                            }
+                            Box(contentAlignment = Alignment.Center) {
+                                if (state.build.isRunning) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(38.dp)
+                                            .scale(buildPulseScale)
+                                            .background(
+                                                MaterialTheme.colorScheme.error.copy(alpha = buildPulseAlpha * 0.35f),
+                                                CircleShape,
+                                            ),
                                     )
+                                    IconButton(onClick = viewModel::stopBuild) {
+                                        Icon(
+                                            Icons.Default.Stop,
+                                            contentDescription = if (state.build.isRun) {
+                                                "Stop the program"
+                                            } else {
+                                                "Stop the build"
+                                            },
+                                            tint = MaterialTheme.colorScheme.error,
+                                        )
+                                    }
+                                } else {
+                                    IconButton(onClick = viewModel::build) {
+                                        Icon(
+                                            Icons.Default.PlayArrow,
+                                            contentDescription = if (runsRatherThanBuilds) {
+                                                "Run"
+                                            } else {
+                                                "Build and run"
+                                            },
+                                            tint = MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
                                 }
                             }
                         },
@@ -427,6 +585,11 @@ fun WorkspaceScreen(
                                     terminalActions = terminalActions,
                                     logcatState = logcatState,
                                     logcatActions = logcatActions,
+                                    debugState = debugState,
+                                    debugActions = debugActions,
+                                    debugUnavailable = debugUnavailable,
+                                    debugFocus = debugFocus,
+                                    projectRoot = state.projectRoot,
                                     applicationId = state.projectApplicationId,
                                     onDiagnosticClick = viewModel::openDiagnostic,
                                     onFixDiagnostic = askToFix,
@@ -473,6 +636,11 @@ fun WorkspaceScreen(
                             terminalActions = terminalActions,
                             logcatState = logcatState,
                             logcatActions = logcatActions,
+                            debugState = debugState,
+                            debugActions = debugActions,
+                            debugUnavailable = debugUnavailable,
+                            debugFocus = debugFocus,
+                            onLineNumberTap = debug::toggleBreakpoint,
                         )
                     },
                 )
@@ -519,11 +687,11 @@ fun WorkspaceScreen(
                 onDismissError = assistant::dismissError,
                 onAddKey = {
                     isChatOpen = false
-                    onOpenSettings()
+                    onOpenSettings("ai")
                 },
                 onSignInGoogle = {
                     isChatOpen = false
-                    onOpenSettings()
+                    onOpenSettings("ai")
                 },
                 onSwitchProvider = assistant::switchProvider,
                 onSwitchModel = assistant::switchModel,
@@ -580,6 +748,11 @@ private fun EditorArea(
     terminalActions: TerminalActions,
     logcatState: LogcatUiState,
     logcatActions: LogcatActions,
+    debugState: DebugUiState,
+    debugActions: DebugActions,
+    debugUnavailable: String?,
+    debugFocus: Int,
+    onLineNumberTap: (File, Int) -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
         if (state.openFiles.isNotEmpty()) {
@@ -622,6 +795,20 @@ private fun EditorArea(
                     diagnostics = state.editorDiagnostics,
                     projectRoot = state.projectRoot,
                     settings = editorSettings,
+                    breakpointLines = debugState.breakpointLinesIn(active.file),
+                    executionLine = debugState.executionPoint
+                        ?.takeIf { it.file == active.file }
+                        ?.line,
+                    // Only where a breakpoint can mean something. A tap on the
+                    // gutter of a layout XML file setting a mark that can
+                    // never fire would teach the user the feature is broken.
+                    onLineNumberTap = if (active.file.extension in DEBUGGABLE_SOURCES &&
+                        debugUnavailable == null
+                    ) {
+                        { line -> onLineNumberTap(active.file, line) }
+                    } else {
+                        null
+                    },
                 )
 
                 state.documentError != null -> CentredMessage(
@@ -665,6 +852,11 @@ private fun EditorArea(
                 terminalActions = terminalActions,
                 logcatState = logcatState,
                 logcatActions = logcatActions,
+                debugState = debugState,
+                debugActions = debugActions,
+                debugUnavailable = debugUnavailable,
+                projectRoot = state.projectRoot,
+                debugFocus = debugFocus,
                 applicationId = state.projectApplicationId,
                 onDiagnosticClick = onDiagnosticClick,
                 onFixDiagnostic = onFixDiagnostic,
@@ -1119,6 +1311,12 @@ private fun FileTreeRow(
  * JavaScript and C# run rather than build; a choice between the fast pipeline
  * and Gradle would be a choice between two things neither of them uses.
  */
+/**
+ * Files a breakpoint can be placed in: the ones ECJ and kotlinc turn into
+ * classes with line tables.
+ */
+private val DEBUGGABLE_SOURCES = setOf("java", "kt")
+
 private val BUILDS_AN_APK = setOf(
     SourceLanguage.JAVA,
     SourceLanguage.KOTLIN,
@@ -1142,11 +1340,19 @@ private fun SideToolTabs(
     terminalActions: TerminalActions,
     logcatState: LogcatUiState,
     logcatActions: LogcatActions,
+    debugState: DebugUiState,
+    debugActions: DebugActions,
+    debugUnavailable: String?,
+    debugFocus: Int,
+    projectRoot: File?,
     applicationId: String?,
     onDiagnosticClick: (Diagnostic) -> Unit,
     onFixDiagnostic: (Diagnostic) -> Unit,
 ) {
     var selected by remember { mutableStateOf(SideTool.GIT) }
+    LaunchedEffect(debugFocus) {
+        if (debugFocus > 0) selected = SideTool.DEBUG
+    }
 
     Column(Modifier.fillMaxSize()) {
         PrimaryTabRow(selectedTabIndex = SideTool.entries.indexOf(selected)) {
@@ -1160,6 +1366,12 @@ private fun SideToolTabs(
         }
         Box(Modifier.weight(1f).padding(8.dp)) {
             when (selected) {
+                SideTool.DEBUG -> DebugPanel(
+                    state = debugState,
+                    actions = debugActions,
+                    projectRoot = projectRoot,
+                    unavailableReason = debugUnavailable,
+                )
                 SideTool.GIT -> GitPanel(state = gitState, actions = gitActions)
                 SideTool.PROBLEMS -> ProblemsList(problems, onDiagnosticClick, onFixDiagnostic)
                 SideTool.TERMINAL -> TerminalPanel(
@@ -1185,6 +1397,9 @@ private fun SideToolTabs(
  * feature with no way in on a whole class of device.
  */
 private enum class SideTool(val title: String) {
+    // First: while a session runs it is the tab that changes on its own, and
+    // the build output it depends on is in the half above.
+    DEBUG("Debug"),
     GIT("Git"),
     PROBLEMS("Problems"),
     TERMINAL("Terminal"),
