@@ -27,6 +27,18 @@ internal class JavaCompileStage(private val dispatchers: DispatcherProvider) {
         workspace: BuildWorkspace,
         projectRoot: File,
         dependencies: List<File> = emptyList(),
+        /**
+         * Whether to emit the local variable table a debugger needs.
+         *
+         * **ECJ's default is `-g:lines,source`, which is not enough.** Line
+         * numbers alone let a debugger stop on a line and show a stack trace,
+         * so everything looks like it works -- and then every local and every
+         * parameter comes back with an empty name, because the names live in
+         * an attribute that was never emitted. Found by attaching `:debugger`
+         * to an app this pipeline built and reading `[this:..., :I@3]` where
+         * `counter` should have been.
+         */
+        debuggable: Boolean = true,
     ): StageResult<File> {
         if (sources.isEmpty()) return StageResult.ok(workspace.classes)
 
@@ -39,6 +51,11 @@ internal class JavaCompileStage(private val dispatchers: DispatcherProvider) {
             // it cannot load. Anything relying on generated code is a
             // Gradle-path project for now.
             add("-proc:none")
+
+            // A release build keeps line numbers, because that is what makes a
+            // crash report readable, and drops variable names, which are of no
+            // use in a shipped app and are a small disclosure in one.
+            add(if (debuggable) "-g" else "-g:lines,source")
 
             // One line per problem instead of five around a rule. See
             // EcjDiagnostics.

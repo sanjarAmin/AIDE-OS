@@ -137,17 +137,9 @@ class DebugSession(private val connection: JdwpConnection) : Closeable {
      */
     suspend fun variableTable(typeId: Long, methodId: Long): List<VariableInfo> {
         val body = connection.writer().referenceTypeId(typeId).methodId(methodId).build()
-        val reply = connection.request(Jdwp.Method.SET, Jdwp.Method.VARIABLE_TABLE, body)
-        reply.int() // argument slots, which are already included below
-        return (0 until reply.int()).map {
-            VariableInfo(
-                codeIndex = reply.long(),
-                name = reply.string(),
-                signature = reply.string(),
-                length = reply.int(),
-                slot = reply.int(),
-            )
-        }
+        return parseVariableTable(
+            connection.request(Jdwp.Method.SET, Jdwp.Method.VARIABLE_TABLE, body),
+        )
     }
 
     /**
@@ -191,7 +183,7 @@ class DebugSession(private val connection: JdwpConnection) : Closeable {
             .byte(Jdwp.EventKind.BREAKPOINT)
             .byte(suspendPolicy)
             .int(1) // one modifier
-            .byte(MODIFIER_LOCATION_ONLY)
+            .byte(Jdwp.Modifier.LOCATION_ONLY)
             .location(location)
             .build()
         return connection.request(
@@ -204,6 +196,51 @@ class DebugSession(private val connection: JdwpConnection) : Closeable {
     suspend fun clearBreakpoint(requestId: Int) {
         val body = connection.writer()
             .byte(Jdwp.EventKind.BREAKPOINT)
+            .int(requestId)
+            .build()
+        connection.request(Jdwp.EventRequest.SET, Jdwp.EventRequest.CLEAR, body)
+    }
+
+    /**
+     * Asks the VM to stop the next time [threadId] reaches a new line.
+     *
+     * **Registered while the thread is suspended, and it does not resume it.**
+     * A step is two halves -- ask, then let go -- and they are separate here
+     * because the caller owns the event loop: [requestStep], then
+     * [resumeThread], then wait for the [JdwpEvent.SingleStep] that comes back.
+     *
+     * **The request must be cleared once it fires.** A step request is not
+     * self-cancelling: leave it registered and the thread stops again on the
+     * next line, and the line after that, which reads as the app running at one
+     * frame a second rather than as a leaked request. [clearStep] is not
+     * optional politeness.
+     */
+    suspend fun requestStep(
+        threadId: Long,
+        depth: Int = Jdwp.StepDepth.OVER,
+        size: Int = Jdwp.StepSize.LINE,
+        suspendPolicy: Int = Jdwp.SuspendPolicy.EVENT_THREAD,
+    ): Int {
+        val body = connection.writer()
+            .byte(Jdwp.EventKind.SINGLE_STEP)
+            .byte(suspendPolicy)
+            .int(1) // one modifier
+            .byte(Jdwp.Modifier.STEP)
+            .objectId(threadId)
+            .int(size)
+            .int(depth)
+            .build()
+        return connection.request(
+            Jdwp.EventRequest.SET,
+            Jdwp.EventRequest.SET_REQUEST,
+            body,
+        ).int()
+    }
+
+    /** Cancels a step request. Required after it fires; see [requestStep]. */
+    suspend fun clearStep(requestId: Int) {
+        val body = connection.writer()
+            .byte(Jdwp.EventKind.SINGLE_STEP)
             .int(requestId)
             .build()
         connection.request(Jdwp.EventRequest.SET, Jdwp.EventRequest.CLEAR, body)
@@ -330,9 +367,6 @@ class DebugSession(private val connection: JdwpConnection) : Closeable {
     }
 
     private companion object {
-        /** `LocationOnly`, the modifier that makes a breakpoint a breakpoint. */
-        const val MODIFIER_LOCATION_ONLY = 7
-
         const val STRING_REFERENCE_SET = 10
         const val STRING_REFERENCE_VALUE = 1
 
@@ -345,6 +379,45 @@ class DebugSession(private val connection: JdwpConnection) : Closeable {
             Jdwp.Tag.ARRAY,
             'g'.code, // thread group
             'l'.code, // class loader
+        )
+    }
+}
+
+/**
+ * Reads a `Method.VariableTable` reply.
+ *
+ * **Lifted out of [DebugSession] so a JVM test can drive it**, because it is
+ * the reply whose fields are easiest to get wrong: five of them per entry, in
+ * an order that is not the order anyone would declare them in, and a
+ * misalignment produces entries that look almost right -- a plausible name
+ * against the wrong slot -- rather than an error.
+ *
+ * It was suspected once and was innocent: locals came back unnamed, and the
+ * cause was a debuggee still running a build from before `JavaCompileStage`
+ * learned `-g`. `JdwpVariableTableTest` is what cleared it, with a fixture
+ * taken from `dexdump`, and it stays so the next suspicion is settled the same
+ * way. `FINDINGS.md` section 3.
+ */
+internal fun parseVariableTable(reply: PacketReader): List<VariableInfo> {
+    reply.int() // argCnt: slots taken by arguments, all of which appear below
+    val slots = reply.int()
+    return (0 until slots).map {
+        // Written in wire order. Kotlin evaluates named arguments in the order
+        // they appear here rather than in declaration order, which is what
+        // makes this legal -- but it is a fact about the language that a reader
+        // should not have to recall, so the order is stated in the comment as
+        // well: codeIndex, name, signature, length, slot.
+        val codeIndex = reply.long()
+        val name = reply.string()
+        val signature = reply.string()
+        val length = reply.int()
+        val slot = reply.int()
+        VariableInfo(
+            name = name,
+            signature = signature,
+            slot = slot,
+            codeIndex = codeIndex,
+            length = length,
         )
     }
 }

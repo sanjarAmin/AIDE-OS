@@ -119,6 +119,29 @@ class FastBuildSystem(
                 )
             }
 
+            // The debugger's listener, when this build was asked for one. It
+            // has to happen after the merge and before the link, because aapt2
+            // reads the manifest once and what it is handed is what the APK
+            // declares.
+            val manifestToLink = request.debugPort?.let { port ->
+                withContext(dispatchers.io) {
+                    // **merge() returns the project's own manifest when there
+                    // is nothing to merge into it**, and that file is in the
+                    // user's source tree -- injecting there would write the
+                    // debugger into their project and leave it there.
+                    if (manifest != workspace.mergedManifest) {
+                        manifest.copyTo(workspace.mergedManifest, overwrite = true)
+                    }
+                    DebugAgent.install(
+                        workspace = workspace,
+                        manifest = workspace.mergedManifest,
+                        applicationId = request.project.applicationId,
+                        port = port,
+                    )
+                    workspace.mergedManifest
+                }
+            } ?: manifest
+
             reportingStage(BuildStage.LINK_RESOURCES, diagnostics) { onDiagnostic ->
                 resources.link(
                     layout = layout,
@@ -128,7 +151,7 @@ class FastBuildSystem(
                     libraryResources = libraryResources,
                     libraryPackages = request.dependencies.libraryPackages,
                     applicationId = request.project.applicationId,
-                    manifest = manifest,
+                    manifest = manifestToLink,
                     onDiagnostic = onDiagnostic,
                 )
             }
@@ -168,6 +191,7 @@ class FastBuildSystem(
                     // kotlinc's output is already in classes/, and Java needs it
                     // on the classpath to refer to anything Kotlin declared.
                     dependencies = request.dependencies.classpath + workspace.classes,
+                    debuggable = request.debuggable,
                 )
             }
 
@@ -278,6 +302,14 @@ class FastBuildSystem(
 
         layout.javaSources().isEmpty() && layout.kotlinSources().isEmpty() ->
             "This project has no sources."
+
+        // A debugger in a shipped app is a listening socket and a permission
+        // the user never wrote. The platform would refuse to attach the agent
+        // anyway -- a release build is not debuggable -- but failing here says
+        // so, rather than producing an app that carries a provider that can
+        // never work.
+        !request.debuggable && request.debugPort != null ->
+            "A release build cannot carry a debugger."
 
         // Both halves, because they are different problems with different
         // answers: no key at all is a trip to Settings, while a key whose

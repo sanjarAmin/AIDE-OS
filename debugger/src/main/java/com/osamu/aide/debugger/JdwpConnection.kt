@@ -18,11 +18,31 @@ sealed interface JdwpEvent {
 
     val requestId: Int
 
+    /**
+     * An event that stopped a thread somewhere.
+     *
+     * A breakpoint and a completed step are the same three fields on the wire
+     * and the same thing to a UI -- *execution is here now, and here is the
+     * stack* -- so the code that reacts to them should not have to care which
+     * arrived. What differs is the cleanup: a step request must be cleared
+     * after it fires and a breakpoint must not be.
+     */
+    sealed interface Stopped : JdwpEvent {
+        val threadId: Long
+        val location: Location
+    }
+
     data class Breakpoint(
         override val requestId: Int,
-        val threadId: Long,
-        val location: Location,
-    ) : JdwpEvent
+        override val threadId: Long,
+        override val location: Location,
+    ) : Stopped
+
+    data class SingleStep(
+        override val requestId: Int,
+        override val threadId: Long,
+        override val location: Location,
+    ) : Stopped
 
     data class ClassPrepare(
         override val requestId: Int,
@@ -211,6 +231,14 @@ class JdwpConnection private constructor(private val socket: Socket) : Closeable
             val requestId = reader.int()
             val event = when (kind) {
                 Jdwp.EventKind.BREAKPOINT -> JdwpEvent.Breakpoint(
+                    requestId = requestId,
+                    threadId = reader.objectId(),
+                    location = reader.location(),
+                )
+
+                // Identical on the wire to a breakpoint, which is why they
+                // share a shape above rather than being parsed twice.
+                Jdwp.EventKind.SINGLE_STEP -> JdwpEvent.SingleStep(
                     requestId = requestId,
                     threadId = reader.objectId(),
                     location = reader.location(),

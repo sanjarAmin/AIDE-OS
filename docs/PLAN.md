@@ -7,7 +7,8 @@
 
 ## Status
 
-*As of 2026-09-07. **Every milestone M0–M11 is met.***
+*As of 2026-09-09. **Every milestone M0–M11 is met.** M12, the debugger, is
+built as a library and driven end to end; it has no UI yet.*
 
 | | Milestone | State |
 |---|---|---|
@@ -181,6 +182,11 @@ Convert `:app` into a thin Compose shell over a multi-module Gradle build. Add t
 
 :vcs:git                JGit — clone/commit/diff/push
 :debugger               JDWP client for on-device Java/Kotlin debugging
+                        *(Amended — built, and not this shape. An app cannot
+                        attach to another app's JDWP; it does not need to. ART
+                        ships OpenJDK's libjdwp.so, so a debug build we produce
+                        attaches it to itself and listens, and this module is
+                        only the client. tools/jdwp/FINDINGS.md, spike R15.)*
 ```
 
 Existing files touched: `settings.gradle.kts` (module includes), `gradle/libs.versions.toml` (version catalog for every dep below), `app/build.gradle.kts` (packaging/ABI config), `MainActivity.kt` (replaced by the real shell).
@@ -281,6 +287,7 @@ Bring-your-own-key, no backend infrastructure, no per-user liability for you.
 | **M9** Gradle path | ~~Rootfs bootstrap~~ → Termux's **Bionic-built OpenJDK 21**, a launcher of our own, and `:engine:gradle` | **Met.** An unmodified Android Studio project builds on device through the `BuildSystem` interface, on both ABIs and with more than one module. Every part installs itself: OpenJDK from this repo's releases, Gradle pinned to its own publisher, build-tools from Google, and an SDK root composed from the last two |
 | **M10** JS / C# | ~~QuickJS +~~ Node from Termux (R13) and **mono** rather than the .NET SDK, which Termux does not publish (R14). Both are **published and pinned** as installable components, and `NodeToolchain` / `MonoToolchain` drive them | **Met.** Both languages are wired end to end: the picker offers them, the template writes a real Node or C# project, and ▶ runs it through `RunSystem` — `:engine:node` starts a program, `:engine:mono` compiles with `mcs` and then starts what it produced — into the build panel, offering the download when the runtime is missing |
 | **M11** Kotlin intelligence | `:lsp:kotlin` — the Analysis API resident on device, behind the same `LanguageService` the editor already talks to | Completion, diagnostics and go-to-definition on a Kotlin buffer, inside the 200 ms budget — **met**, at ~107 ms warm |
+| **M12** Debugger | `:debugger`, a JDWP client, plus the agent the build puts inside a debug APK. **Not the shape this document assumed** — spike R15 found an app cannot reach another app's JDWP and does not have to: ART ships OpenJDK's `libjdwp.so`, and a debuggable process can attach it to itself | Breakpoint an app AIDE-OS built, stop it, read a named local, step a line, resume — **done at the library level**, driven against a built-and-installed app: `STOPPED on thread ticker at tick … counter=Primitive(tag=73, value=69)`. **No UI yet**, which is what M12 still needs |
 
 M0–M5 is the real v1.0. Everything from M6 on is expansion.
 

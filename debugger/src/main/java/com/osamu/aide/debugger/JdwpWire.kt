@@ -206,11 +206,42 @@ object Jdwp {
         const val GET_VALUES = 1
     }
 
-    /** Event kinds, of which this client asks for one. */
+    /** Event kinds this client asks for, and the one it never has to. */
     object EventKind {
+        const val SINGLE_STEP = 1
         const val BREAKPOINT = 2
         const val CLASS_PREPARE = 8
+
+        /** Sent unasked when the VM exits. There is no request to register. */
         const val VM_DEATH = 99
+    }
+
+    /** Event request modifiers, which are what make a request specific. */
+    object Modifier {
+        /** `LocationOnly`: the modifier that makes a breakpoint a breakpoint. */
+        const val LOCATION_ONLY = 7
+
+        /** `Step`: a thread, a granularity, and a depth. */
+        const val STEP = 10
+    }
+
+    /**
+     * How far one step goes.
+     *
+     * `LINE` is what a Step button means. `MIN` steps a single bytecode, which
+     * on dex means several steps per source line and a UI that appears stuck --
+     * it exists for disassembly views, not for people.
+     */
+    object StepSize {
+        const val MIN = 0
+        const val LINE = 1
+    }
+
+    /** What a step does about calls: enter them, pass them, or leave. */
+    object StepDepth {
+        const val INTO = 0
+        const val OVER = 1
+        const val OUT = 2
     }
 
     /** What a triggered event stops. */

@@ -34,6 +34,9 @@ emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu host
 :core:common         Result types, dispatchers, logging
 :core:fs             Project storage, the file tree, SAF import. FINDINGS.
 :core:ui             Design system, theme, adaptive phone/tablet layout
+:debugger            A JDWP client, and the agent the build puts in a debug APK.
+                     Not "attach to any app": an app cannot reach another's
+                     JDWP, so we debug what we built. FINDINGS.
 :editor              sora-editor + tree-sitter, wrapped for Compose. FINDINGS.
 :engine:api          The BuildSystem and RunSystem contracts; knows nothing of
                      any toolchain

@@ -2,6 +2,7 @@ package com.osamu.aide.debugger
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.After
@@ -41,6 +42,7 @@ class DebugSessionTest {
 
     private var session: DebugSession? = null
     private var breakpoint: Breakpoint? = null
+    private var stepRequest: Int? = null
 
     @Before
     fun setUp() {
@@ -63,6 +65,10 @@ class DebugSessionTest {
         val live = session ?: return
         runBlocking {
             runCatching { breakpoint?.let { live.clearBreakpoint(it.requestId) } }
+            // A step request left registered stops the debuggee on every line
+            // it executes, forever -- which the next run sees as an app doing
+            // nothing rather than as a leak here.
+            runCatching { stepRequest?.let { live.clearStep(it) } }
             runCatching { live.resume() }
         }
         live.close()
@@ -175,6 +181,72 @@ class DebugSessionTest {
 
         debugger.resumeThread(hit.threadId)
     }
+
+    /**
+     * Stepping: stop, step one line, and arrive somewhere else in the same
+     * method.
+     *
+     * **The assertion is that the code index moved and the method did not.**
+     * A step that reports the location it started from is the failure this
+     * catches -- and so is one that steps into `Log.d`, which is what
+     * `StepDepth.INTO` would do and is the difference the depth argument
+     * exists to make.
+     */
+    @Test
+    fun stepping_over_a_line_moves_within_the_same_method() = runBlocking {
+        val debugger = session!!
+        val signature = classSignature(DEBUGGEE_CLASS)
+
+        val classRef = debugger.classesBySignature(signature).single()
+        val step = debugger.methods(classRef.typeId).single { it.name == STEP_METHOD }
+        val firstLine = debugger.lineTable(classRef.typeId, step.id).minBy { it.codeIndex }
+
+        val placed = debugger.breakpointAt(signature, firstLine.lineNumber)!!
+        breakpoint = placed
+
+        val stopped = debugger.awaitStop(placed.requestId)
+        // Cleared before stepping: leaving it set means the loop comes round
+        // and hits the breakpoint again, and the step event and the breakpoint
+        // event race to be the next thing read.
+        debugger.clearBreakpoint(placed.requestId)
+        breakpoint = null
+
+        val request = debugger.requestStep(stopped.threadId, depth = Jdwp.StepDepth.OVER)
+        stepRequest = request
+        debugger.resumeThread(stopped.threadId)
+
+        val stepped = debugger.awaitStop(request)
+        debugger.clearStep(request)
+        stepRequest = null
+
+        assertEquals(
+            "the step left $STEP_METHOD",
+            stopped.location.methodId,
+            stepped.location.methodId,
+        )
+        assertTrue(
+            "the step did not move: still at index ${stepped.location.index}",
+            stepped.location.index > stopped.location.index,
+        )
+        android.util.Log.w(
+            TAG,
+            "stepped ${stopped.location.index} -> ${stepped.location.index}",
+        )
+
+        debugger.resumeThread(stepped.threadId)
+    }
+
+    /** Waits for the next stop belonging to [requestId]. */
+    private suspend fun DebugSession.awaitStop(requestId: Int): JdwpEvent.Stopped =
+        withTimeout(BREAKPOINT_TIMEOUT_MS) {
+            events
+                .mapNotNull { set ->
+                    set.events
+                        .filterIsInstance<JdwpEvent.Stopped>()
+                        .firstOrNull { it.requestId == requestId }
+                }
+                .first()
+        }
 
     private companion object {
         const val TAG = "DebuggerTest"

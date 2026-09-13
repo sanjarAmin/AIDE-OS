@@ -21,6 +21,19 @@ data class BuildRequest(
      */
     val debuggable: Boolean = true,
     /**
+     * The port a debugger will attach on, or null to build no debugger in.
+     *
+     * **Opt-in per build, not a property of being debuggable.** Carrying the
+     * debugger means adding `INTERNET` to the app and opening a listening
+     * socket on it, and doing that to every debug build because it is
+     * convenient would be a decision taken on the user's behalf. A release
+     * build refuses it outright.
+     *
+     * A port rather than a boolean because the IDE has to know where to
+     * connect, and two debuggable apps on one device cannot share one.
+     */
+    val debugPort: Int? = null,
+    /**
      * Dependency artifacts, already resolved and unpacked.
      *
      * Plain files rather than a resolver type on purpose: this module is the
