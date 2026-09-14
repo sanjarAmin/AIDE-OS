@@ -136,6 +136,8 @@ enum class SettingsCategory(
 fun SettingsScreen(
     onNavigateBack: () -> Unit,
     initialCategory: SettingsCategory? = null,
+    /** Opens the local model benchmark, a preview tool under the AI settings. */
+    onOpenBenchmark: () -> Unit = {},
 ) {
     val keys = koinInject<ApiKeyStore>()
     val identities = koinInject<GitIdentityStore>()
@@ -275,7 +277,10 @@ fun SettingsScreen(
                             item {
                                 when (targetCat) {
                                     SettingsCategory.EDITOR -> EditorSection(editorPreferences)
-                                    SettingsCategory.AI -> ApiKeySection(keys)
+                                    SettingsCategory.AI -> {
+                                        ApiKeySection(keys)
+                                        LocalModelBenchmarkEntry(onOpenBenchmark)
+                                    }
                                     SettingsCategory.GIT -> GitSection(identities, credentials)
                                     SettingsCategory.TOOLCHAINS -> {
                                         ToolchainSection(toolchain, dispatchers)
@@ -321,7 +326,10 @@ fun SettingsScreen(
                                         SettingsCard { EditorSection(editorPreferences) }
                                     }
                                     item {
-                                        SettingsCard { ApiKeySection(keys) }
+                                        SettingsCard {
+                                            ApiKeySection(keys)
+                                            LocalModelBenchmarkEntry(onOpenBenchmark)
+                                        }
                                     }
                                     item {
                                         SettingsCard { GitSection(identities, credentials) }
@@ -344,6 +352,7 @@ fun SettingsScreen(
                                 }
                                 SettingsCategory.AI -> {
                                     item { ApiKeySection(keys) }
+                                    item { LocalModelBenchmarkEntry(onOpenBenchmark) }
                                 }
                                 SettingsCategory.GIT -> {
                                     item { GitSection(identities, credentials) }
@@ -458,5 +467,33 @@ private fun ToolchainRoadmapCard(modifier: Modifier = Modifier) {
                 )
             }
         }
+    }
+}
+
+
+/**
+ * The way into the local model benchmark.
+ *
+ * Under the AI settings because a local model would be one more assistant
+ * provider, and marked a preview because it measures rather than provides one:
+ * nothing it downloads is used by the chat yet. `tools/localai/FINDINGS.md`.
+ */
+@Composable
+private fun LocalModelBenchmarkEntry(onOpen: () -> Unit) {
+    androidx.compose.foundation.layout.Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+    ) {
+        androidx.compose.foundation.layout.Column(Modifier.weight(1f).padding(end = 12.dp)) {
+            Text("Local model benchmark (preview)", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                "Download a coding model and measure how it runs on this phone. Not used by the chat yet.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        androidx.compose.material3.OutlinedButton(onClick = onOpen) { Text("Open") }
     }
 }

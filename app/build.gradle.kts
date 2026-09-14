@@ -116,6 +116,9 @@ dependencies {
     testImplementation(libs.junit)
     // The tool handlers are suspending -- a build is not a synchronous call.
     testImplementation(libs.kotlinx.coroutines.test)
+    // The real org.json, as :ai:core's tests use: android.jar's is a stub that
+    // throws in a JVM test, and the benchmark's reply classifier parses JSON.
+    testImplementation(libs.json)
     // JGit is `implementation` in :vcs:git, so it does not reach here on its
     // own. These tests read commits back out of the object database, which is
     // the only way to assert a commit was really written.

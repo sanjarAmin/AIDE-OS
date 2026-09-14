@@ -32,6 +32,13 @@ class ToolchainManager(
         installer.install(component)
 
     /** Google's agreement, verbatim, for the screen that asks the user to accept it. */
+    /** Where [component] is installed, or null when it is not. */
+    fun installedFile(component: ToolchainComponent): File? =
+        storage.fileFor(component).takeIf { storage.isInstalled(component) }
+
+    /** Deletes [component], installed or partly downloaded. */
+    fun remove(component: ToolchainComponent) = storage.remove(component)
+
     fun licenseText(): String = context.resources
         .openRawResource(R.raw.android_sdk_license)
         .bufferedReader()

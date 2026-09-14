@@ -115,13 +115,46 @@ policy could not block the other questions.
   copying the server's output threw when `tearDown` destroyed the server, and
   took every later test in the class with it.
 
+## 7. The benchmark screen: the phone half of this spike
+
+Settings → AI Assistant → **Local model benchmark (preview)** downloads the
+engine and a model through `:toolchain:manager` and runs this spike's questions
+on the user's phone, with a Copy results button. It exists because §3's number
+cannot come from an emulator.
+
+- **The engine is a component** (`llama-cpp-0.4.0`, 12 MB per ABI, on this
+  repo's releases), trimmed to `bin/llama-server` and the libraries it loads.
+  Trimming was checked by running the trimmed archive before publishing.
+- **Models come from Hugging Face directly**, pinned by revision and by the
+  **SHA-256** the page publishes. `ToolchainComponent.archiveSha256` exists for
+  them: pinning by SHA-1 would have meant downloading 8 GB to a laptop to
+  compute a weaker digest. A model is a `ComponentArchive.SingleFile`,
+  installed by rename, so it never needs room for two copies.
+- **`PinnedReleaseTest` hashes every archive except the models**, which it
+  checks by size alone. A size cut-off let the 491 MB model into the full hash
+  and the test JVM ran out of heap.
+
+Driven on the emulator end to end — engine from GitHub, the 0.5B from Hugging
+Face, Run — it reproduced the spike: ready in 1.5 s, 12.6 tok/s writing,
+19.5 tok/s reading (2,190 tokens in 112 s), 0/3 tool calls. Two things the
+drive changed:
+
+- **"Less free RAM" is the wrong memory number.** The model is memory-mapped
+  and Android counts those pages as reclaimable, so a server with 576 MB
+  resident showed as 129 MB less free. The report gives the server's resident
+  memory, read after the long prompt.
+- **Results appeared below the model list**, so a tap on Run changed nothing on
+  screen until the user scrolled. They are at the top, and the list scrolls to
+  them.
+
 ## What this makes a local model
 
 **Viable to build, with the 1.5B as the smallest model worth offering**, and
 worth building only once a phone's numbers are in:
 
 1. **Measure on a phone**: startup, prompt-reading and writing speed for the
-   1.5B and 3B, and memory. The emulator cannot answer this.
+   1.5B and 3B, and memory. The emulator cannot answer this; the benchmark
+   screen (§7) is how.
 2. **Make tool calls structured**: the template first, the lenient parser as
    the fallback.
 3. **Allow loopback cleartext** deliberately: a network security config for

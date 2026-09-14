@@ -32,6 +32,15 @@ data class ToolchainComponent(
      */
     val installedBytes: Long,
     val requiresSdkLicense: Boolean = true,
+    /**
+     * A SHA-256 pin, checked instead of [archiveSha1] when present.
+     *
+     * For artifacts whose publisher gives SHA-256 and nothing else. Hugging
+     * Face publishes a file's SHA-256 as its LFS object id; pinning a model by
+     * SHA-1 would mean downloading gigabytes to a laptop just to compute a
+     * weaker digest of a file whose stronger one is already on the page.
+     */
+    val archiveSha256: String? = null,
 ) {
     /** The file a caller means when it asks for "the" component. */
     val primaryInstalledName: String get() = archive.installedMarker
@@ -425,6 +434,88 @@ data class ToolchainComponent(
          * unchecked.
          */
         /** The ABIs this project builds toolchains for. */
+        /**
+         * llama.cpp's server, for the local model benchmark.
+         *
+         * Termux's build, for the reason Node's is: the upstream binaries are
+         * glibc. Trimmed to `llama-server` and its libraries by
+         * `tools/localai/fetch-llama.sh`. CPU backend only. MIT, so no SDK
+         * licence. Spike R16, `tools/localai/FINDINGS.md`.
+         */
+        fun llamaCpp(abi: String): ToolchainComponent? = when (abi) {
+            "arm64-v8a" -> llamaCpp("aarch64", "7b0fb888873ad57fd22e5cf649a2cacb77956169", 12_591_759L)
+            "x86_64" -> llamaCpp("x86_64", "22bfb2f7dbe1b790aff407358909ac0285a1ba56", 12_529_067L)
+            else -> null
+        }
+
+        private fun llamaCpp(architecture: String, sha1: String, archiveBytes: Long) = ToolchainComponent(
+            id = "llama-cpp-0.4.0",
+            displayName = "llama.cpp 0.4.0",
+            archiveUrl = "https://github.com/sanjarAmin/AIDE-OS/releases/download/" +
+                "llama-cpp-0.4.0/llama-cpp-0.4.0-$architecture.tar.gz",
+            archiveSha1 = sha1,
+            archiveBytes = archiveBytes,
+            archive = ComponentArchive.GzippedTar("bin/llama-server"),
+            installedBytes = 27_000_000L,
+            requiresSdkLicense = false,
+        )
+
+        /**
+         * Coding models for the local model benchmark, smallest first.
+         *
+         * From Hugging Face directly, pinned by repository **revision** -- a
+         * GGUF re-uploaded under the same name is a different model -- and by
+         * the SHA-256 the page publishes. Qwen2.5-Coder, Q4_K_M, because it is
+         * the size-for-quality point llama.cpp's own guidance recommends and the
+         * one spike R16 measured.
+         *
+         * The 3B is under Qwen's research licence, which does not allow
+         * commercial use: fine for measuring a phone, and a reason it could not
+         * be what a shipped feature offers. The others are Apache-2.0.
+         */
+        val LOCAL_MODELS: List<ToolchainComponent> = listOf(
+            model(
+                size = "0.5b", label = "Qwen2.5-Coder 0.5B",
+                revision = "ebb2015119c907b064c512bf053e945850b5875f",
+                bytes = 491_400_064L,
+                sha256 = "1d9614638d18024d0fbb36575a15f1302a3adf044df10345688ec4f6e1c4ff32",
+            ),
+            model(
+                size = "1.5b", label = "Qwen2.5-Coder 1.5B",
+                revision = "f86cb2c1fa58255f8052cc32aeede1b7482d4361",
+                bytes = 1_117_320_768L,
+                sha256 = "cc324af070c2ecbfd324a30884d2f951a7ff756aba85cb811a6ec436933bb046",
+            ),
+            model(
+                size = "3b", label = "Qwen2.5-Coder 3B (research licence)",
+                revision = "f74adce6aa16316c625447af059dbebe4983757c",
+                bytes = 2_104_932_800L,
+                sha256 = "724fb256bec1ff062b2f65e4569e871ad2e95ab2a3989723d1769c54294730b7",
+            ),
+            model(
+                size = "7b", label = "Qwen2.5-Coder 7B",
+                revision = "13fb94bfda8c8cf22497dc57b78f391a9acb426a",
+                bytes = 4_683_073_536L,
+                sha256 = "509287f78cb4d4cf6b3843734733b914b2c158e43e22a7f4bf5e963800894d3c",
+            ),
+        )
+
+        private fun model(size: String, label: String, revision: String, bytes: Long, sha256: String): ToolchainComponent {
+            val file = "qwen2.5-coder-$size-instruct-q4_k_m.gguf"
+            val repo = "Qwen/Qwen2.5-Coder-${size.uppercase()}-Instruct-GGUF"
+            return ToolchainComponent(
+                id = "model-qwen2.5-coder-$size-q4km",
+                displayName = label,
+                archiveUrl = "https://huggingface.co/$repo/resolve/$revision/$file",
+                archiveSha1 = "",
+                archiveSha256 = sha256,
+                archiveBytes = bytes,
+                archive = ComponentArchive.SingleFile(file),
+                installedBytes = bytes,
+                requiresSdkLicense = false,
+            )
+        }
+
         private val ABIS = listOf("arm64-v8a", "x86_64")
 
         val ALL: List<ToolchainComponent> = listOfNotNull(
@@ -437,8 +528,9 @@ data class ToolchainComponent(
             // missing, so the JDK's and clang's pins went unchecked by the very
             // test written after a wrong pin shipped -- and they are the
             // components most likely to drift, being ours and rebuilt by hand.
-            *ABIS.flatMap { listOfNotNull(openJdk(it), nativeToolchain(it), node(it), mono(it)) }
+            *ABIS.flatMap { listOfNotNull(openJdk(it), nativeToolchain(it), node(it), mono(it), llamaCpp(it)) }
                 .toTypedArray(),
+            *LOCAL_MODELS.toTypedArray(),
         )
     }
 }

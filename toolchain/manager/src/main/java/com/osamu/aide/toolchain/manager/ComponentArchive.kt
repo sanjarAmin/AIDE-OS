@@ -42,6 +42,16 @@ sealed interface ComponentArchive {
     data class GzippedTar(override val installedMarker: String) : ComponentArchive
 
     /**
+     * A download that is already the thing, installed under [installedMarker].
+     *
+     * A model file: a GGUF is one gigabyte-scale file and nothing to unpack.
+     * Installing it is a verify and a rename, so it never needs room for two
+     * copies -- which for the 7B model is the difference between needing 4.7 GB
+     * free and needing 9.4.
+     */
+    data class SingleFile(override val installedMarker: String) : ComponentArchive
+
+    /**
      * A zip unpacked whole, rather than picked over.
      *
      * Gradle's own distribution is this shape: a tree of jars under one

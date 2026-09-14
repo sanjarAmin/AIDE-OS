@@ -24,6 +24,7 @@ object Routes {
     const val SETTINGS_ROUTE = "settings?category={category}"
     const val SETTINGS = "settings"
     const val WORKSPACE = "workspace/{projectPath}"
+    const val BENCHMARK = "benchmark"
 
     fun settings(category: String? = null): String =
         if (!category.isNullOrBlank()) "settings?category=$category" else "settings"
@@ -114,7 +115,12 @@ fun AideNavHost(navController: NavHostController = rememberNavController()) {
             SettingsScreen(
                 onNavigateBack = { navController.popBackStack() },
                 initialCategory = initialCategory,
+                onOpenBenchmark = { navController.navigate(Routes.BENCHMARK) },
             )
+        }
+
+        composable(Routes.BENCHMARK) {
+            com.osamu.aide.ui.benchmark.BenchmarkScreen(onNavigateBack = { navController.popBackStack() })
         }
     }
 }

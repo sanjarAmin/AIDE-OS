@@ -226,4 +226,53 @@ class ComponentInstallerTest {
         assertEquals(listOf(InstallProgress.Installed(storage.fileFor(component))), progress)
         assertEquals(requestsAfterInstall, server.requests)
     }
+
+    // -- single files, pinned by SHA-256 ------------------------------------
+
+    private fun sha256(bytes: ByteArray) = java.security.MessageDigest.getInstance("SHA-256")
+        .digest(bytes).joinToString("") { "%02x".format(it) }
+
+    /** A model as the local benchmark downloads one: a file, renamed into place. */
+    private fun modelComponent(sha256: String) = ToolchainComponent(
+        id = "model-test",
+        displayName = "Test Model",
+        archiveUrl = server.url,
+        archiveSha1 = "",
+        archiveSha256 = sha256,
+        archiveBytes = server.archive.size.toLong(),
+        archive = ComponentArchive.SingleFile("model.gguf"),
+        installedBytes = server.archive.size.toLong(),
+        requiresSdkLicense = false,
+    )
+
+    @Test
+    fun `a single file is verified by SHA-256 and installed byte for byte`() = runTest {
+        val component = modelComponent(sha256(server.archive))
+
+        val installed = install(component).last()
+
+        assertTrue("install failed: $installed", installed is InstallProgress.Installed)
+        val file = (installed as InstallProgress.Installed).file
+        assertEquals(storage.fileFor(component), file)
+        assertTrue("the installed file differs from the download", file.readBytes().contentEquals(server.archive))
+        assertFalse("the download was left beside the install", storage.downloadFor(component).exists())
+        assertTrue(storage.isInstalled(component))
+    }
+
+    /**
+     * The SHA-256 pin is the gate, not the SHA-1.
+     *
+     * The component carries an empty SHA-1 and a wrong SHA-256. Checking the
+     * wrong one would either reject every model (the empty SHA-1 never matches)
+     * or accept a corrupt one -- so this pins which is consulted.
+     */
+    @Test
+    fun `a wrong SHA-256 fails the install even though nothing else is wrong`() = runTest {
+        val component = modelComponent("0".repeat(64))
+
+        val result = install(component).last()
+
+        assertTrue("a corrupt model was installed: $result", result is InstallProgress.Failed)
+        assertFalse(storage.isInstalled(component))
+    }
 }

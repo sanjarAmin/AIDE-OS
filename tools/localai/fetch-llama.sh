@@ -123,14 +123,24 @@ PREFIX=root/data/data/com.termux/files/usr
 [ -d "$PREFIX" ] || { echo "unexpected package layout" >&2; exit 1; }
 [ -x "$PREFIX/bin/llama-server" ] || { echo "no llama-server in the closure" >&2; exit 1; }
 
-# **Trimmed of what serving a model cannot use**: headers, man pages, and the
-# pkg-config and cmake files for building against libllama.
+# **Trimmed to the server.** Headers, man pages and the pkg-config and cmake
+# files are for building against libllama. The other thirty-odd tools --
+# llama-cli, -bench, -quantize and the rest -- each come with an `-impl` library
+# beside the server's, and nothing here runs them.
 echo "==> trimming"
 rm -rf "$PREFIX/include" "$PREFIX/share" "$PREFIX/lib/pkgconfig" "$PREFIX/lib/cmake"
+find "$PREFIX/bin" -mindepth 1 ! -name llama-server -delete
+find "$PREFIX/lib" -name 'libllama-*-impl.so' ! -name 'libllama-server-impl.so' -delete
 
 echo "==> llama.tar"
 tar cf llama.tar -C "$PREFIX" .
 
+# **Gzipped for the download**, as clang's and Node's are: the manager unpacks
+# a gzipped tar, and on a phone the difference is what the user waits for.
+# The plain tar stays beside it for the spike, which unpacks with toybox.
+gzip -9 -k -f llama.tar
+
 echo
-echo "llama.tar: $(du -h llama.tar | cut -f1)   installed: $(du -sh "$PREFIX" | cut -f1)"
+echo "llama.tar: $(du -h llama.tar | cut -f1)   llama.tar.gz: $(du -h llama.tar.gz | cut -f1)   installed: $(du -sh "$PREFIX" | cut -f1)"
 echo "binaries: $(ls "$PREFIX/bin" | tr '\n' ' ')"
+echo "sha1 of llama.tar.gz: $(sha1sum llama.tar.gz | cut -d' ' -f1)   bytes: $(stat -c %s llama.tar.gz)"

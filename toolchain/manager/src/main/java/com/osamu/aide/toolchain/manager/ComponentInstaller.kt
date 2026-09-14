@@ -58,7 +58,13 @@ class ComponentInstaller(
         // those two numbers differ by a factor of three and a half, and
         // doubling the download would have let a 710 MB install begin on a
         // device with 320 MB free.
-        val needed = component.archiveBytes + component.installedBytes
+        // A single file is renamed into place, never copied, so it needs room
+        // for itself once.
+        val needed = if (component.archive is ComponentArchive.SingleFile) {
+            component.archiveBytes
+        } else {
+            component.archiveBytes + component.installedBytes
+        }
         val available = archive.parentFile?.usableSpace ?: Long.MAX_VALUE
         if (available < needed) {
             emit(
@@ -74,8 +80,10 @@ class ComponentInstaller(
             download(component, archive)
 
             emit(InstallProgress.Verifying)
-            val actual = sha1(archive)
-            if (!actual.equals(component.archiveSha1, ignoreCase = true)) {
+            val (actual, pinned) = component.archiveSha256
+                ?.let { digest(archive, "SHA-256") to it }
+                ?: (digest(archive, "SHA-1") to component.archiveSha1)
+            if (!actual.equals(pinned, ignoreCase = true)) {
                 // Delete it. Keeping a corrupt archive would make every later
                 // attempt resume onto the same bad bytes and fail identically,
                 // which reads as the download being permanently broken.
@@ -225,8 +233,8 @@ class ComponentInstaller(
         emit(InstallProgress.Downloading(written, total))
     }
 
-    private fun sha1(file: File): String {
-        val digest = MessageDigest.getInstance("SHA-1")
+    private fun digest(file: File, algorithm: String): String {
+        val digest = MessageDigest.getInstance(algorithm)
         file.inputStream().buffered().use { input ->
             val buffer = ByteArray(BUFFER_BYTES)
             while (true) {
@@ -253,7 +261,24 @@ class ComponentInstaller(
             is ComponentArchive.ZipEntries -> extractEntries(component, archive)
             is ComponentArchive.GzippedTar -> extractTree(component, archive)
             is ComponentArchive.ZipTree -> extractZipTree(component, archive)
+            is ComponentArchive.SingleFile -> placeFile(component, archive)
         }
+
+    /**
+     * Moves a verified single-file download into its install directory.
+     *
+     * A rename, on the same filesystem: the download and the install share a
+     * root. The caller deletes `archive` afterwards, which after a rename is a
+     * no-op.
+     */
+    private fun placeFile(component: ToolchainComponent, archive: File): File {
+        val target = storage.fileFor(component)
+        target.parentFile?.mkdirs()
+        if (!archive.renameTo(target)) {
+            throw IOException("Could not move ${component.displayName} into place.")
+        }
+        return target
+    }
 
     /**
      * Unpacks a whole zip, into a sibling directory moved into place at the end.
