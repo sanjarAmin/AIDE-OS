@@ -96,23 +96,49 @@ class ProjectImporterTest {
         assertEquals(project.applicationId, ProjectDescriptor.read(project.rootDir)?.applicationId)
     }
 
+    /**
+     * What people actually pick: the folder they cloned. It is a Gradle root,
+     * and it comes in whole, for Gradle to build.
+     *
+     * This test used to assert the opposite -- that only `app/` came in, without
+     * `settings.gradle` -- which dropped every library module and the build files
+     * that declare the dependencies, and marked the result for the fast engine.
+     * See [ProjectDescription].
+     */
     @Test
-    fun a_gradle_root_with_one_module_imports_that_module() {
-        // What people actually pick: the folder they cloned, holding app/.
+    fun a_gradle_root_imports_whole_for_gradle_to_build() {
         writeModule(prefix = "app/")
-        write("settings.gradle", "include ':app'\n")
+        write("lib/src/main/java/com/example/lib/Lib.java", "class Lib {}\n")
+        write("lib/build.gradle.kts", "plugins { id(\"com.android.library\") }\n")
+        write(
+            "app/build.gradle.kts",
+            "plugins { id(\"com.android.application\") }\n" +
+                "android { namespace = \"com.example.ns\"; defaultConfig { applicationId = \"com.example.real\" } }\n",
+        )
+        write("settings.gradle.kts", "include(\":app\", \":lib\")\n")
 
         val project = (import() as AppResult.Success).value
 
-        // Named after the folder that was picked. A workspace of projects all
-        // called "app" would be no use to anyone.
         assertEquals("MyApp", project.name)
         assertEquals(File(workspace, "MyApp"), project.rootDir)
-        assertTrue(File(project.rootDir, "src/main/AndroidManifest.xml").isFile)
-        assertFalse(
-            "the Gradle root's own files came along",
-            File(project.rootDir, "settings.gradle").exists(),
-        )
+        assertEquals(BuildEngine.GRADLE, project.engine)
+        assertEquals("the id from the build file, not the manifest", "com.example.real", project.applicationId)
+        assertTrue("settings.gradle was left behind", File(project.rootDir, "settings.gradle.kts").isFile)
+        assertTrue("the library module was dropped", File(project.rootDir, "lib/src/main/java/com/example/lib/Lib.java").isFile)
+        assertTrue(File(project.rootDir, "app/src/main/AndroidManifest.xml").isFile)
+    }
+
+    /** Two library modules with manifests of their own used to make this refuse. */
+    @Test
+    fun a_gradle_root_with_several_modules_is_not_ambiguous() {
+        writeModule(prefix = "app/")
+        writeModule(prefix = "library/")
+        write("settings.gradle", "include ':app', ':library'\n")
+
+        val project = (import() as AppResult.Success).value
+
+        assertEquals(BuildEngine.GRADLE, project.engine)
+        assertTrue(File(project.rootDir, "library/src/main/AndroidManifest.xml").isFile)
     }
 
     @Test

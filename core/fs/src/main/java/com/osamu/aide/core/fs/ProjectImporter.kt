@@ -8,7 +8,6 @@ import com.osamu.aide.core.common.AppResult
 import com.osamu.aide.core.common.DispatcherProvider
 import kotlinx.coroutines.withContext
 import java.io.File
-import javax.xml.parsers.DocumentBuilderFactory
 
 /**
  * Brings a project in from anywhere on the device, through the Storage Access
@@ -54,9 +53,9 @@ class ProjectImporter(
 
             val module = moduleIn(root)
                 ?: return@withContext failure(
-                    "\"${root.name}\" is not an Android module. Pick the folder that " +
-                        "contains src/main/AndroidManifest.xml, or one whose only " +
-                        "subfolder does.",
+                    "\"${root.name}\" is not an Android project. Pick the folder that " +
+                        "contains settings.gradle or src/main/AndroidManifest.xml, or one " +
+                        "whose only subfolder has src/main/AndroidManifest.xml.",
                 )
 
             val bytes = module.bytes()
@@ -88,7 +87,7 @@ class ProjectImporter(
                 throw failure
             }
 
-            val project = describe(name, target)
+            val project = ProjectDescription.describe(name, target)
             ProjectDescriptor.write(project)
             AppResult.Success(project)
         } catch (failure: Exception) {
@@ -99,16 +98,17 @@ class ProjectImporter(
     }
 
     /**
-     * The module to import: the picked folder, or its only child that looks
-     * like one.
+     * What to import: the picked folder when it is a Gradle root or a module,
+     * otherwise its only child that is a module.
      *
-     * The second case is the common one. People pick the folder they cloned,
-     * which is a Gradle root holding `app/`; refusing that and making them
-     * navigate one level deeper would be technically correct and useless.
-     * Ambiguity is refused rather than guessed at -- with two modules there is
-     * no right answer, and picking one silently is worse than asking.
+     * A Gradle root is taken whole -- see [ProjectDescription] for what taking
+     * only its `app/` used to cost. The descent remains for a plain folder
+     * holding one module. Ambiguity is refused rather than guessed at: with two
+     * modules and no build to say how they relate there is no right answer.
      */
     private fun moduleIn(root: Node): Node? {
+        // A Gradle root is the project, all of it. See ProjectDescription.
+        if (ProjectDescription.isGradleRoot(root.children.filterNot { it.isDirectory }.map { it.name })) return root
         if (root.isModule()) return root
         return root.children.filter { it.isDirectory && it.isModule() }.singleOrNull()
     }
@@ -185,44 +185,6 @@ class ProjectImporter(
             }
         }
     }
-
-    private fun describe(name: String, rootDir: File): Project {
-        val layout = ProjectLayout(rootDir)
-        return Project(
-            name = name,
-            rootDir = rootDir,
-            applicationId = packageOf(layout.manifestFile)
-                ?: "com.example." + ProjectDescriptor.directoryNameFor(name)
-                    .lowercase().filter { it.isLetterOrDigit() }.ifEmpty { "app" },
-            // A project with any Kotlin in it is a Kotlin project, and the fast
-            // engine says so plainly rather than compiling half of it.
-            language = if (layout.kotlinSources().isNotEmpty()) {
-                SourceLanguage.KOTLIN
-            } else {
-                SourceLanguage.JAVA
-            },
-            engine = BuildEngine.FAST,
-            lastOpenedAt = System.currentTimeMillis(),
-        )
-    }
-
-    /**
-     * The manifest's `package`, or null.
-     *
-     * Null is ordinary, not an error: AGP 7 moved the application id into the
-     * Gradle build and modern manifests have no package attribute at all. The
-     * caller derives one from the folder name in that case, which the user can
-     * correct later.
-     */
-    private fun packageOf(manifest: File): String? = runCatching {
-        DocumentBuilderFactory.newInstance()
-            .apply { isNamespaceAware = true }
-            .newDocumentBuilder()
-            .parse(manifest)
-            .documentElement
-            .getAttribute("package")
-            .takeIf { it.isNotBlank() }
-    }.getOrNull()
 
     private fun displayName(tree: Uri, documentId: String): String {
         val uri = DocumentsContract.buildDocumentUriUsingTree(tree, documentId)

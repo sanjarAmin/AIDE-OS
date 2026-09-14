@@ -11,7 +11,11 @@
 driven end to end in the app for Java and Kotlin, on both engines: a breakpoint
 in `onCreate` stops the built app, and it steps, shows variables, resumes and
 detaches. Driving it found that the Gradle engine had never been installable
-from the app, and that a Kotlin app with no dependencies could not run.*
+from the app, and that a Kotlin app with no dependencies could not run.
+**Large projects build on both engines**: 3,000 classes and 216,000 lines, 20
+modules under Gradle, on a 2.5 GB emulator. A debug build now keeps its dex per
+package, so a one-class edit to that project rebuilds in 13 s where it took 52.
+`tools/bench/FINDINGS.md`.*
 
 | | Milestone | State |
 |---|---|---|

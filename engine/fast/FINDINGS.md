@@ -221,11 +221,12 @@ that question back on the table.
   `DownloadedPlatformBuildTest` builds a project with it -- but that test is
   opt-in, so the everyday suite still depends on the staged copy. Keep it in
   step with the pin in `ToolchainComponent.ANDROID_PLATFORM`.
-- **No incrementality.** `BuildWorkspace.prepare()` deletes the tree every
-  build, deliberately: reusing a workspace from a cancelled build is how you get
-  an APK containing the previous run's classes. Incrementality belongs at the
-  stage level keyed on input hashes, and is not written. Section 9 records the
-  cheaper design that does not work.
+- **Incrementality is dex only.** `BuildWorkspace.prepare()` deletes the tree
+  every build, deliberately: reusing a workspace from a cancelled build is how
+  you get an APK containing the previous run's classes. A debug build's dex is
+  kept per package and per jar under a content key (section 16); resources and
+  Java compilation still run in full. Section 9 records the cheaper design that
+  does not work.
 - **No `.module` parsing.** Maven resolution reads `.pom` only, and AndroidX's
   graph is correct only under Gradle Module Metadata. Section 12 records the
   three mechanisms that costs us and the narrow rules standing in for them; two
@@ -484,3 +485,64 @@ under aapt2's rules as a file named `clang-21` — putting a tappable link to a
 nonexistent file in front of the user, for the one error class they can do
 nothing about. `ClangDiagnostics` checks for a tool prefix first, and keeps
 `note:` lines, which for a template error are usually the useful half.
+
+## 16. Dexing a debug build a package at a time, and keeping it
+
+**Dexing was most of every build on anything bigger than a template.** A
+3,000-class, 216,000-line project (`tools/bench/FINDINGS.md`) took 82 s cold
+and 52 s for a second build with nothing changed; D8 was 62 s and 42 s of
+those. Java compilation was 9--13 s. Every build dexed every class again,
+because the workspace is emptied each time -- rightly, section 9.
+
+`DexShards` keeps what section 9 rules out -- reuse -- and drops what made reuse
+wrong, the timestamps. A debuggable build with `minSdk` 24 or more is dexed in
+**shards: one per package of the project's classes, one per dependency jar.**
+Each shard's dex is stored beside the workspace under a key hashed from the
+shard's input paths and bytes, D8's version, `minSdk` and the platform jar. A
+shard whose key matches is not dexed; a resource change alters `R$*.class`,
+which alters the key of that package and nothing else.
+
+Measured on the same emulator and project:
+
+| Large project | Before | Shards |
+|---|---|---|
+| First build | 82.1 s (D8 61.8 s) | 58.6 s (D8 41.9 s, 21 of 21 shards) |
+| One class edited, same session | -- | **13.4 s** (D8 3.5 s, 1 of 21) |
+| Nothing edited, same session | 51.7 s (D8 42.1 s) | -- |
+| App restarted, nothing edited | 82.1 s | **17.1 s** (0 of 21) |
+
+Even a first build is faster: twenty small D8 runs beat one large one here.
+
+Decisions that are not obvious:
+
+- **No merge.** Gradle dexes per class and merges. On a desktop, for these
+  3,000 classes, per-class intermediates took 31.9 s and the merge 8.1 s
+  against 20.7 s for one whole-program run -- the merge alone would eat most
+  of what a small edit saves. The shards are packaged as they are, as
+  `classes.dex` ... `classes21.dex`, which every device at API 21 or more loads
+  natively. The Compose app `ComposeRunTest` builds is 107 shards, and it
+  installs, launches and draws.
+- **A package is a sound unit, a class would be too, a module is not
+  needed.** What D8 generates for a class is named after it and needs only its
+  nest, and a nest shares a package. Interface desugaring does read across the
+  hierarchy, and only happens below API 24 -- hence the floor, and release
+  builds stay whole-program, where one optimised dex is the point.
+- **Two definitions of a class fall back to a whole-program dex.**
+  `DexShards.duplicateClasses` reads each shard's `class_defs` straight from
+  the dex header. The exception is D8's own `com/android/tools/r8/` support
+  classes: **the first lambda test found that any debug dex with a lambda
+  defines `Lcom/android/tools/r8/annotations/LambdaMethod;`**, so every real
+  app's shards each carried one, the check fired on every build, and the cache
+  would have fallen back to whole-program for ever while every test with one
+  lambda passed. They are fixed definitions and tolerated.
+- **Warnings from a cached shard are not repeated.** They were reported when
+  it was dexed, about code that has not changed since.
+- **Written through a sibling directory with its key already inside, then
+  renamed**, so a build killed half way leaves the old entry or none, never a
+  new key over an old dex. Entries for packages and jars no longer in the build
+  are deleted.
+
+Java compilation is now the larger half of an edit -- 8.4 s of 13.4 -- because
+ECJ compiles every source every time. That is the next thing to make
+incremental, and harder: which classes an edit affects is a question about
+the code, not its bytes.

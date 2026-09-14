@@ -206,6 +206,7 @@ class FastBuildSystem(
                     projectRoot = layout.root,
                     dependencies = request.dependencies.classpath +
                         kotlinRuntimeFor(kotlinSources, request.dependencies.classpath),
+                    cacheDir = workspace.dexCache,
                 )
             }
 

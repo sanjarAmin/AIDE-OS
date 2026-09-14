@@ -161,4 +161,149 @@ class DexStageTest {
             !result.failure.isNullOrBlank(),
         )
     }
+
+    private suspend fun dexInShards(
+        layout: ProjectLayout,
+        workspace: BuildWorkspace,
+        cache: File,
+        dependencies: List<File> = emptyList(),
+    ) = d8.dex(
+        classesDir = workspace.classes,
+        platform = fixture.platform,
+        workspace = workspace,
+        minSdk = ProjectManifest.minSdk(layout.manifestFile),
+        debuggable = true,
+        projectRoot = layout.root,
+        dependencies = dependencies,
+        cacheDir = cache,
+    )
+
+    private fun classesIn(dexFiles: List<File>): Set<String> =
+        dexFiles.flatMap { DexShards.classDescriptors(it) }.toSet()
+
+    private fun writeHelper(layout: ProjectLayout, text: String) {
+        File(layout.javaDir, "com/example/demo/util/Helper.java").apply {
+            parentFile?.mkdirs()
+            writeText(
+                """
+                package com.example.demo.util;
+
+                public final class Helper {
+                    public static Runnable say() { return () -> System.out.println("$text"); }
+                }
+                """.trimIndent(),
+            )
+        }
+    }
+
+    /**
+     * Sharding changes where classes are, never which classes there are.
+     *
+     * Compared with a whole-program dex of the same classes, lambdas included:
+     * D8's synthetic classes are what would go missing, or appear twice, if a
+     * package were not a sound unit.
+     */
+    @Test
+    fun shards_hold_exactly_the_classes_a_whole_program_dex_does() = runTest {
+        val layout = ProjectLayout.of(fixture.project())
+        writeHelper(layout, "hello")
+        // A lambda in the other package too: each shard then carries D8's
+        // LambdaMethod annotation, which is the duplicate DexShards tolerates.
+        File(layout.javaDir, "com/example/demo/Callbacks.java").writeText(
+            "package com.example.demo;\npublic final class Callbacks { " +
+                "public static Runnable ping() { return () -> System.out.println(\"ping\"); } }\n",
+        )
+        val workspace = fixture.workspace()
+        compile(layout, workspace)
+
+        val whole = dex(layout, workspace)
+        assertTrue("whole-program dex failed: ${whole.failure}", whole.succeeded)
+        val expected = classesIn(whole.value!!)
+
+        workspace.dex.listFiles()?.forEach { it.delete() }
+        val sharded = dexInShards(layout, workspace, File(fixture.workDir, "dex-cache"))
+        assertTrue("sharded dex failed: ${sharded.failure}", sharded.succeeded)
+
+        // D8 names a lambda's class after its context: `Helper$0`, today.
+        assertTrue(
+            "no lambda class to compare: $expected",
+            expected.any { it.startsWith("Lcom/example/demo/util/Helper$") },
+        )
+        assertEquals(expected, classesIn(sharded.value!!))
+        assertTrue(
+            "both shards should carry D8's support class, or this is not testing the duplicate",
+            sharded.value!!.all { dex -> DexShards.classDescriptors(dex).any { it.startsWith("Lcom/android/tools/r8/") } },
+        )
+        assertEquals(
+            "one dex per package, packaged in order",
+            listOf("classes.dex", "classes2.dex"),
+            sharded.value!!.map { it.name },
+        )
+    }
+
+    /**
+     * **The point of the cache: an edit re-dexes one package, not the app.**
+     *
+     * Measured before this existed: a 3,000-class project spent 42 s of a 52 s
+     * rebuild dexing classes that had not changed. Asserted by the cache
+     * entries themselves -- the untouched package's is the same file, not
+     * rewritten -- and by the new code really being in the result.
+     */
+    @Test
+    fun a_rebuild_dexes_only_the_package_that_changed() = runTest {
+        val layout = ProjectLayout.of(fixture.project())
+        val cache = File(fixture.workDir, "dex-cache")
+        writeHelper(layout, "first")
+        val first = fixture.workspace()
+        compile(layout, first)
+        assertTrue(dexInShards(layout, first, cache).succeeded)
+        val entries = cache.listFiles()!!.filter { it.isDirectory }.associate { it.name to File(it, "key").readText() }
+        assertEquals("expected a shard per package: ${cache.list()?.toList()}", 2, entries.size)
+        val stamps = cache.listFiles()!!.associate { it.name to File(it, "classes.dex").lastModified() }
+
+        Thread.sleep(1_100) // past a filesystem's one-second mtime resolution
+        writeHelper(layout, "second")
+        val second = fixture.workspace()
+        compile(layout, second)
+        val result = dexInShards(layout, second, cache)
+        assertTrue("rebuild failed: ${result.failure}", result.succeeded)
+
+        val after = cache.listFiles()!!.filter { it.isDirectory }.associate { it.name to File(it, "key").readText() }
+        val changed = after.filter { (name, key) -> entries[name] != key }.keys
+        assertEquals("exactly one package should have been dexed again: $changed", 1, changed.size)
+        val untouched = (after.keys - changed).single()
+        assertEquals(
+            "the unchanged package's dex was rewritten",
+            stamps[untouched],
+            File(cache, "$untouched/classes.dex").lastModified(),
+        )
+        assertTrue(
+            "the edit is not in the rebuilt app",
+            result.value!!.any { it.asText().contains("second") },
+        )
+        assertTrue(result.value!!.none { it.asText().contains("first") })
+    }
+
+    /**
+     * The same class in two shards is not packaged twice. The runtime would
+     * load whichever came first and say nothing, so the stage falls back to a
+     * whole-program dex -- which, for a genuine duplicate, fails as it always
+     * did.
+     */
+    @Test
+    fun a_class_in_two_shards_falls_back_to_a_whole_program_dex() = runTest {
+        val layout = ProjectLayout.of(fixture.project())
+        val workspace = fixture.workspace()
+        compile(layout, workspace)
+        val duplicate = File(fixture.workDir, "duplicate.jar")
+        java.util.zip.ZipOutputStream(duplicate.outputStream()).use { zip ->
+            zip.putNextEntry(java.util.zip.ZipEntry("com/example/demo/MainActivity.class"))
+            zip.write(File(workspace.classes, "com/example/demo/MainActivity.class").readBytes())
+            zip.closeEntry()
+        }
+
+        val result = dexInShards(layout, workspace, File(fixture.workDir, "dex-cache"), listOf(duplicate))
+
+        assertTrue("two definitions of MainActivity were packaged: ${result.value}", !result.succeeded)
+    }
 }

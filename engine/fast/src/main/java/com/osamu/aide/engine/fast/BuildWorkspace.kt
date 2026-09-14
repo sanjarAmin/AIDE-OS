@@ -17,6 +17,13 @@ class BuildWorkspace(val root: File) {
     val classes: File get() = File(root, "classes")
     val dex: File get() = File(root, "dex")
 
+    /**
+     * Each debug build's dex, by shard, kept between builds -- beside the
+     * workspace rather than in it, because [prepare] empties the workspace.
+     * Keyed by content, so it is safe to reuse; see `DexShards`.
+     */
+    val dexCache: File get() = File(root.absoluteFile.parentFile, "${root.name}.dex-cache")
+
     /** Object files and the shared library built from the project's C/C++. */
     val nativeDir: File get() = File(root, "native")
 

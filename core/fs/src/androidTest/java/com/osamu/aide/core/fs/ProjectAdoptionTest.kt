@@ -160,6 +160,31 @@ class ProjectAdoptionTest {
     }
 
     /**
+     * **A cloned Gradle project is adopted whole, for Gradle.** Two modules
+     * with manifests used to be refused as ambiguous, and one module used to be
+     * adopted alone -- libraries, build files and declared dependencies left
+     * outside the project. See [ProjectDescription].
+     */
+    @Test
+    fun a_gradle_root_is_adopted_whole_and_built_by_gradle() = runTest {
+        val directory = module("gradle-repo", at = "app", packageName = null, kotlin = true)
+        module("gradle-repo", at = "library")
+        File(directory, "settings.gradle").writeText("include ':app', ':library'\n")
+        File(directory, "app/build.gradle").writeText(
+            "plugins { id 'com.android.application' }\n" +
+                "android { namespace 'com.example.fromnamespace' }\n",
+        )
+
+        val project = adoption.adopt(directory, "GradleRepo").orFail()
+
+        assertEquals(directory, project.rootDir)
+        assertEquals(BuildEngine.GRADLE, project.engine)
+        assertEquals("com.example.fromnamespace", project.applicationId)
+        assertEquals("Kotlin in a module counts", SourceLanguage.KOTLIN, project.language)
+        assertEquals(listOf("GradleRepo"), repository.listProjects().orFail().map { it.name })
+    }
+
+    /**
      * Two modules have no right answer, and picking one silently leaves the
      * user with a project quietly missing half their code.
      */
