@@ -64,16 +64,19 @@ class KotlinLanguageService(
      */
     val classpath: List<File> = emptyList(),
     /**
-     * Sources a build writes and the user does not have: `R.java`, today.
+     * Source folders beyond the project's own `src/main`: what a build writes
+     * (`R.java`), and in a Gradle project every other module's sources.
      *
-     * Without it every `R.string.x` in a Kotlin file was `Unresolved reference
-     * 'R'` for good -- not only before the first build, which is honest, but
-     * after a build that compiled the same line without complaint. Only a
-     * directory that exists when the session opens is read, and the session
-     * does not notice files appearing later, which is why the app drops this
-     * service after every build.
+     * Without the first, every `R.string.x` in a Kotlin file was `Unresolved
+     * reference 'R'` for good -- not only before the first build, which is
+     * honest, but after a build that compiled the same line without complaint.
+     * Without the second, a reference into another module was unresolved in a
+     * project that built. Only a directory that exists when the session opens
+     * is read, and the session does not notice files appearing later, which is
+     * why the app drops this service after every build. Readable so a caller
+     * can tell whether the service it holds was built for the roots it wants.
      */
-    private val generatedSourceRoots: List<File> = emptyList(),
+    val extraSourceRoots: List<File> = emptyList(),
 ) : LanguageService {
 
     /**
@@ -382,10 +385,16 @@ class KotlinLanguageService(
         }
         // Before building one, finish closing any the last service left behind.
         closeAbandonedSession()
-        val roots = listOf(File(projectRoot, "src/main/java"), File(projectRoot, "src/main/kotlin"))
+        // The whole project only when nothing narrower exists: added beside a
+        // module's own roots it would put every file on the path twice, and
+        // the session reports each class as redeclared.
+        val roots = (
+            listOf(File(projectRoot, "src/main/java"), File(projectRoot, "src/main/kotlin")) +
+                extraSourceRoots
+            )
             .filter { it.isDirectory }
-            .ifEmpty { listOf(projectRoot) } +
-            generatedSourceRoots.filter { it.isDirectory }
+            .distinct()
+            .ifEmpty { listOf(projectRoot) }
         val libraries = (listOf(stdlib) + classpath)
             .filter { it.isFile }
             .joinToString(File.pathSeparator) { it.absolutePath }

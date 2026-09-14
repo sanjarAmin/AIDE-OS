@@ -69,14 +69,48 @@ Getting a multi-module Gradle project into the app and built at all took these:
   the app, and were not found once they were: `toolchain/manager/FINDINGS.md`
   section 10.
 
+## The editor in a multi-module project
+
+Once the project built, its editor still could not follow it: a class in `lib1`
+calling into `lib0` was `package com.example.large.m0 does not exist`, and an
+`androidx.core` import declared only in `app/build.gradle.kts` was unresolved.
+The language services read one module's `src/main/java` and the dependencies
+listed in `aide.json`, and a Gradle project lists none there.
+
+A build script is a program -- version catalogs, convention plugins, `api`
+dependencies of other modules -- so the classpath comes from Gradle, not from
+reading the scripts. Every Gradle build carries an init script
+(`GradleEditorInputs`) that asks AGP for each debug variant's
+`compileClasspath` and writes it to the module's `build/aide/`; AARs arrive
+already transformed into jars. The editor reads that, every module's source
+folders, and each module's `R` jar, and leaves out the project's own compiled
+outputs so no class is both source and binary. Driven on the emulator: before
+a build, only the `androidx` import is unresolved; after it, 22 jars and no
+problems.
+
+Two defects in the wiring surfaced on the way, and both predate multi-module:
+
+- **Only completion passed the classpath.** Diagnostics, signature hints and
+  go-to-definition asked for the service without one, and a service is rebuilt
+  whenever the classpath differs -- so in any project with dependencies, each
+  analysis discarded completion's warm compiler and the next completion
+  discarded analysis's, and analysis ran without the dependencies. The context
+  is now held by `LanguageServices`, and every caller gets the service built
+  from it. `JavaCompletionSourceTest`.
+- **The classpath never reached the editor on open.** `installCompletions`
+  waited on the job that reads the project descriptor, and was called before
+  that job was created; a coroutine that starts immediately met a null job,
+  waited for nothing, found no project, and returned. Nothing said so --
+  platform types resolved, only dependencies stayed red.
+
+What is still missing: go-to-definition into a dependency, which has no source;
+a Gradle project's generated sources other than `R` (BuildConfig, view
+binding); and any of this before the first build.
+
 ## Not measured
 
 - **A phone.** The emulator has a desktop CPU and more RAM than many phones.
 - **An edit on Gradle.** Only the fast engine was measured after a one-class
   edit (section 16 of its FINDINGS).
-- **The editor on a multi-module project.** It reads one module's sources and
-  `aide.json`'s dependencies, so in a Gradle root every reference into another
-  module, and `R`, is unresolved. Building works; completion across modules
-  does not.
 - **A real app's dependency graph.** These projects have no dependencies;
   resolution and AAR extraction are measured elsewhere.

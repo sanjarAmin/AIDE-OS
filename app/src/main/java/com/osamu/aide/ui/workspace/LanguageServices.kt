@@ -43,6 +43,18 @@ class LanguageServices(
 
     private var current: Pair<File, JavaLanguageService>? = null
 
+    /**
+     * What each project's services are built from, set once it is known.
+     *
+     * **Held here so every caller asks for the same service.** The classpath
+     * used to be an argument, and only completion passed it: diagnostics,
+     * signature hints and go-to-definition asked for the service without one.
+     * A service is rebuilt whenever the classpath differs, so in any project
+     * with dependencies each analysis threw away the warm compiler completion
+     * had just built, and completion threw away analysis's -- 700 ms and more a
+     * time, and every `androidx.*` in the diagnostics reported as unresolved.
+     */
+    private val contexts = HashMap<File, EditorContext>()
 
     private var nativeCurrent: Pair<File, ClangdService>? = null
 
@@ -59,9 +71,20 @@ class LanguageServices(
      * Silence is the better failure.
      */
     @Synchronized
-    fun forProject(projectRoot: File, classpath: List<File> = emptyList()): JavaLanguageService? {
+    fun forProject(projectRoot: File, classpath: List<File>? = null): JavaLanguageService? {
+        val context = contextOf(projectRoot)
+        val wanted = classpath ?: context.classpath
+        val sourcePathWanted = listOf(File(projectRoot, "src/main/java")) + context.sourceRoots +
+            // aapt2 writes R.java here during a build, and nothing else
+            // ever writes it: `R` is not a file the user has. Without this
+            // every `R.string.x` in a freshly created project is reported
+            // as "package R does not exist" -- a real unresolved reference,
+            // but one that says nothing except that the project has not
+            // been built yet. After one build it resolves.
+            generatedJavaOf(projectRoot)
+        val sourcePath = sourcePathWanted.distinct()
         current?.let { (root, service) ->
-            if (root == projectRoot && service.classpath == classpath) return service
+            if (root == projectRoot && service.classpath == wanted && service.sourcePath == sourcePath) return service
             // Replaced, so the old one has to go. It holds a file manager with
             // open handles on android.jar and every AAR; dropping the reference
             // alone leaked them, and opening a few projects in a session is
@@ -78,17 +101,8 @@ class LanguageServices(
             // rather than reporting every androidx.* reference as unresolved.
             // A changed classpath builds a new service: the warm compiler holds
             // a symbol table for the old one, and there is no way to add to it.
-            classpath = classpath,
-            sourcePath = listOf(
-                File(projectRoot, "src/main/java"),
-                // aapt2 writes R.java here during a build, and nothing else
-                // ever writes it: `R` is not a file the user has. Without this
-                // every `R.string.x` in a freshly created project is reported
-                // as "package R does not exist" -- a real unresolved reference,
-                // but one that says nothing except that the project has not
-                // been built yet. After one build it resolves.
-                generatedJavaOf(projectRoot),
-            ),
+            classpath = wanted,
+            sourcePath = sourcePath,
         )
         current = projectRoot to service
         return service
@@ -119,6 +133,18 @@ class LanguageServices(
      * red after a clean build. clangd re-reads `compile_flags.txt` itself and
      * Node shells out per request; neither holds a view of what a build wrote.
      */
+    /**
+     * Sets what [projectRoot]'s services are built from. A service built from
+     * something else is replaced on its next use, not now: replacing it means
+     * a cold compiler, and nothing may be asking.
+     */
+    @Synchronized
+    fun setContext(projectRoot: File, context: EditorContext) {
+        contexts[projectRoot] = context
+    }
+
+    private fun contextOf(projectRoot: File): EditorContext = contexts[projectRoot] ?: EditorContext()
+
     @Synchronized
     fun invalidateAfterBuild() {
         current?.second?.close()
@@ -149,7 +175,8 @@ class LanguageServices(
     fun serviceFor(
         file: File,
         projectRoot: File,
-        classpath: List<File> = emptyList(),
+        /** Overrides the project's [EditorContext] classpath; for tests. */
+        classpath: List<File>? = null,
     ): LanguageService? {
         val java = forProject(projectRoot, classpath)
         if (java != null && java.handles(file)) return java
@@ -182,15 +209,20 @@ class LanguageServices(
      */
     private fun kotlinFor(
         projectRoot: File,
-        classpath: List<File>,
+        classpath: List<File>?,
     ): KotlinLanguageService? {
         if (!KotlinArchives.isSupported) return null
+        val context = contextOf(projectRoot)
+        val wanted = classpath ?: context.classpath
+        val extraRoots = context.sourceRoots + generatedJavaOf(projectRoot)
 
         kotlinCurrent?.let { (root, service) ->
             // A changed classpath needs a new service, the same as javac: the
             // session holds a resolved view of its libraries and cannot be
             // added to.
-            if (root == projectRoot && service.classpath == kotlinClasspath(classpath)) {
+            if (root == projectRoot && service.classpath == kotlinClasspath(wanted) &&
+                service.extraSourceRoots == extraRoots
+            ) {
                 return service
             }
             // Holds the front end's whole object graph and the open jars it
@@ -200,7 +232,7 @@ class LanguageServices(
         }
 
         val files = toolchain.kotlinAnalysisArchives() ?: return null
-        val resolved = kotlinClasspath(classpath)
+        val resolved = kotlinClasspath(wanted)
         if (resolved.isEmpty()) return null
         val service = KotlinLanguageService(
             archives = KotlinArchives(
@@ -213,7 +245,7 @@ class LanguageServices(
             projectRoot = projectRoot,
             dispatchers = dispatchers,
             classpath = resolved,
-            generatedSourceRoots = listOf(generatedJavaOf(projectRoot)),
+            extraSourceRoots = extraRoots,
         )
         kotlinCurrent = projectRoot to service
         return service
@@ -289,6 +321,19 @@ class LanguageServices(
         nodeCurrent = null
     }
 }
+
+/**
+ * What a project's language services are built from, beyond its root.
+ *
+ * [sourceRoots] are source folders besides the root's own `src/main/java` --
+ * a Gradle project's other modules. [classpath] is the jars the code compiles
+ * against. Both are decided by `EditorContexts`, which knows the engines; this
+ * class knows neither.
+ */
+data class EditorContext(
+    val sourceRoots: List<File> = emptyList(),
+    val classpath: List<File> = emptyList(),
+)
 
 /**
  * Lets the editor ask `:lsp:java` for proposals without knowing it exists.

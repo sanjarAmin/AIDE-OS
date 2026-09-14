@@ -33,7 +33,8 @@ class JavaLanguageService(
      * compiler's symbol table, so a change means a new service.
      */
     val classpath: List<File> = emptyList(),
-    sourcePath: List<File> = listOf(File(projectRoot, "src/main/java")),
+    /** Readable for the same reason [classpath] is. */
+    val sourcePath: List<File> = listOf(File(projectRoot, "src/main/java")),
 ) : LanguageService {
 
     private val compiler = ResidentCompiler(platform, classpath, sourcePath)

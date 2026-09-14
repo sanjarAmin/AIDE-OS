@@ -295,6 +295,8 @@ class WorkspaceViewModel(
     private val dependencies: ProjectDependencies,
 ) : ViewModel() {
 
+    private val editorContexts = EditorContexts(dependencies)
+
     private val _state = MutableStateFlow(WorkspaceUiState())
     val state: StateFlow<WorkspaceUiState> = _state.asStateFlow()
 
@@ -377,7 +379,6 @@ class WorkspaceViewModel(
             expandedPaths = setOf(projectDir.absolutePath),
         )
         rebuildTree()
-        installCompletions(projectDir)
 
         // The tree does not need the descriptor and building cannot start
         // without it, so the two are not sequenced: the files appear
@@ -400,6 +401,13 @@ class WorkspaceViewModel(
                 is AppResult.Failure -> Unit
             }
         }
+        // **After the job exists, not before.** This was called first, and
+        // waits on the job to read the project's dependencies -- but
+        // viewModelScope starts a coroutine immediately, so it met a null job,
+        // waited for nothing, found no project, and gave up. A project's
+        // classpath never reached the editor when it opened, and nothing said
+        // so: platform types resolved, and only dependencies were red.
+        installCompletions(projectDir)
     }
 
     /**
@@ -410,35 +418,37 @@ class WorkspaceViewModel(
      * than an empty list because it looks like it worked.
      */
     private fun installCompletions(projectDir: File) {
-        // Without a classpath first, so the editor has intelligence for
-        // platform types immediately. A cold dependency resolve is a minute of
-        // network, and completion on android.* should not wait for it.
+        // Asked per call, so it always meets the project's current context --
+        // the platform alone at first, since a cold dependency resolve is a
+        // minute of network and completion on android.* should not wait for it.
         languages.completionSource = ServiceCompletionSource { file ->
             languageServices.serviceFor(file, projectDir)
         }
-
-        // Then again with it, once the descriptor and the resolve are done. The
-        // second service replaces the first: a warm compiler's symbol table
-        // cannot be extended, so a wider classpath means a new one.
         viewModelScope.launch {
             descriptorJob?.join()
-            val resolved = project ?: return@launch
-            if (resolved.dependencies.isEmpty()) return@launch
+            refreshEditorContext(projectDir)
+        }
+    }
 
-            val classpath = runCatching { dependencies.classpathFor(resolved) }.getOrNull()
-            if (classpath.isNullOrEmpty() || _state.value.projectRoot != projectDir) return@launch
-
-            languages.completionSource = ServiceCompletionSource { file ->
-                languageServices.serviceFor(file, projectDir, classpath)
-            }
-            Log.i(TAG, "language service rebuilt with ${classpath.size} dependency jars")
-
-            // Anything already on screen was analysed against the narrower
-            // classpath and is now wrong -- most visibly, every androidx.*
-            // import reported as unresolved.
-            _state.value.active?.let { active ->
-                analyse(active.file, pendingText[active.file] ?: active.document.text)
-            }
+    /**
+     * Works out what the editor's services should see of this project, and
+     * re-analyses the file on screen if that changed anything.
+     *
+     * Run when the project opens and after every successful build: a Gradle
+     * project's classpath and `R` only exist once it has been built, and a
+     * fast-engine project's dependencies can change between builds.
+     */
+    private suspend fun refreshEditorContext(projectDir: File) {
+        val resolved = project ?: return
+        val context = withContext(dispatchers.io) { editorContexts.contextFor(resolved) }
+        if (_state.value.projectRoot != projectDir) return
+        languageServices.setContext(projectDir, context)
+        Log.i(TAG, "editor context: ${context.sourceRoots.size} extra source roots, ${context.classpath.size} jars")
+        if (context == EditorContext()) return
+        // Anything already on screen was analysed against less and is now
+        // wrong -- most visibly, every androidx.* import reported unresolved.
+        _state.value.active?.let { active ->
+            analyse(active.file, pendingText[active.file] ?: active.document.text)
         }
     }
 
@@ -1309,6 +1319,9 @@ class WorkspaceViewModel(
             // unresolved until something drops it. See
             // LanguageServices.invalidateAfterBuild.
             languageServices.invalidateAfterBuild()
+            // A Gradle build has just recorded its classpath and written its
+            // R jars, which is where a Gradle project's context comes from.
+            _state.value.projectRoot?.let { refreshEditorContext(it) }
             // And nothing re-analyses on its own, so the file on screen would
             // keep the error it has just stopped deserving.
             _state.value.active?.let { active ->

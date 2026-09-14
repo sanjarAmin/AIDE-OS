@@ -121,12 +121,13 @@ class GradleBuildSystem(
         send(BuildEvent.Note("Running Gradle. The first build downloads its dependencies."))
 
         val debugInit = request.debugger?.let { GradleDebugAgent.prepare(File(gradleUserHome, "aide-debug"), it) }
+        val editorInit = GradleEditorInputs.writeInitScript(File(gradleUserHome, "aide-editor"))
 
         val result = jvm.run(
             mainClass = GRADLE_MAIN,
             classPath = launcherClassPath(),
             vmOptions = vmOptions(),
-            arguments = gradleArguments(request, debugInit),
+            arguments = gradleArguments(request, listOfNotNull(editorInit, debugInit)),
             workingDir = projectRoot,
             environment = mapOf(
                 "TMPDIR" to temporaryDir().absolutePath,
@@ -197,11 +198,12 @@ class GradleBuildSystem(
         else -> null
     }
 
-    private fun gradleArguments(request: BuildRequest, debugInit: File?): List<String> = buildList {
+    private fun gradleArguments(request: BuildRequest, initScripts: List<File>): List<String> = buildList {
         add(if (request.debuggable) "assembleDebug" else "assembleRelease")
-        // The debugger's agent, added to the debug variants by an init script
-        // rather than by editing the project. See GradleDebugAgent.
-        debugInit?.let { add("--init-script"); add(it.absolutePath) }
+        // What the editor needs recorded, and the debugger's agent when one was
+        // asked for -- each added by an init script rather than by editing the
+        // project. See GradleEditorInputs and GradleDebugAgent.
+        initScripts.forEach { add("--init-script"); add(it.absolutePath) }
         // **Not a preference.** Gradle's daemon is another JVM, and although
         // the launcher makes one startable, a daemon that outlives the build
         // holds a heap the size of the build on a device that has none to
