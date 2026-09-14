@@ -144,6 +144,10 @@ include(":spike:jdwp")
 // build we produced, which attaches the platform's own agent to itself.
 include(":debugger")
 
+// Spike R16: a coding model on the phone itself, through Termux's llama.cpp
+// and the OpenAI-compatible API the Custom provider already speaks.
+include(":spike:localai")
+
 // The app R15 debugs. A second package on purpose: whether one app may reach
 // another's loopback JDWP port is the question that decides the debugger's
 // shape, and one process talking to itself cannot answer it.
