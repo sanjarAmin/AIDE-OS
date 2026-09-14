@@ -31,7 +31,12 @@ sealed interface InstallStatus {
      */
     data class NeedsConfirmation(val confirmation: Intent) : InstallStatus
 
-    data object Installed : InstallStatus
+    /**
+     * [packageName] as the installer reports it, which is the APK's own and not
+     * necessarily the project's -- a Gradle debug variant can add a suffix.
+     * Null only if the platform leaves it out.
+     */
+    data class Installed(val packageName: String? = null) : InstallStatus
 
     /**
      * [settings] is non-null when the app is not allowed to install at all and
@@ -95,7 +100,7 @@ class ApkInstaller(
                     }
 
                     PackageInstaller.STATUS_SUCCESS -> {
-                        trySend(InstallStatus.Installed)
+                        trySend(InstallStatus.Installed(intent.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME)))
                         close()
                     }
 

@@ -138,6 +138,26 @@ class DebugAgentTest {
     }
 
     /**
+     * The generated agent compiles without a word.
+     *
+     * Its diagnostics join the project's, and the user never wrote it: a "Dead
+     * code" warning at `AideDebugAgent.java:59` sat in the Problems pane of a
+     * Kotlin project that had no Java in it at all. Both shapes are checked,
+     * since the handshake is what the dead branch hung on.
+     */
+    @Test
+    fun the_generated_agent_reports_nothing_to_the_user() {
+        listOf(DebuggerRequest(PORT), DebuggerRequest(PORT, handshakeAuthority = AUTHORITY)).forEach { request ->
+            val result = build(debugger = request)
+            assertTrue("build failed: $result", result is BuildResult.Success)
+            val fromAgent = result.diagnostics.filter {
+                "AideDebugAgent" in (it.file?.path.orEmpty() + it.message)
+            }
+            assertTrue("the agent reported: ${fromAgent.map { it.describe() }}", fromAgent.isEmpty())
+        }
+    }
+
+    /**
      * An ordinary debug build carries neither, which is the whole of the
      * opt-in.
      */

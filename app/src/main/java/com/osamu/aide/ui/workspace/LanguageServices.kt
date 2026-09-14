@@ -87,12 +87,7 @@ class LanguageServices(
                 // as "package R does not exist" -- a real unresolved reference,
                 // but one that says nothing except that the project has not
                 // been built yet. After one build it resolves.
-                //
-                // Kept in step with ProjectBuilder.outputFor and
-                // BuildWorkspace.generatedJava by construction, not by comment:
-                // both derive from the project directory name under the same
-                // root, which is why that root is injected rather than guessed.
-                File(buildOutputRoot, "${projectRoot.name}/generated/java"),
+                generatedJavaOf(projectRoot),
             ),
         )
         current = projectRoot to service
@@ -116,16 +111,31 @@ class LanguageServices(
      * output root, a service constructed *after* it resolves `R` and the warm
      * one does not. `WorkspaceViewModelTest.a_build_clears_the_R_error_whose_source_it_generates`.
      *
-     * Only the Java service. clangd re-reads `compile_flags.txt` itself, Node
-     * shells out per request, and the Kotlin session is rebuilt with its own
-     * classpath; none of them hold a cached directory listing of a directory
-     * a build writes into.
+     * **And the Kotlin session, for the same reason.** It reads `R.java` from
+     * the same directory, and a session opened before the first build -- or
+     * before a new string resource -- has the old answer. That comment used to
+     * say Kotlin needed nothing here, which was true only because the session
+     * was not given the directory at all, and every `R` in a Kotlin file stayed
+     * red after a clean build. clangd re-reads `compile_flags.txt` itself and
+     * Node shells out per request; neither holds a view of what a build wrote.
      */
     @Synchronized
     fun invalidateAfterBuild() {
         current?.second?.close()
         current = null
+        kotlinCurrent?.second?.close()
+        kotlinCurrent = null
     }
+
+    /**
+     * Where a build writes `R.java` for [projectRoot].
+     *
+     * Kept in step with ProjectBuilder.outputFor and BuildWorkspace.generatedJava
+     * by construction, not by comment: both derive from the project directory
+     * name under the same root, which is why that root is injected rather than
+     * guessed.
+     */
+    private fun generatedJavaOf(projectRoot: File) = File(buildOutputRoot, "${projectRoot.name}/generated/java")
 
     /**
      * The service that handles [file], or null if nothing here does.
@@ -203,6 +213,7 @@ class LanguageServices(
             projectRoot = projectRoot,
             dispatchers = dispatchers,
             classpath = resolved,
+            generatedSourceRoots = listOf(generatedJavaOf(projectRoot)),
         )
         kotlinCurrent = projectRoot to service
         return service

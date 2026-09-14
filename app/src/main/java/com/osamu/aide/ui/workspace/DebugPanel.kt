@@ -77,26 +77,33 @@ fun DebugPanel(
     /** Why Debug is unavailable for this project, when it is. */
     unavailableReason: String?,
     modifier: Modifier = Modifier,
+    /** The build a Debug tap started, while there is no session yet; see [debugBuildStatus]. */
+    buildStatus: String? = null,
 ) {
     val session = state.session
+    val building = session == DebugState.Idle && buildStatus != null
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (session is DebugState.Attaching || (session is DebugState.Running && session.stepping)) {
+            if (
+                session is DebugState.Attaching ||
+                (session is DebugState.Running && session.stepping) ||
+                (building && buildStatus == BUILDING_TO_DEBUG)
+            ) {
                 CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 1.5.dp)
             }
             Text(
-                text = headline(session),
+                text = if (building) buildStatus!! else headline(session),
                 style = MaterialTheme.typography.titleSmall,
-                color = if (session is DebugState.Stopped) {
-                    MaterialTheme.colorScheme.onSurface
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
+                color = when {
+                    session is DebugState.Stopped -> MaterialTheme.colorScheme.onSurface
+                    building && buildStatus != BUILDING_TO_DEBUG -> MaterialTheme.colorScheme.error
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
                 },
-                maxLines = 2,
+                maxLines = if (building) 4 else 2,
                 overflow = TextOverflow.Ellipsis,
                 // Weighted: the headline is the variable half of this row.
                 modifier = Modifier.weight(1f).semantics { contentDescription = "Debug status" },
@@ -120,7 +127,9 @@ fun DebugPanel(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            actions.start != null -> FilledTonalButton(
+            // Not while its own build runs: a second tap is ignored, and a
+            // button that does nothing reads as broken.
+            actions.start != null && buildStatus != BUILDING_TO_DEBUG -> FilledTonalButton(
                 onClick = actions.start,
                 modifier = Modifier.semantics { contentDescription = "Start debugging" },
             ) { Text("Debug") }
@@ -134,6 +143,22 @@ fun DebugPanel(
             }
         }
     }
+}
+
+internal const val BUILDING_TO_DEBUG = "Building the app to debug it"
+
+/**
+ * What the Debug tab says about the build a Debug tap started, or null.
+ *
+ * Only a debug build's, only while it runs or once it has failed: a successful
+ * one hands over to the session, whose own states say the rest.
+ */
+fun debugBuildStatus(build: BuildUiState): String? = when {
+    !build.isDebug -> null
+    build.isRunning -> BUILDING_TO_DEBUG
+    !build.succeeded && build.outcome != null ->
+        "The build failed, so there is nothing to debug. ${build.outcome}"
+    else -> null
 }
 
 private fun headline(session: DebugState): String = when (session) {

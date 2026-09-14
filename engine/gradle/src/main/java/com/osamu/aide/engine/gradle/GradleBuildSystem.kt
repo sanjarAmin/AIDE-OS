@@ -120,11 +120,13 @@ class GradleBuildSystem(
 
         send(BuildEvent.Note("Running Gradle. The first build downloads its dependencies."))
 
+        val debugInit = request.debugger?.let { GradleDebugAgent.prepare(File(gradleUserHome, "aide-debug"), it) }
+
         val result = jvm.run(
             mainClass = GRADLE_MAIN,
             classPath = launcherClassPath(),
             vmOptions = vmOptions(),
-            arguments = gradleArguments(request),
+            arguments = gradleArguments(request, debugInit),
             workingDir = projectRoot,
             environment = mapOf(
                 "TMPDIR" to temporaryDir().absolutePath,
@@ -175,6 +177,11 @@ class GradleBuildSystem(
         !File(request.project.rootDir, "settings.gradle.kts").isFile &&
             !File(request.project.rootDir, "settings.gradle").isFile ->
             "This project has no settings.gradle, so Gradle has nothing to build."
+        // As in the fast engine: a listening socket and a permission the user
+        // did not write, in an app that is not debuggable and so could never
+        // be attached to anyway.
+        !request.debuggable && request.debugger != null ->
+            "A release build cannot carry a debugger."
         sdk == null ->
             "No Android SDK is installed. Gradle builds compile against a real SDK; " +
                 "the fast engine does not."
@@ -190,8 +197,11 @@ class GradleBuildSystem(
         else -> null
     }
 
-    private fun gradleArguments(request: BuildRequest): List<String> = buildList {
+    private fun gradleArguments(request: BuildRequest, debugInit: File?): List<String> = buildList {
         add(if (request.debuggable) "assembleDebug" else "assembleRelease")
+        // The debugger's agent, added to the debug variants by an init script
+        // rather than by editing the project. See GradleDebugAgent.
+        debugInit?.let { add("--init-script"); add(it.absolutePath) }
         // **Not a preference.** Gradle's daemon is another JVM, and although
         // the launcher makes one startable, a daemon that outlives the build
         // holds a heap the size of the build on a device that has none to
@@ -252,6 +262,15 @@ class GradleBuildSystem(
                     BuildResult.Failure(
                         BuildStage.PACKAGE,
                         "Gradle reported success but produced no APK.",
+                        elapsed(startedAt),
+                        diagnostics,
+                    )
+                } else if (request.debugger != null && !GradleDebugAgent.carriesAgent(apk)) {
+                    BuildResult.Failure(
+                        BuildStage.PACKAGE,
+                        "The app built, but without the debugger in it, so there is nothing to " +
+                            "attach to. The debugger needs the app module to use " +
+                            "com.android.application with a recent Android Gradle Plugin.",
                         elapsed(startedAt),
                         diagnostics,
                     )

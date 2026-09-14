@@ -41,6 +41,12 @@ class KotlinCompiler(private val toolchain: KotlinToolchain, cacheDir: File) {
     private val stagedStdlib: File = File(kotlinHome, "lib/${toolchain.stdlib.name}")
 
     /**
+     * The standard library the compiled code links against, which the app
+     * has to carry. See `FastBuildSystem.kotlinRuntimeFor`.
+     */
+    internal val stdlib: File get() = toolchain.stdlib
+
+    /**
      * Parented to the **boot** loader, not the app's.
      *
      * The archive carries its own kotlin-stdlib and so does the app, and D8
@@ -52,7 +58,36 @@ class KotlinCompiler(private val toolchain: KotlinToolchain, cacheDir: File) {
      */
     private val loader: ClassLoader by lazy {
         if (!stagedStdlib.isFile) toolchain.stdlib.copyTo(stagedStdlib, overwrite = true)
-        PathClassLoader(toolchain.archive.absolutePath, Any::class.java.classLoader)
+        PathClassLoader(readOnlyArchive().absolutePath, Any::class.java.classLoader)
+    }
+
+    /**
+     * The compiler archive, as a copy the app cannot write to.
+     *
+     * **A dex file the app can write to will not load.** The `PathClassLoader`
+     * constructor throws `SecurityException: Writable dex file ... is not
+     * allowed`, and here that was uncaught on a build worker: the build process
+     * died, and the user was told it may have run out of memory. Every Kotlin
+     * build with a compiler downloaded through the app failed that way. The
+     * instrumented tests never saw it, because each stages its own copy and
+     * marks it read-only first.
+     *
+     * Copied rather than marking the original, as `:lsp:kotlin`'s
+     * `KotlinArchives` does and for its reason: the original belongs to
+     * `:toolchain:manager`, which must be able to overwrite it to repair or
+     * update the component. The length check makes a second call cheap and
+     * catches a copy a killed process left half-written.
+     */
+    private fun readOnlyArchive(): File {
+        val source = toolchain.archive
+        val target = File(kotlinHome.parentFile, "kotlinc-readonly/${source.name}")
+        if (!target.isFile || target.length() != source.length()) {
+            target.parentFile?.mkdirs()
+            target.delete()
+            source.copyTo(target, overwrite = true)
+        }
+        target.setWritable(false, false)
+        return target
     }
 
     /** What the compiler said, and whether it succeeded. */

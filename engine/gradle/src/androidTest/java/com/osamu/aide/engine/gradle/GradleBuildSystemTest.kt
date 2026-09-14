@@ -14,6 +14,7 @@ import com.osamu.aide.engine.api.BuildEvent
 import com.osamu.aide.engine.api.BuildRequest
 import com.osamu.aide.engine.api.BuildResult
 import com.osamu.aide.engine.api.BuildStage
+import com.osamu.aide.engine.api.DebuggerRequest
 import com.osamu.aide.engine.api.awaitResult
 import com.osamu.aide.toolchain.nativetools.JvmToolchain
 import kotlinx.coroutines.flow.toList
@@ -311,6 +312,78 @@ class GradleBuildSystemTest {
         )
         File(root, "gradle.properties").writeText("org.gradle.jvmargs=-Xmx1g\n")
         return root
+    }
+
+    /**
+     * **A Gradle debug build carries the debugger, and the project is not
+     * touched to get it there.**
+     *
+     * The agent goes in through an init script on the command line, and AGP's
+     * own manifest merger names its authority with `${applicationId}` -- so
+     * a debug `applicationIdSuffix` gives the authority the IDE will ask for.
+     * Asserted in the APK, since a hook that did nothing would still build.
+     * The project's files are compared before and after, because writing the
+     * agent into someone's checkout is the easy way to do this and the wrong
+     * one.
+     */
+    @Test
+    fun a_debug_build_carries_the_debugger_under_the_built_package() {
+        File(project.rootDir, "build.gradle.kts").appendText(
+            "\nandroid { buildTypes { debug { applicationIdSuffix = \".debug\" } } }\n",
+        )
+        val before = project.rootDir.walkTopDown()
+            .filter { it.isFile && "/build/" !in it.path && "/.gradle/" !in it.path }
+            .associate { it.relativeTo(project.rootDir).path to it.readText() }
+
+        val result = runBlocking {
+            engine.build(
+                BuildRequest(
+                    project = project,
+                    outputDir = File(support, "out-debugger"),
+                    debugger = DebuggerRequest(port = 8731, handshakeAuthority = "com.osamu.aide.debug-handshake"),
+                ),
+            ).awaitResult()
+        }
+        assertTrue("the build failed: $result", result is BuildResult.Success)
+        val apk = (result as BuildResult.Success).apk
+
+        assertTrue("the agent is not in the APK's dex", GradleDebugAgent.carriesAgent(apk))
+        val info = context.packageManager.getPackageArchiveInfo(
+            apk.absolutePath,
+            PackageManager.GET_PROVIDERS or PackageManager.GET_PERMISSIONS,
+        )
+        assertEquals("demo.app.debug", info!!.packageName)
+        val provider = info.providers.orEmpty().singleOrNull { it.name == DebuggerRequest.AGENT_CLASS }
+        assertTrue("no agent provider in the manifest", provider != null)
+        assertEquals(DebuggerRequest.agentAuthority("demo.app.debug"), provider!!.authority)
+        assertTrue("the provider is not exported", provider.exported)
+        assertTrue(
+            "no INTERNET, so the agent would exit(2)",
+            "android.permission.INTERNET" in info.requestedPermissions.orEmpty(),
+        )
+
+        val after = project.rootDir.walkTopDown()
+            .filter { it.isFile && "/build/" !in it.path && "/.gradle/" !in it.path }
+            .associate { it.relativeTo(project.rootDir).path to it.readText() }
+        // local.properties is the engine's, rewritten on every build: see AndroidSdk.
+        assertEquals("the build changed the project", before - "local.properties", after - "local.properties")
+    }
+
+    /** A release build is refused a debugger outright, as the fast engine refuses it. */
+    @Test
+    fun a_release_build_will_not_carry_a_debugger() {
+        val result = runBlocking {
+            engine.build(
+                BuildRequest(
+                    project = project,
+                    outputDir = File(support, "out-release-debugger"),
+                    debuggable = false,
+                    debugger = DebuggerRequest(port = 8731),
+                ),
+            ).awaitResult()
+        }
+        assertTrue("expected a refusal: $result", result is BuildResult.Failure)
+        assertTrue((result as BuildResult.Failure).message.contains("release", ignoreCase = true))
     }
 
     /**

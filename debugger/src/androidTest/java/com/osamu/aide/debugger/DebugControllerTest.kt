@@ -192,6 +192,56 @@ class DebugControllerTest {
         )
     }
 
+    /**
+     * A step that lands on a breakpoint is one stop, not two.
+     *
+     * The VM reports it as a single event set carrying a SingleStep *and* a
+     * Breakpoint for the same thread. Taken as two stops, the second queued as
+     * "1 more waiting" -- and Resume then showed that queued stop, for a thread
+     * it had just resumed. Found driving a Kotlin app, stepping through a
+     * lambda that held a breakpoint.
+     */
+    @Test
+    fun a_step_onto_a_breakpoint_is_a_single_stop(): Unit = runBlocking {
+        val line = SourceLine(ACTIVITY_KEY, stepLine())
+        val debugger = DebugController(scope).also { controller = it }
+        debugger.attach(PORT, setOf(line))
+        debugger.await<DebugState.Stopped>("the breakpoint")
+
+        // Where a step from here arrives, learned with nothing else set so the
+        // loop cannot interfere.
+        debugger.setBreakpoints(emptySet())
+        delay(300)
+        debugger.stepOver()
+        val landing = debugger.await<DebugState.Stopped>("the first step") {
+            it.frame?.source != null && it.frame?.source != line
+        }.frame!!.source!!
+
+        // Both lines now: come round to the first, then step onto the second.
+        debugger.setBreakpoints(setOf(line, landing))
+        delay(300)
+        debugger.resume()
+        debugger.await<DebugState.Stopped>("the loop to come round to $line") { it.frame?.source == line }
+        debugger.stepOver()
+        val onBoth = debugger.await<DebugState.Stopped>("the step onto the breakpoint at $landing") {
+            it.frame?.source == landing
+        }
+        delay(500)
+        assertEquals(
+            "one suspension was counted as more than one stop: ${debugger.state.value}",
+            0,
+            (debugger.state.value as DebugState.Stopped).waiting,
+        )
+
+        // And Resume really runs: the next stop is the loop coming round to the
+        // first line, not a second showing of the one just left.
+        debugger.resume()
+        val next = debugger.await<DebugState.Stopped>("the next hit after resuming") {
+            it.frame?.source != landing || it.variables != onBoth.variables
+        }
+        assertEquals("Resume showed a stale stop instead of running", line, next.frame?.source)
+    }
+
     /** Detach must leave the app running, not frozen on the thread it stopped. */
     @Test
     fun detaching_while_stopped_lets_the_app_run_on(): Unit = runBlocking {

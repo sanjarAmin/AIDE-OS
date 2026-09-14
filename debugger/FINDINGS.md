@@ -262,16 +262,131 @@ launch flags must be the launcher's (`NEW_TASK | RESET_TASK_IF_NEEDED`): a bare
 `am start -n` from the shell stacks a *second* `MainActivity` with its own view
 models, which looked exactly like the session having been lost.
 
-## 11. What is not built yet
+## 11. Debugging a Kotlin app found four defects, and none was in the debugger
+
+Driven on 2026-09-14: a new Kotlin project, a `sumOf { }` lambda, a top-level
+function, breakpoints in all three. The debugger itself worked first time -- a
+Kotlin file's key is its package path and `MainActivity.kt`, exactly as for Java
+(section 7). What stood between the user and a breakpoint was everything before
+it:
+
+1. **Every Kotlin build with a downloaded compiler killed the build process.**
+   `SecurityException: Writable dex file .../kotlinc.jar is not allowed`, thrown
+   by the `PathClassLoader` constructor on a build worker, uncaught. The user saw
+   "The build process stopped unexpectedly. It may have run out of memory." --
+   and, having tapped Debug, saw that only if they opened the Build tab: the
+   Debug tab still said "Not debugging" beside a Debug button. The engine's
+   tests never met it because each staged its own copy of the archive and
+   marked it read-only first; `:lsp:kotlin` had already learned this and copied
+   its jars read-only. `KotlinCompiler` now does the same, `KotlinBuildTest`
+   stages the archive writable as a download leaves it, the build service
+   reports what a build threw instead of dying, and the Debug tab shows the
+   build it started and why it failed.
+2. **A Kotlin app with no dependencies died on its first line.**
+   `NoClassDefFoundError: kotlin/jvm/internal/Intrinsics` in `onCreate`. The
+   stdlib was on the compile classpath and never dexed into the app. Every test
+   passed: the build tests only asked whether a dex existed, the tests that run
+   an app use AndroidX, which brings `kotlin-stdlib` from Maven, and the
+   template's own activity happens to call nothing that needs it. Any
+   `val x = getString(...)` does -- kotlinc checks a platform call's result
+   before using it as non-null. `FastBuildSystem.kotlinRuntimeFor`.
+3. **`R` stayed unresolved in Kotlin after a successful build.** The Kotlin
+   session was never given the build's `generated/java`, so the red underline
+   on `R.string.greeting` outlived the build that compiled it. It is given the
+   directory now, and dropped after each build, as javac's service already was.
+4. **Every entry in Problems was an ERROR.** The chip was hard-coded, so
+   kotlinc's remark about its JDK -- which on ART it prints on every build --
+   and a dead-code warning from the *generated agent* read as two more errors
+   on a project that built and ran. The chip follows severity, the JDK remark
+   is dropped, and the agent no longer has a compile-time constant for ECJ to
+   prove a branch dead with (`DebugAgentTest` asserts it reports nothing).
+
+**Stepping through inlined code needed nothing.** Breakpoints inside a lambda
+passed to an inline function fire, Step over walks 14 → 15 → 13 round the
+loop, and the lambda's parameter reads correctly (`score = 3`, `5`, `8`). kotlinc
+keeps the lambda body's own line numbers in the caller's table; only an inline
+*function's* body is remapped past the end of the file, and a user steps into
+that only by Step into -- which no longer stops in library code (section 13).
+
+## 12. A step that lands on a breakpoint is one stop, not two
+
+The VM reports it as **one event set carrying both a SingleStep and a
+Breakpoint for the same thread**. The controller took each as a separate stop:
+the second was queued, the panel said "1 more waiting", and the count grew by
+one every time a step landed on a breakpoint line. Worse than the number:
+Resume shows the next queued stop, and that one belonged to the thread just
+resumed -- a stop for a running thread.
+
+A thread cannot be stopped twice without being resumed between, so a second
+stop for a thread already shown or queued is dropped.
+`DebugControllerTest.a_step_onto_a_breakpoint_is_a_single_stop` fails without
+the check, with the doubled state in its message.
+
+## 13. Step into skips the platform
+
+From `scores.sumOf { ... }`, Step into went to `Arrays.java:4269`, then
+`Object.java:56`, then `Arrays.java` again: `listOf` is `Arrays.asList`, and
+iterating it enters the JDK. None of it can be opened in the editor, and the
+lambda the user wanted was three taps away. JDWP's `ClassExclude` modifier on
+the step request (`java.*`, `android.*`, `kotlin.*`, `androidx.*` and the rest
+in `DebugController.STEP_INTO_EXCLUDES`) makes the agent step *out* of a
+filtered method rather than through it; the same tap now goes straight to line
+14 in the lambda. Only for Step into: over and out enter nothing new, and a
+filtered Step over at the end of `onCreate` would have no user code to land in
+and never finish.
+
+## 14. A Gradle build carries the agent through an init script
+
+The agent is the fast engine's to generate, but the project is Gradle's to
+build, and the project is the user's -- usually a git checkout. So nothing is
+written into it. `GradleDebugAgent` writes the agent's source, a manifest of its
+declarations and a Groovy init script under the engine's own Gradle home, and
+the build is started with `--init-script`. The script waits for
+`com.android.application` and, on debug variants only, calls AGP's
+`sources.java.addStaticSourceDirectory` and
+`sources.manifests.addStaticManifestFile`. The source itself is shared with the
+fast engine (`DebugAgentSource` in `:engine:api`), so the debugger cannot tell
+which engine built the app.
+
+**The authority is `${applicationId}.aide-debug-agent`, left for AGP's merger to
+fill in.** A Gradle project's debug variant commonly adds an
+`applicationIdSuffix`: `com.example.gradledbg` installs as
+`com.example.gradledbg.debug`. The IDE used to launch, hold and expect the app
+by the name in `aide.json`, which is the wrong app; it now takes the package the
+installer reports (`EXTRA_PACKAGE_NAME`).
+
+Checked before any device run, against AGP 9.3.2 on a desktop: the debug APK's
+manifest had the provider under `demo.app.debug.aide-debug-agent`, INTERNET, the
+handshake `<queries>` and `exported=true`, and the dex had the agent; a release
+build with the same script had none of it. Then driven on the emulator: Debug on
+a Gradle project stopped in `onCreate` at line 12 of the `.debug` app, stepped to
+`answer = 42` and `label = "Hello from AIDE-OS 42"`, and resumed. The first
+build, AGP's own download included, took about two and a half minutes.
+
+**A hook that did nothing would still build**, so the engine reads the APK
+afterwards and fails with a sentence if the agent is missing -- an old plugin, or
+an app module that is not `com.android.application` -- instead of installing an
+app the session would wait on for ever.
+`GradleBuildSystemTest.a_debug_build_carries_the_debugger_under_the_built_package`
+builds with a suffix, reads the provider back through the platform's package
+parser, and compares the project's files before and after.
+
+Getting as far as that build found that **the Gradle engine had never been
+reachable from the app at all** -- no download was ever offered, a downloaded
+SDK was looked for in the wrong directory, and the JDK was never prepared.
+`toolchain/manager/FINDINGS.md` section 10.
+
+## 15. What is not built yet
 
 - **Breakpoints are not persisted.** They live in the Debug view model and are
   gone when the workspace closes.
 - **Breakpoints do not follow edits.** A line inserted above one leaves it on
   the old line number. The gutter mark and the debugger agree, because both
   read the same set; the code moved under both.
-- **Kotlin inline functions.** A body inlined into its caller is in the
-  caller's line table under an SMAP remapping, and lines are matched literally.
+- **Stopping inside an inline function's own body.** kotlinc maps it to lines
+  past the end of the file through an SMAP (`SourceDebugExtension`), and lines
+  are matched literally, so a breakpoint in a project's own inline function does
+  not fire in its callers. Library inline functions are excluded from Step into
+  anyway.
 - **Inherited fields, arrays' elements, expression evaluation, watchpoints,
   exception breakpoints.** Further JDWP command sets on the same connection.
-- **The Gradle engine.** The agent is generated by the fast pipeline, and a
-  project built with Gradle is told so rather than debugged without one.

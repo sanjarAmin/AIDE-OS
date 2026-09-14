@@ -46,8 +46,8 @@ class AndroidSdkCompositionTest {
     }
 
     private fun installPlatform() {
-        File(installRoot, GradleToolchainProvider.PLATFORM_COMPONENT_ID).mkdirs()
-        File(installRoot, "${GradleToolchainProvider.PLATFORM_COMPONENT_ID}/android.jar")
+        File(installRoot, INSTALLED_PLATFORM).mkdirs()
+        File(installRoot, "${INSTALLED_PLATFORM}/android.jar")
             .writeText("stand-in for the platform")
     }
 
@@ -55,7 +55,7 @@ class AndroidSdkCompositionTest {
         val revision = GradleToolchainProvider.BUILD_TOOLS_REVISION
         val dir = File(
             installRoot,
-            "${GradleToolchainProvider.BUILD_TOOLS_COMPONENT_ID}/$revision",
+            "${INSTALLED_BUILD_TOOLS}/$revision",
         )
         dir.mkdirs()
         File(dir, "source.properties").writeText("Pkg.Revision=$revision\n")
@@ -157,9 +157,9 @@ class AndroidSdkCompositionTest {
         val first = provider.androidSdk()!!
         assertTrue(first.isUsable)
 
-        File(installRoot, GradleToolchainProvider.PLATFORM_COMPONENT_ID).deleteRecursively()
+        File(installRoot, INSTALLED_PLATFORM).deleteRecursively()
         installPlatform()
-        File(installRoot, "${GradleToolchainProvider.PLATFORM_COMPONENT_ID}/android.jar")
+        File(installRoot, "${INSTALLED_PLATFORM}/android.jar")
             .writeText("the reinstalled platform")
 
         val second = provider.androidSdk()!!
@@ -169,5 +169,16 @@ class AndroidSdkCompositionTest {
             File(second.dir, "platforms/${GradleToolchainProvider.PLATFORM_DIRECTORY}/android.jar")
                 .readText(),
         )
+    }
+
+    private companion object {
+        /**
+         * Where `:toolchain:manager` really puts them, written out rather than
+         * derived. This test used the component ids as directory names, which
+         * the installer never does -- it turns `;` into `-` -- so it passed
+         * while no SDK installed through the app could ever be found.
+         */
+        const val INSTALLED_PLATFORM = "platforms-android-36"
+        const val INSTALLED_BUILD_TOOLS = "build-tools-36.0.0"
     }
 }

@@ -27,12 +27,22 @@ internal object KotlincDiagnostics {
         RegexOption.IGNORE_CASE,
     )
 
+    private val NOT_ABOUT_THE_PROJECT = listOf(
+        "your JDK doesn't seem to support mapped buffer unmapping",
+    )
+
     fun parse(output: String, projectRoot: File): List<Diagnostic> =
         output.lineSequence().mapNotNull { parseLine(it, projectRoot) }.toList()
 
     private fun parseLine(raw: String, projectRoot: File): Diagnostic? {
         val line = raw.trim()
         if (line.isEmpty()) return null
+
+        // About the runtime kotlinc finds itself on, not about the project:
+        // ART has no `sun.misc.Cleaner`, so the compiler says it will read jars
+        // the slow way -- on every build, with no file and nothing the user can
+        // do. It reached the Problems pane as the one warning on a clean build.
+        if (NOT_ABOUT_THE_PROJECT.any { it in line }) return null
 
         val match = LINE.matchEntire(line) ?: return null
         fun group(name: String) = match.groups[name]?.value?.takeIf { it.isNotBlank() }

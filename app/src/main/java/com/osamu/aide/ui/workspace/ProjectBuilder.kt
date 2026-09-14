@@ -93,6 +93,27 @@ class ProjectBuilder(
         return ToolchainComponent.nativeToolchain(Build.SUPPORTED_ABIS.first())
     }
 
+    /**
+     * The next download a Gradle build needs, or null when it has them all.
+     *
+     * **Nothing offered these before.** The JDK, Gradle and the build tools
+     * were defined, pinned and tested as components, and the engine found them
+     * where the installer puts them -- but no screen ever installed one, so
+     * outside a test harness that staged them by hand a Gradle project could
+     * only be refused. One at a time, in the order a build needs them, because
+     * each offer is its own dialog and the build resumes after each.
+     *
+     * The platform is not here: every build needs it, and the caller already
+     * offers it with Google's terms.
+     */
+    fun missingGradleToolchain(project: Project): ToolchainComponent? {
+        if (project.engine != BuildEngine.GRADLE) return null
+        if (gradle.javaHome() == null) return ToolchainComponent.openJdk(Build.SUPPORTED_ABIS.first())
+        if (gradle.gradleHome() == null) return ToolchainComponent.GRADLE
+        if (toolchain.canBuild() && gradle.androidSdk() == null) return ToolchainComponent.ANDROID_BUILD_TOOLS
+        return null
+    }
+
     fun build(
         project: Project,
         debuggable: Boolean = true,
@@ -104,7 +125,7 @@ class ProjectBuilder(
         // finds its own platform, so asking for android.jar or a dependency
         // resolve first would make a Gradle build wait on work it will not use.
         if (project.engine == BuildEngine.GRADLE) {
-            emitAll(buildWithGradle(project))
+            emitAll(buildWithGradle(project, debuggable, debugger))
             return@flow
         }
 
@@ -162,7 +183,17 @@ class ProjectBuilder(
      * ordinary failed build carrying a sentence -- rather than thrown: the
      * caller is a UI with somewhere to show this and nowhere to show a crash.
      */
-    private fun buildWithGradle(project: Project): Flow<BuildEvent> = flow {
+    private fun buildWithGradle(
+        project: Project,
+        debuggable: Boolean,
+        debugger: DebuggerRequest?,
+    ): Flow<BuildEvent> = flow {
+        // **Every build, before the engine is looked for.** The JDK's own
+        // `bin/java` and `jspawnhelper` have to point at the launcher this app
+        // ships, or Gradle's first fork dies -- and nothing called this: the
+        // JDK component could be installed and never run. Idempotent, and a
+        // few symlink checks against a build measured in minutes.
+        gradle.prepareJdk()
         val engine = gradle.engine()
         if (engine == null) {
             emit(
@@ -179,7 +210,14 @@ class ProjectBuilder(
         }
         emitAll(
             engine.build(
-                BuildRequest(project = project, outputDir = outputFor(project)),
+                // Both were dropped here: a release build ran assembleDebug and
+                // a debug build carried no debugger.
+                BuildRequest(
+                    project = project,
+                    outputDir = outputFor(project),
+                    debuggable = debuggable,
+                    debugger = debugger,
+                ),
             ),
         )
     }

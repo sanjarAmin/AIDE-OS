@@ -206,7 +206,15 @@ class DebugController(private val scope: CoroutineScope) {
     fun stepOut() = stepWith(Jdwp.StepDepth.OUT)
 
     private fun stepWith(depth: Int) = command { live, stopped ->
-        val request = live.requestStep(stopped.threadId, depth = depth)
+        // **Step into skips the platform**, as Android Studio's does. Without
+        // it, Step into on `scores.sumOf { ... }` in a Kotlin app went to
+        // Arrays.java, then Object.java, then Arrays.java again -- code the
+        // editor cannot open, three taps from the lambda the user wanted.
+        // Only for INTO: over and out enter nothing new, and filtering them
+        // would turn a step off the end of `onCreate` into a step that never
+        // lands, since there is no user code for it to return to.
+        val excluding = if (depth == Jdwp.StepDepth.INTO) STEP_INTO_EXCLUDES else emptyList()
+        val request = live.requestStep(stopped.threadId, depth = depth, excluding = excluding)
         step = request to stopped.threadId
         live.resumeThread(stopped.threadId)
         _state.value = DebugState.Running("Stepping…", stepping = true)
@@ -385,6 +393,17 @@ class DebugController(private val scope: CoroutineScope) {
                 step = null
             }
         }
+        // **One suspension, however many events describe it.** A step that
+        // lands on a line with a breakpoint arrives as a single event set
+        // holding both a SingleStep and a Breakpoint for the same thread. Each
+        // used to be taken as its own stop: the second was queued as "1 more
+        // waiting", and Resume then showed it -- a stop for a thread that had
+        // just been resumed. Found stepping through a Kotlin `sumOf` whose
+        // lambda held a breakpoint. A thread cannot be stopped twice without
+        // being resumed in between, so a second stop for a thread already shown
+        // or queued is the same one.
+        val shown = (_state.value as? DebugState.Stopped)?.threadId
+        if (shown == event.threadId || queued.any { it.threadId == event.threadId }) return
         if (_state.value is DebugState.Stopped) {
             queued.addLast(event)
             val current = _state.value as DebugState.Stopped
@@ -603,5 +622,17 @@ class DebugController(private val scope: CoroutineScope) {
         const val ATTACH_RETRY_MS = 150L
         const val MAX_FRAMES = 50
         const val MAX_STRING = 200
+
+        /**
+         * What Step into does not stop in: the runtime, the platform, and the
+         * libraries every app carries. AndroidX is here too -- it arrives as a
+         * jar with no source in the project, so stopping in it shows a file
+         * the editor has nothing for.
+         */
+        val STEP_INTO_EXCLUDES = listOf(
+            "java.*", "javax.*", "jdk.*", "sun.*", "com.sun.*",
+            "libcore.*", "dalvik.*", "android.*", "com.android.*",
+            "androidx.*", "kotlin.*", "kotlinx.*",
+        )
     }
 }

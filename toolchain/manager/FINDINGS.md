@@ -217,3 +217,36 @@ never mention it. Those are shown by directory name and marked "no longer used".
 `SdkLicense`'s acceptance marker lives under the same root and is excluded --
 offering to delete it would be offering to un-accept Google's terms from a
 screen about disk space.
+
+## 10. The Gradle engine's components were defined, pinned, tested -- and unreachable
+
+Found 2026-09-14 by tapping Debug on a Gradle project on an emulator that had
+never been staged by hand. Three faults in a row, each hidden by the one before:
+
+1. **Nothing offered them.** `openJdk`, `GRADLE` and `ANDROID_BUILD_TOOLS` had
+   pins, `PinnedReleaseTest` checked them against the live URLs, and
+   `GradleRuntimeInstallTest` installed them -- but no screen called `install`,
+   so a Gradle project could only be refused: "needs a Java runtime and a Gradle
+   distribution. Neither is installed." The same shape as the Analysis API
+   section above, a component wired to its point of use and not to an install.
+   `ProjectBuilder.missingGradleToolchain` now names the next one a build needs,
+   and the workspace offers it the way it offers clang.
+2. **Where it looked was not where they went.** The installer puts a component
+   in `id.replace(';', '-')` -- `platforms-android-36` -- and
+   `GradleToolchainProvider` looked for `platforms;android-36`. Its unit test
+   compared ids, which matched; its device test staged directories under the
+   ids, which is exactly the mistake. So a downloaded SDK was never found, and
+   the build tools were offered again after every install.
+3. **The JDK was never prepared.** `prepareJdk()` points the JDK's `bin/java`
+   and `jspawnhelper` at the launcher the app ships; nothing called it, so an
+   installed JDK could not fork Gradle's worker. It runs before every Gradle
+   build now -- it is idempotent and costs a few symlink checks.
+
+And one fault that was not ours: **for over ten minutes GitHub's release CDN
+answered every plain GET for Gradle's distribution (`services.gradle.org`
+redirects there) with 504, while `Range: bytes=0-` returned the whole file as
+206.** The JDK, on this repo's releases, downloaded normally in the same
+minutes. The installer only sent a range when resuming, so a first download
+could never succeed however often it was retried. It always sends one now; a
+server that ignores ranges answers 200, which was already handled.
+`ComponentInstallerTest` pins the header.

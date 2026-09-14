@@ -63,6 +63,17 @@ class KotlinLanguageService(
      * view of these and there is no way to add to it.
      */
     val classpath: List<File> = emptyList(),
+    /**
+     * Sources a build writes and the user does not have: `R.java`, today.
+     *
+     * Without it every `R.string.x` in a Kotlin file was `Unresolved reference
+     * 'R'` for good -- not only before the first build, which is honest, but
+     * after a build that compiled the same line without complaint. Only a
+     * directory that exists when the session opens is read, and the session
+     * does not notice files appearing later, which is why the app drops this
+     * service after every build.
+     */
+    private val generatedSourceRoots: List<File> = emptyList(),
 ) : LanguageService {
 
     /**
@@ -373,7 +384,8 @@ class KotlinLanguageService(
         closeAbandonedSession()
         val roots = listOf(File(projectRoot, "src/main/java"), File(projectRoot, "src/main/kotlin"))
             .filter { it.isDirectory }
-            .ifEmpty { listOf(projectRoot) }
+            .ifEmpty { listOf(projectRoot) } +
+            generatedSourceRoots.filter { it.isDirectory }
         val libraries = (listOf(stdlib) + classpath)
             .filter { it.isFile }
             .joinToString(File.pathSeparator) { it.absolutePath }

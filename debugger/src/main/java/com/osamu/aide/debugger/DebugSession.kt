@@ -394,22 +394,29 @@ class DebugSession(private val connection: JdwpConnection) : Closeable {
      * next line, and the line after that, which reads as the app running at one
      * frame a second rather than as a leaked request. [clearStep] is not
      * optional politeness.
+     *
+     * [excluding] names classes the step does not stop in, as `ClassExclude`
+     * patterns (`java.*`). A step into one of them carries on until it is back
+     * in a class that is not excluded -- the agent steps out of a filtered
+     * method rather than through it.
      */
     suspend fun requestStep(
         threadId: Long,
         depth: Int = Jdwp.StepDepth.OVER,
         size: Int = Jdwp.StepSize.LINE,
         suspendPolicy: Int = Jdwp.SuspendPolicy.EVENT_THREAD,
+        excluding: List<String> = emptyList(),
     ): Int {
-        val body = connection.writer()
+        val writer = connection.writer()
             .byte(Jdwp.EventKind.SINGLE_STEP)
             .byte(suspendPolicy)
-            .int(1) // one modifier
+            .int(1 + excluding.size)
             .byte(Jdwp.Modifier.STEP)
             .objectId(threadId)
             .int(size)
             .int(depth)
-            .build()
+        excluding.forEach { writer.byte(Jdwp.Modifier.CLASS_EXCLUDE).string(it) }
+        val body = writer.build()
         return connection.request(
             Jdwp.EventRequest.SET,
             Jdwp.EventRequest.SET_REQUEST,

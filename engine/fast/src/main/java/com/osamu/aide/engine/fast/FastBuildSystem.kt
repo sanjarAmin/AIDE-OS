@@ -13,6 +13,7 @@ import com.osamu.aide.engine.api.Diagnostic
 import com.osamu.aide.toolchain.nativetools.ClangToolchain
 import com.osamu.aide.toolchain.nativetools.NativeToolRunner
 import java.io.File
+import java.util.zip.ZipFile
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ProducerScope
@@ -203,7 +204,8 @@ class FastBuildSystem(
                     minSdk = minSdk,
                     debuggable = request.debuggable,
                     projectRoot = layout.root,
-                    dependencies = request.dependencies.classpath,
+                    dependencies = request.dependencies.classpath +
+                        kotlinRuntimeFor(kotlinSources, request.dependencies.classpath),
                 )
             }
 
@@ -263,6 +265,35 @@ class FastBuildSystem(
                 ),
             )
         }
+    }
+
+    /**
+     * The Kotlin standard library, when the app needs it and nothing else
+     * brings it.
+     *
+     * **Compiled Kotlin calls into the stdlib from its first line** --
+     * `Intrinsics.checkNotNullExpressionValue` after any platform call whose
+     * result is used as non-null -- and the compiler was only ever given the
+     * stdlib to compile *against*. A project with no dependencies therefore
+     * built cleanly, installed, and died in `onCreate` with
+     * `NoClassDefFoundError: kotlin/jvm/internal/Intrinsics`. Every test missed
+     * it: the Kotlin build tests only look inside the APK, and the tests that
+     * run an app use AndroidX, which brings `kotlin-stdlib` from Maven. The
+     * template's own activity happens to call nothing that needs it.
+     *
+     * Not added when a dependency already carries it, because two copies of
+     * the same classes is a D8 failure. Detected by the class rather than the
+     * artifact name, for the reason `KotlinCompiler.usesCompose` gives.
+     */
+    private fun kotlinRuntimeFor(kotlinSources: List<File>, classpath: List<File>): List<File> {
+        val compiler = kotlin ?: return emptyList()
+        if (kotlinSources.isEmpty()) return emptyList()
+        val bundled = classpath.any { entry ->
+            entry.isFile && runCatching {
+                ZipFile(entry).use { it.getEntry(KOTLIN_RUNTIME_MARKER) != null }
+            }.getOrDefault(false)
+        }
+        return if (bundled) emptyList() else listOf(compiler.stdlib)
     }
 
     /**
@@ -437,3 +468,6 @@ class FastBuildSystem(
     private fun elapsed(sinceNanos: Long): Long =
         (System.nanoTime() - sinceNanos) / 1_000_000
 }
+
+/** The class compiled Kotlin reaches first; its presence means a stdlib is already on board. */
+private const val KOTLIN_RUNTIME_MARKER = "kotlin/jvm/internal/Intrinsics.class"

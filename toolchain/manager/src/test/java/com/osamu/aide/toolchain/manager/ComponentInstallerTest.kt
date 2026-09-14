@@ -137,6 +137,22 @@ class ComponentInstallerTest {
         assertEquals("the second attempt did not resume where the first stopped", resumeOffset, resumedFrom)
     }
 
+    /**
+     * A first download asks for a range too, from byte zero.
+     *
+     * GitHub's release CDN spent a morning answering plain GETs for Gradle's
+     * distribution with 504 while serving `bytes=0-` as 206, and the Gradle
+     * engine could not be installed. The next test covers a server that
+     * ignores the header.
+     */
+    @Test
+    fun `a first download asks for the whole file as a range`() = runTest {
+        val progress = install(server.component())
+
+        assertTrue("install failed: ${progress.last()}", progress.last() is InstallProgress.Installed)
+        assertEquals("bytes=0-", server.rangeHeaders.first())
+    }
+
     @Test
     fun `a server that ignores the range header does not corrupt the file`() = runTest {
         // Answering a Range request with 200 and the whole body is legal. The

@@ -21,4 +21,20 @@ class GradleToolchainProviderTest {
         assertEquals("openjdk-21", GradleToolchainProvider.JDK_COMPONENT_ID)
         assertEquals("gradle", GradleToolchainProvider.GRADLE_COMPONENT_ID)
     }
+
+    /**
+     * The directories, not just the ids: the manager turns `;` into `-`. The
+     * ids above always matched, and a downloaded SDK was still never found.
+     */
+    @Test
+    fun the_sdk_is_looked_for_where_the_manager_puts_it() {
+        assertEquals(
+            "platforms-android-36",
+            GradleToolchainProvider.directoryOf(GradleToolchainProvider.PLATFORM_COMPONENT_ID),
+        )
+        assertEquals(
+            "build-tools-36.0.0",
+            GradleToolchainProvider.directoryOf(GradleToolchainProvider.BUILD_TOOLS_COMPONENT_ID),
+        )
+    }
 }

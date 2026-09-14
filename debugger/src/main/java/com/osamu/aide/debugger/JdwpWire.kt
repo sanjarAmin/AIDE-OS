@@ -222,6 +222,9 @@ object Jdwp {
         /** `ClassMatch`: a qualified name, with `*` allowed at either end. */
         const val CLASS_MATCH = 5
 
+        /** `ClassExclude`: the same pattern, matching the classes to leave out. */
+        const val CLASS_EXCLUDE = 6
+
         /** `LocationOnly`: the modifier that makes a breakpoint a breakpoint. */
         const val LOCATION_ONLY = 7
 

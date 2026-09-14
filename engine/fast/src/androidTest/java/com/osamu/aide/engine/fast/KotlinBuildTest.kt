@@ -58,15 +58,21 @@ class KotlinBuildTest {
     /** Null when the asset is absent, so the test can skip rather than fail. */
     private fun stage(name: String): File? {
         val target = File(fixture.workDir, name)
-        if (target.isFile) return target
         return runCatching {
-            fixture.context.assets.open(name).use { input ->
-                target.outputStream().use { input.copyTo(it) }
+            if (!target.isFile) {
+                fixture.context.assets.open(name).use { input ->
+                    target.outputStream().use { input.copyTo(it) }
+                }
             }
-            // Since API 29 the platform refuses to load a dex the app can still
-            // write to -- the same W^X reasoning that governs executing
-            // binaries. Without this, PathClassLoader throws SecurityException.
-            target.setReadOnly()
+            // **Left writable on purpose, as a download leaves it.** The
+            // platform refuses to load a dex the app can write to, and this
+            // test used to mark its copy read-only first -- so it passed while
+            // every build with a compiler installed through the app killed the
+            // build process. KotlinCompiler makes its own read-only copy now,
+            // and staging the archive the way the installer does is what keeps
+            // that honest. Set explicitly, since a run before this change left
+            // a read-only file behind.
+            target.setWritable(true, true)
             target
         }.getOrNull()
     }
@@ -118,6 +124,49 @@ class KotlinBuildTest {
         val entries = ZipFile(apk).use { zip -> zip.entries().toList().map { it.name } }
         assertTrue("no dex in the APK, entries were $entries", entries.any { it.endsWith(".dex") })
         Log.i(TAG, "built ${apk.name}, ${apk.length()} bytes")
+    }
+
+    /**
+     * The app carries the Kotlin standard library when nothing else brings it.
+     *
+     * Found by running one: a project with no dependencies built, installed,
+     * and died on its first line with `NoClassDefFoundError:
+     * kotlin/jvm/internal/Intrinsics`, which kotlinc calls after any platform
+     * call used as non-null. The test above passed throughout, because it only
+     * asked whether a dex existed. `AndroidXKotlinBuildTest` covers the other
+     * direction -- a stdlib from Maven, which must not be packaged twice.
+     */
+    @Test
+    fun a_kotlin_app_with_no_dependencies_carries_the_stdlib() = runTest(timeout = 5.minutes) {
+        val project = fixture.project(applicationId = "com.example.demo")
+        File(ProjectLayout.of(project).javaDir, "com/example/demo/Greeting.kt").apply {
+            parentFile?.mkdirs()
+            writeText(
+                """
+                package com.example.demo
+
+                fun shout(words: String): String = words.uppercase()
+                """.trimIndent(),
+            )
+        }
+
+        val events = engine().build(BuildRequest(project, File(fixture.workDir, "build-stdlib"))).toList()
+        val result = (events.last() as BuildEvent.Finished).result
+        assertTrue(
+            "build failed: ${(result as? BuildResult.Failure)?.message}",
+            result is BuildResult.Success,
+        )
+
+        val apk = (result as BuildResult.Success).apk
+        val dex = ZipFile(apk).use { zip ->
+            zip.entries().toList()
+                .filter { it.name.startsWith("classes") && it.name.endsWith(".dex") }
+                .joinToString("") { String(zip.getInputStream(it).readBytes(), Charsets.ISO_8859_1) }
+        }
+        assertTrue(
+            "the APK has no Kotlin runtime, so the app dies on its first Kotlin line",
+            dex.contains("Lkotlin/jvm/internal/Intrinsics;") && dex.contains("Lkotlin/text/StringsKt"),
+        )
     }
 
     /** Java sees Kotlin, which is what the stage ordering exists for. */

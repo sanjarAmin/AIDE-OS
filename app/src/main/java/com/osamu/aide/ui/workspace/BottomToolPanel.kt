@@ -53,6 +53,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -62,6 +63,7 @@ import androidx.compose.ui.semantics.semantics
 import com.osamu.aide.core.fs.BuildEngine
 import com.osamu.aide.core.ui.theme.CodeTextStyle
 import com.osamu.aide.engine.api.Diagnostic
+import com.osamu.aide.engine.api.DiagnosticSeverity
 import java.io.File
 
 /** Tabs whose content needs more than a strip: see the height below. */
@@ -383,6 +385,7 @@ fun BottomToolDock(
                         actions = debugActions,
                         projectRoot = projectRoot,
                         unavailableReason = debugUnavailable,
+                        buildStatus = debugBuildStatus(buildState),
                     )
                     ToolTab.PROBLEMS -> ProblemsList(
                         problems = problems,
@@ -474,6 +477,11 @@ internal fun ProblemsList(
     }
     LazyColumn(Modifier.fillMaxWidth()) {
         items(problems) { diagnostic ->
+            // **By severity, not all red.** Every row here used to carry an
+            // ERROR chip in the error colour, so a compiler's warning about its
+            // own JDK read as a third error on a project that built and ran.
+            // The tablet's DiagnosticRow already coloured by severity.
+            val style = severityStyle(diagnostic.severity)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -482,20 +490,20 @@ internal fun ProblemsList(
             ) {
                 Surface(
                     shape = RoundedCornerShape(4.dp),
-                    color = MaterialTheme.colorScheme.errorContainer,
+                    color = style.container,
                     modifier = Modifier.padding(end = 8.dp),
                 ) {
                     Text(
-                        text = "ERROR",
+                        text = style.label,
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        color = style.onContainer,
                         modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
                     )
                 }
                 Text(
                     text = diagnostic.describe(),
                     style = CodeTextStyle,
-                    color = MaterialTheme.colorScheme.error,
+                    color = style.text,
                     modifier = Modifier
                         .weight(1f)
                         .clickable(enabled = diagnostic.hasLocation) {
@@ -516,5 +524,24 @@ internal fun ProblemsList(
                 }
             }
         }
+    }
+}
+
+private data class SeverityStyle(
+    val label: String,
+    val container: Color,
+    val onContainer: Color,
+    val text: Color,
+)
+
+@Composable
+private fun severityStyle(severity: DiagnosticSeverity): SeverityStyle {
+    val colors = MaterialTheme.colorScheme
+    return when (severity) {
+        DiagnosticSeverity.ERROR -> SeverityStyle("ERROR", colors.errorContainer, colors.onErrorContainer, colors.error)
+        DiagnosticSeverity.WARNING ->
+            SeverityStyle("WARNING", colors.tertiaryContainer, colors.onTertiaryContainer, colors.tertiary)
+        DiagnosticSeverity.INFO ->
+            SeverityStyle("INFO", colors.surfaceVariant, colors.onSurfaceVariant, colors.onSurfaceVariant)
     }
 }

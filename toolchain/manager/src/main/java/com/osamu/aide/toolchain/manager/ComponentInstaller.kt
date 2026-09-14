@@ -146,7 +146,14 @@ class ComponentInstaller(
         val connection = (URL(component.archiveUrl).openConnection() as HttpURLConnection).apply {
             connectTimeout = CONNECT_TIMEOUT_MILLIS
             readTimeout = READ_TIMEOUT_MILLIS
-            if (existing > 0) setRequestProperty("Range", "bytes=$existing-")
+            // **Always a range, even from the first byte.** On 2026-09-14
+            // GitHub's release CDN answered every plain GET for Gradle's
+            // distribution with 504 for over ten minutes, while `bytes=0-`
+            // returned the whole file as 206 -- so the Gradle engine could not
+            // be installed at all, and a retry could never help. A server that
+            // ignores ranges answers 200 with the whole body, which is handled
+            // below exactly as before.
+            setRequestProperty("Range", "bytes=$existing-")
         }
 
         try {

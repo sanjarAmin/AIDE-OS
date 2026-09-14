@@ -69,8 +69,8 @@ class GradleToolchainProvider(
      * same terms, and this file is only how AGP is told that happened.
      */
     fun androidSdk(): AndroidSdk? {
-        val platformJar = File(installRoot, "${PLATFORM_COMPONENT_ID}/android.jar")
-        val buildTools = File(installRoot, "$BUILD_TOOLS_COMPONENT_ID/$BUILD_TOOLS_REVISION")
+        val platformJar = File(installRoot, "${directoryOf(PLATFORM_COMPONENT_ID)}/android.jar")
+        val buildTools = File(installRoot, "${directoryOf(BUILD_TOOLS_COMPONENT_ID)}/$BUILD_TOOLS_REVISION")
         if (!platformJar.isFile || !buildTools.isDirectory) return null
 
         val root = File(context.filesDir, ANDROID_SDK_HOME)
@@ -125,6 +125,17 @@ class GradleToolchainProvider(
     fun prepareJdk() = javaHome()?.let { JvmToolchain.from(context, it, dispatchers).prepare() }
 
     companion object {
+        /**
+         * The directory `:toolchain:manager` installs a component id into.
+         *
+         * **`;` becomes `-`.** The platform's id is `platforms;android-36` and it
+         * lands in `platforms-android-36`; this looked for the id itself, so an
+         * SDK installed through the app was never found and every Gradle build
+         * was refused for want of one. The device tests staged directories
+         * under the literal ids, which is how it passed them.
+         */
+        fun directoryOf(componentId: String): String = componentId.replace(';', '-')
+
         /** Must match the ids `:toolchain:manager` installs under; a test checks. */
         const val JDK_COMPONENT_ID = "openjdk-21"
         const val GRADLE_COMPONENT_ID = "gradle"

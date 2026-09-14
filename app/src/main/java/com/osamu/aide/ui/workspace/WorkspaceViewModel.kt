@@ -119,6 +119,15 @@ data class BuildUiState(
      * both counts.
      */
     val isRun: Boolean = false,
+    /**
+     * True when this build was started by Debug.
+     *
+     * Read by the Debug tab, which is where someone who tapped Debug is
+     * looking. Without it a debug build that failed left that tab saying "Not
+     * debugging" beside a Debug button, as if the tap had been ignored, while
+     * the reason sat in a tab nobody had open.
+     */
+    val isDebug: Boolean = false,
 )
 
 /**
@@ -858,15 +867,22 @@ class WorkspaceViewModel(
                 runCSharpProject(project)
                 return@launch
             }
-            if (debug && project.engine == BuildEngine.GRADLE) {
-                // The debugger is generated into the APK by the fast
-                // pipeline. A Gradle build would install an app without it,
-                // and the session would wait for a port that never opens.
-                _events.send(
-                    WorkspaceEvent.Notice(
-                        "Debugging needs the Fast engine. This project builds with Gradle; " +
-                            "switch engines in the Build tab to debug it.",
-                    ),
+            // What to do once a download lands: carry on with what was asked
+            // for. The native offer below used to take the default and turn a
+            // Debug tap into a plain build.
+            val resume = when {
+                debug -> AfterInstall.DEBUG
+                debuggable -> AfterInstall.BUILD
+                else -> AfterInstall.BUILD_RELEASE
+            }
+            builder.missingGradleToolchain(project)?.let { component ->
+                offerComponentInstall(
+                    component = component,
+                    rationale = "This project builds with its own Gradle, on this device. " +
+                        "That needs a Java runtime, Gradle and the Android build tools. " +
+                        "${component.displayName} is about ${component.archiveBytes / (1024 * 1024)} MB " +
+                        "to download and roughly ${component.installedBytes / (1024 * 1024)} MB once installed.",
+                    then = resume,
                 )
                 return@launch
             }
@@ -882,18 +898,13 @@ class WorkspaceViewModel(
                         "Compiling it needs clang, which is about $megabytes MB " +
                         "to download and roughly ${component.installedBytes / (1024 * 1024)} MB " +
                         "once installed.",
+                    then = resume,
                 )
                 return@launch
             }
             if (!builder.isPlatformInstalled()) {
                 // Carried, not inferred: see AfterInstall.BUILD_RELEASE.
-                offerPlatformInstall(
-                    when {
-                        debug -> AfterInstall.DEBUG
-                        debuggable -> AfterInstall.BUILD
-                        else -> AfterInstall.BUILD_RELEASE
-                    },
-                )
+                offerPlatformInstall(resume)
                 return@launch
             }
             val debugger = if (debug) {
@@ -1144,7 +1155,10 @@ class WorkspaceViewModel(
     ) {
         try {
             _state.update {
-                it.copy(isBuildPanelOpen = true, build = BuildUiState(isRunning = true))
+                it.copy(
+                    isBuildPanelOpen = true,
+                    build = BuildUiState(isRunning = true, isDebug = debugger != null),
+                )
             }
             runner.build(project, debuggable, debugger).collect(::onBuildEvent)
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -1320,9 +1334,14 @@ class WorkspaceViewModel(
                     InstallUiState("Waiting for you to confirm the install.")
                 }
 
-                InstallStatus.Installed -> {
+                is InstallStatus.Installed -> {
                     val port = debugPort
-                    val applicationId = project?.applicationId
+                    // **The installed package, not the project's record of it.**
+                    // A Gradle build's debug variant commonly adds an
+                    // `applicationIdSuffix`, so `demo.app` installs as
+                    // `demo.app.debug` -- and a session launched by the name in
+                    // aide.json would start nothing, or someone else's app.
+                    val applicationId = status.packageName ?: project?.applicationId
                     debugPort = null
                     if (port != null && applicationId != null) {
                         _events.send(WorkspaceEvent.DebugReady(applicationId, port))

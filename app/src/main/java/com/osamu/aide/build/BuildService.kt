@@ -11,12 +11,14 @@ import android.os.Messenger
 import android.os.Process
 import com.osamu.aide.core.common.DispatcherProvider
 import com.osamu.aide.engine.api.BuildEvent
+import com.osamu.aide.engine.api.BuildResult
 import com.osamu.aide.engine.api.DebuggerRequest
 import com.osamu.aide.ui.workspace.ProjectBuilder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
@@ -110,6 +112,17 @@ class BuildService : Service() {
         running?.cancel()
         running = scope.launch {
             builder.build(project, debuggable, debugger)
+                // **A build that throws must say what it threw.** Uncaught
+                // here, an exception kills this process, and the client can
+                // only report the disconnect -- "It may have run out of
+                // memory" -- which is what the user was told when every Kotlin
+                // build died on a compiler archive the platform refused to
+                // load. Out-of-memory itself still ends the process: a VM
+                // error leaves nothing trustworthy to report from.
+                .catch { thrown ->
+                    if (thrown is VirtualMachineError) throw thrown
+                    emit(failureFor(thrown))
+                }
                 .onEach { send(reply, it) }
                 .collect()
         }
@@ -128,6 +141,26 @@ class BuildService : Service() {
     }
 
     companion object {
+        /**
+         * What a build that threw reports.
+         *
+         * Names the exception's class as well as its message: the message of a
+         * `SecurityException` from the platform is readable, but plenty of
+         * what a compiler throws has none, and "The build failed: null" tells
+         * nobody anything.
+         */
+        fun failureFor(thrown: Throwable): BuildEvent.Finished {
+            val detail = listOfNotNull(thrown::class.java.simpleName, thrown.message?.takeIf { it.isNotBlank() })
+                .joinToString(": ")
+            return BuildEvent.Finished(
+                BuildResult.Failure(
+                    stage = null,
+                    message = "The build stopped with an error. $detail",
+                    durationMillis = 0,
+                ),
+            )
+        }
+
         /** Whether this code is running in the build process rather than the app's. */
         fun isBuildProcess(processName: String?): Boolean =
             processName != null && processName.endsWith(PROCESS_SUFFIX)

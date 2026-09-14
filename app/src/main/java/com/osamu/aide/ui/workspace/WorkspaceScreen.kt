@@ -227,8 +227,6 @@ fun WorkspaceScreen(
         state.projectLanguage == null -> null
         state.projectLanguage !in BUILDS_AN_APK ->
             "Debugging works on apps: Java and Kotlin projects. This one runs a program instead."
-        state.projectEngine == BuildEngine.GRADLE ->
-            "Debugging needs the Fast engine. Switch engines in the Build tab to debug this project."
         else -> null
     }
     val startDebugging: () -> Unit = {
@@ -588,6 +586,7 @@ fun WorkspaceScreen(
                                     debugState = debugState,
                                     debugActions = debugActions,
                                     debugUnavailable = debugUnavailable,
+                                    debugBuildStatus = debugBuildStatus(state.build),
                                     debugFocus = debugFocus,
                                     projectRoot = state.projectRoot,
                                     applicationId = state.projectApplicationId,
@@ -1343,6 +1342,7 @@ private fun SideToolTabs(
     debugState: DebugUiState,
     debugActions: DebugActions,
     debugUnavailable: String?,
+    debugBuildStatus: String?,
     debugFocus: Int,
     projectRoot: File?,
     applicationId: String?,
@@ -1371,6 +1371,7 @@ private fun SideToolTabs(
                     actions = debugActions,
                     projectRoot = projectRoot,
                     unavailableReason = debugUnavailable,
+                    buildStatus = debugBuildStatus,
                 )
                 SideTool.GIT -> GitPanel(state = gitState, actions = gitActions)
                 SideTool.PROBLEMS -> ProblemsList(problems, onDiagnosticClick, onFixDiagnostic)
