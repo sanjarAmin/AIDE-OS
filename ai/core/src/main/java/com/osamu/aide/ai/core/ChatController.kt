@@ -37,7 +37,10 @@ data class ChatUiState(
     val sending: Boolean = false,
     val pendingApproval: ApprovalRequest? = null,
     val error: String? = null,
-    /** True when there is no API key or sign-in for the active provider. */
+    /**
+     * True when the active provider cannot be used yet: no key, or for Custom,
+     * no address. See `ApiKeyStore.isReady`.
+     */
     val needsKey: Boolean = false,
     /**
      * The providers that already hold a key.
@@ -73,7 +76,7 @@ class ChatController(
         return ChatUiState(
             activeProvider = provider,
             activeModel = model,
-            needsKey = keys != null && !keys.hasProviderKey(provider),
+            needsKey = keys != null && !keys.isReady(provider),
             providersWithKeys = configuredProviders(),
             isGoogleSignedIn = keys?.isGoogleSignedIn() == true,
             userEmail = keys?.googleUserEmail(),
@@ -139,7 +142,7 @@ class ChatController(
      * no keys by design.
      */
     private fun configuredProviders(): Set<AiProviderType> =
-        keys?.let { store -> AiProviderType.entries.filter(store::hasProviderKey).toSet() }
+        keys?.let { store -> AiProviderType.entries.filter(store::isReady).toSet() }
             ?: AiProviderType.entries.toSet()
 
     fun switchProvider(provider: AiProviderType) {
@@ -153,7 +156,7 @@ class ChatController(
                 // Recomputed on the switch, not left to the next send to
                 // discover: the prompt belongs to the moment the provider was
                 // chosen, which is when the user can still change their mind.
-                needsKey = keys != null && !keys.hasProviderKey(provider),
+                needsKey = keys != null && !keys.isReady(provider),
                 providersWithKeys = configuredProviders(),
                 isGoogleSignedIn = keys?.isGoogleSignedIn() == true,
                 userEmail = keys?.googleUserEmail(),

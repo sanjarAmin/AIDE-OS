@@ -80,8 +80,27 @@ class ApiKeyStore(context: Context) {
     private fun hasAnthropic(): Boolean =
         preferences.contains(KEY_CIPHERTEXT) || preferences.contains(KEY_ANTHROPIC_KEY_CIPHER)
 
+    // A key, and only a key. It used to be "a key or an address", so a key
+    // saved under Custom with no address counted as a usable provider -- and
+    // the client, given no address, sent that key to api.openai.com.
     private fun hasCustom(): Boolean =
-        preferences.contains(KEY_CUSTOM_KEY_CIPHER) || preferences.contains(KEY_CUSTOM_BASE_URL)
+        preferences.contains(KEY_CUSTOM_KEY_CIPHER)
+
+    /**
+     * Whether [provider] can be sent a request, which is not always "has a key".
+     *
+     * **Custom is ready when it has an address.** Its key is optional -- Ollama
+     * wants none -- and without an address there is nowhere to send anything.
+     * The other three are ready exactly when they hold a key.
+     *
+     * Found on a phone: Custom chosen, a key pasted, no address, and the chat
+     * answered with OpenAI's 404 for `llama3.3:70b`. The request, and the key,
+     * had gone to OpenAI.
+     */
+    fun isReady(provider: AiProviderType): Boolean = when (provider) {
+        AiProviderType.CUSTOM -> !customBaseUrl().isNullOrBlank()
+        else -> hasProviderKey(provider)
+    }
 
     // -- Legacy & Anthropic Compatibility -----------------------------------
 

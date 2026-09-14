@@ -51,9 +51,11 @@ class Assistant(
                 AiSession(client, toolset, approver, dispatchers)
             }
             AiProviderType.CUSTOM -> {
+                // No address, no session: see ApiKeyStore.isReady.
+                val address = keys.customBaseUrl()?.takeIf { it.isNotBlank() } ?: return null
                 val client = OpenAiClient(
                     apiKey = keys.customApiKey(),
-                    customBaseUrl = keys.customBaseUrl(),
+                    customBaseUrl = address,
                     model = keys.activeModel(AiProviderType.CUSTOM),
                     provider = AiProviderType.CUSTOM,
                 )
@@ -100,9 +102,11 @@ class Assistant(
                 InlineCompleter(client, dispatchers)
             }
             AiProviderType.CUSTOM -> {
+                // No address, no session: see ApiKeyStore.isReady.
+                val address = keys.customBaseUrl()?.takeIf { it.isNotBlank() } ?: return null
                 val client = OpenAiClient(
                     apiKey = keys.customApiKey(),
-                    customBaseUrl = keys.customBaseUrl(),
+                    customBaseUrl = address,
                     model = keys.activeModel(AiProviderType.CUSTOM),
                     provider = AiProviderType.CUSTOM,
                 )

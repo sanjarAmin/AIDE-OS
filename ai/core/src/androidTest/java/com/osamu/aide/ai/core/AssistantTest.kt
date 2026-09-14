@@ -40,6 +40,9 @@ class AssistantTest {
         api?.stop()
         keys.clear()
         keys.saveBaseUrl(Endpoint.Default)
+        // Spared by clear() as well, and the Custom tests set both.
+        keys.saveCustomBaseUrl(null)
+        keys.setActiveProvider(AiProviderType.ANTHROPIC)
         root.deleteRecursively()
     }
 
@@ -50,6 +53,32 @@ class AssistantTest {
     )
 
     /** No key is the state every user starts in, so it must not be an error. */
+    /**
+     * Custom with a key but no address has no session and no completer.
+     *
+     * It had both, built on an `OpenAiClient` that fell back to api.openai.com
+     * -- so the key saved under Custom went to OpenAI. Found on a phone as
+     * OpenAI's 404 for `llama3.3:70b`, a model it has never served.
+     */
+    @Test
+    fun custom_with_a_key_but_no_address_gets_no_session() {
+        keys.setActiveProvider(AiProviderType.CUSTOM)
+        keys.saveCustomApiKey("gsk-a-key-for-some-other-service")
+        keys.saveCustomBaseUrl(null)
+
+        assertNull("a session was built with nowhere to send it", assistant().session(root, Approver { _, _ -> true }))
+        assertNull("a completer was built with nowhere to send it", assistant().completer())
+    }
+
+    /** The address is what makes Custom usable; its key is optional, as Ollama's is. */
+    @Test
+    fun custom_with_an_address_and_no_key_gets_a_session() {
+        keys.setActiveProvider(AiProviderType.CUSTOM)
+        keys.saveCustomBaseUrl("https://ollama.local")
+
+        assertNotNull(assistant().session(root, Approver { _, _ -> true }))
+    }
+
     @Test
     fun there_is_no_session_without_a_key() {
         assertNull(assistant().session(root, Approver { _, _ -> true }))

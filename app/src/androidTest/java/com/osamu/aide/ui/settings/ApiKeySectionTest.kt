@@ -374,11 +374,13 @@ class ApiKeySectionTest {
      * OpenAI with nothing on screen to say so.
      */
     @Test
-    fun a_custom_provider_without_an_address_says_it_goes_to_openai() {
+    fun a_custom_provider_without_an_address_says_nothing_is_sent() {
         keys.setActiveProvider(AiProviderType.CUSTOM)
         showSection()
 
-        compose.onNodeWithText("Until you set one, requests go to OpenAI's API.")
+        // It used to say requests went to OpenAI, which was true, and then a
+        // phone proved it. Nothing is sent without an address now.
+        compose.onNodeWithText("Set one to use Custom. Nothing is sent until you do.")
             .performScrollTo()
             .assertExists()
     }

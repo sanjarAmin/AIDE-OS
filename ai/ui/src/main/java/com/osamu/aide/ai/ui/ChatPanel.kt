@@ -384,7 +384,13 @@ private fun EmptyTranscript(
                         }
                     }
                     Button(onClick = onAddKey) {
-                        Text("Add ${state.activeProvider.displayName} key")
+                        Text(
+                            if (state.activeProvider == AiProviderType.CUSTOM) {
+                                "Set Custom's address"
+                            } else {
+                                "Add ${state.activeProvider.displayName} key"
+                            },
+                        )
                     }
                 }
             }
@@ -614,7 +620,14 @@ private fun KeyPrompt(
                 // sign-in completes and then every request fails, because
                 // generateContent accepts no OAuth scope -- so the sentence
                 // named a route that does not arrive anywhere.
-                text = "${activeProvider.displayName} needs an API key. It stays on this device.",
+                text = if (activeProvider == AiProviderType.CUSTOM) {
+                    // An address, not a key: Custom's key is optional, and
+                    // asking for one sent a user to paste a key into a
+                    // provider that then had nowhere to send it.
+                    "Custom needs the address of an OpenAI-compatible server."
+                } else {
+                    "${activeProvider.displayName} needs an API key. It stays on this device."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
@@ -638,7 +651,9 @@ private fun KeyPrompt(
             if (activeProvider == AiProviderType.GEMINI && GoogleAuthManager.SIGN_IN_ENABLED) {
                 TextButton(onClick = onSignInGoogle) { Text("Sign in") }
             }
-            TextButton(onClick = onAddKey) { Text("Add key") }
+            TextButton(onClick = onAddKey) {
+                Text(if (activeProvider == AiProviderType.CUSTOM) "Set address" else "Add key")
+            }
         }
     }
 }

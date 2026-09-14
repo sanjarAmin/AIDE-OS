@@ -52,6 +52,7 @@ class ChatControllerTest {
     fun tearDown() {
         api?.stop()
         keys.clear()
+        keys.saveCustomBaseUrl(null)
         root.deleteRecursively()
     }
 
@@ -135,6 +136,29 @@ class ChatControllerTest {
             setOf(AiProviderType.ANTHROPIC, AiProviderType.GEMINI),
             configured,
         )
+    }
+
+    /**
+     * A Custom key with no address is not a usable provider.
+     *
+     * It counted as one -- "has a key" was a key *or* an address -- so the chat
+     * sent requests, and the key, to OpenAI's default address. The panel asks
+     * for the address now, and the provider menu does not mark Custom ready
+     * until it has one.
+     */
+    @Test
+    fun a_custom_key_without_an_address_is_not_ready() = runTest {
+        keys.saveCustomApiKey("gsk-a-key-for-some-other-service")
+        val controller = controllerWithKeys()
+
+        controller.switchProvider(AiProviderType.CUSTOM)
+        assertTrue("Custom with no address was treated as ready", controller.state.value.needsKey)
+        assertFalse(AiProviderType.CUSTOM in controller.state.value.providersWithKeys)
+
+        keys.saveCustomBaseUrl("https://api.groq.com/openai")
+        controller.switchProvider(AiProviderType.CUSTOM)
+        assertFalse("Custom with an address still asks for setup", controller.state.value.needsKey)
+        assertTrue(AiProviderType.CUSTOM in controller.state.value.providersWithKeys)
     }
 
     @Test

@@ -114,4 +114,53 @@ class OpenAiClientTest {
         assertEquals("src/Main.kt", call.args["path"])
         assertEquals("fun main() = Unit", call.args["content"])
     }
+
+    /**
+     * Custom with no address sends nothing -- and certainly not to OpenAI.
+     *
+     * It fell back to api.openai.com, carrying whatever key was saved under
+     * Custom. Found on a phone as OpenAI's 404 for `llama3.3:70b`. Asserted
+     * here by giving the client no address and checking the refusal names the
+     * fix; there is no server to have received anything.
+     */
+    @Test
+    fun a_custom_client_with_no_address_refuses_rather_than_calling_openai() = runTest {
+        val client = OpenAiClient(
+            apiKey = "gsk-a-key-for-some-other-service",
+            customBaseUrl = null,
+            model = "llama3.3:70b",
+            provider = AiProviderType.CUSTOM,
+        )
+        val failure = runCatching {
+            client.send(AiClientRequest(systemInstruction = "", messages = listOf(AiMessage(AiRole.USER, "Hi"))))
+        }.exceptionOrNull()
+        assertTrue("expected a refusal, got $failure", failure is IllegalStateException)
+        assertTrue(
+            "the refusal does not say where to fix it: ${failure?.message}",
+            failure!!.message!!.contains("Settings"),
+        )
+        assertEquals("the request was sent anyway", 0, server.requestCount)
+    }
+
+    /** A completion from an addressless Custom client is simply nothing. */
+    @Test
+    fun a_custom_client_with_no_address_completes_nothing() = runTest {
+        val client = OpenAiClient(customBaseUrl = null, provider = AiProviderType.CUSTOM)
+        assertEquals(null, client.complete(CompletionContext(path = "A.kt", before = "fun a() {", after = "}")))
+    }
+
+    /** A failure names the provider the user chose, not the protocol it speaks. */
+    @Test
+    fun a_failure_names_the_provider_that_failed() = runTest {
+        server.enqueue(MockResponse().setResponseCode(404).setBody("""{"error":"model_not_found"}"""))
+        val client = OpenAiClient(
+            customBaseUrl = server.url("/").toString(),
+            model = "llama3.3:70b",
+            provider = AiProviderType.CUSTOM,
+        )
+        val failure = runCatching {
+            client.send(AiClientRequest(systemInstruction = "", messages = listOf(AiMessage(AiRole.USER, "Hi"))))
+        }.exceptionOrNull()
+        assertTrue("wrong provider named: ${failure?.message}", failure!!.message!!.startsWith("Custom request failed (404)"))
+    }
 }

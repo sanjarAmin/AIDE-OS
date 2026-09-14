@@ -23,9 +23,21 @@ class OpenAiClient(
     private val httpClient: OkHttpClient = OkHttpClient(),
 ) : AiClient {
 
-    private val endpointUrl: String
+    /**
+     * Where requests go, or null when this client has nowhere legitimate to
+     * send them.
+     *
+     * **Only OpenAI falls back to OpenAI.** A Custom client with no address
+     * used to fall back too, which sent the Custom key -- often a key for some
+     * other service entirely -- to api.openai.com. It refuses instead, here as
+     * well as in `Assistant`, so no future caller that builds one directly can
+     * bring the leak back.
+     */
+    private val endpointUrl: String?
         get() {
-            val base = customBaseUrl?.trimEnd('/')?.removeSuffix("/chat/completions") ?: DEFAULT_BASE_URL
+            val base = customBaseUrl?.takeIf { it.isNotBlank() }?.trimEnd('/')?.removeSuffix("/chat/completions")
+                ?: DEFAULT_BASE_URL.takeIf { provider == AiProviderType.OPENAI }
+                ?: return null
             return if (base.endsWith("/v1")) "$base/chat/completions" else "$base/v1/chat/completions"
         }
 
@@ -40,8 +52,11 @@ class OpenAiClient(
             put("temperature", 0.2)
         }
 
+        val url = endpointUrl ?: throw IllegalStateException(
+            "${provider.displayName} has no address to send requests to. Set one in Settings.",
+        )
         val httpRequest = Request.Builder()
-            .url(endpointUrl)
+            .url(url)
             .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
             .apply {
                 if (!apiKey.isNullOrBlank()) {
@@ -53,7 +68,12 @@ class OpenAiClient(
         httpClient.newCall(httpRequest).execute().use { response ->
             val responseBody = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
-                throw IllegalStateException("OpenAI request failed (${response.code}): $responseBody")
+                // The provider the user chose, not the protocol it speaks: a
+                // Groq or Ollama failure reported as "OpenAI request failed"
+                // sent the user to look at the wrong service.
+                throw IllegalStateException(
+                    "${provider.displayName} request failed (${response.code}): $responseBody",
+                )
             }
             parseResponse(responseBody)
         }
@@ -80,8 +100,9 @@ class OpenAiClient(
             put("temperature", 0.1)
         }
 
+        val url = endpointUrl ?: return@withContext null
         val httpRequest = Request.Builder()
-            .url(endpointUrl)
+            .url(url)
             .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
             .apply {
                 if (!apiKey.isNullOrBlank()) {

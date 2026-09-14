@@ -89,7 +89,8 @@ import com.osamu.aide.ai.core.parseEndpoint
  * question this screen exists to answer -- *where does my key go?* -- is
  * answered by reading rather than by tapping Advanced. That change is what
  * surfaced [endpointDetail]'s last case: a Custom provider with no address set
- * sends its requests to OpenAI, which was true before and invisible.
+ * sent its requests to OpenAI, which had been true and invisible. It is fixed
+ * now, and the row says so.
  *
  * Three things kept from the previous version, each for a reason recorded then:
  *
@@ -221,11 +222,13 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                         activeProvider = provider
                     },
                     label = { Text(provider.displayName) },
-                    leadingIcon = if (keys.hasProviderKey(provider)) {
+                    // Ready, not merely keyed: a Custom key with no address
+                    // is a provider the chat cannot use. ApiKeyStore.isReady.
+                    leadingIcon = if (keys.isReady(provider)) {
                         {
                             Icon(
                                 Icons.Default.CheckCircle,
-                                contentDescription = "${provider.displayName} has a key",
+                                contentDescription = "${provider.displayName} is ready",
                                 modifier = Modifier.size(18.dp),
                             )
                         }
@@ -733,12 +736,12 @@ private fun endpointValue(provider: AiProviderType, stored: String): String = wh
 /**
  * The sentence under the endpoint, where there is one worth reading.
  *
- * **The last case is a real defect this row made visible.** `Assistant` builds
- * Custom out of `OpenAiClient`, which falls back to `DEFAULT_BASE_URL` when it
- * is given no address -- so picking Custom and stopping there sends the key to
- * OpenAI. That was true while the endpoint lived behind an "Advanced"
- * disclosure and nothing said it; a row that always shows its value has to say
- * something, and the honest thing to say is where the requests go.
+ * **The last case was a real defect this row made visible.** `Assistant`
+ * built Custom out of `OpenAiClient`, which fell back to `DEFAULT_BASE_URL`
+ * when given no address -- so picking Custom and stopping there sent the key to
+ * OpenAI. This row said so, and then a phone did exactly that: a 404 from
+ * OpenAI for `llama3.3:70b`. Custom now sends nothing without an address
+ * (`ApiKeyStore.isReady`), and the row says that instead.
  */
 private fun endpointDetail(provider: AiProviderType, stored: String): String? = when {
     provider == AiProviderType.GEMINI ->
@@ -747,7 +750,7 @@ private fun endpointDetail(provider: AiProviderType, stored: String): String? = 
     stored.isNotEmpty() -> "Your key is sent here."
 
     provider == AiProviderType.CUSTOM ->
-        "Until you set one, requests go to OpenAI's API."
+        "Set one to use Custom. Nothing is sent until you do."
 
     else -> "Requests go to ${provider.displayName}'s own API."
 }
