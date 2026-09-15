@@ -341,10 +341,12 @@ no stale lock. See *Cancellation* below for why that needed a fix.
   across a multi-module tree is how that goes wrong quietly.
 - ~~**Cancellation.** Collecting the flow can be cancelled, but the Gradle
   process is not yet killed when it is.~~ **Closed, and not in this module.**
-  The only suspending calls in a run are `NativeToolRunner`'s two stream
-  drains, so cancelling unwound the caller and left the process running --
-  Gradle went on building for minutes after the panel said it had stopped, and
-  the next build met its lock. The runner now kills the process it started when
-  its run is cancelled, which fixes every engine at once, and
-  `NativeToolRunnerCancellationTest` asserts it on the child's own behaviour: a
-  file it appends to while it lives, which stops growing.
+  The drains that read a run's output block in reads that ignore
+  cancellation, so the process was never touched -- and worse than recorded
+  here: `coroutineScope` waited for those drains, so a cancelled run did not
+  even return until the program ended on its own. The runner now kills the
+  process from inside that scope, which fixes every engine at once.
+  `NativeToolRunnerCancellationTest` asserts it on the child's own behaviour, a
+  file it appends to while it lives; a first fix using a completion handler on
+  the job hung that test, because a cancelled job completes only after its
+  children. Driven for Gradle in §12.
