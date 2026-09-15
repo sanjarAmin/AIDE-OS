@@ -1,5 +1,6 @@
 package com.osamu.aide.ui.workspace
 
+import android.util.Log
 import com.osamu.aide.core.common.DispatcherProvider
 import com.osamu.aide.editor.CompletionSource
 import com.osamu.aide.editor.EditorCompletion
@@ -105,6 +106,10 @@ class LanguageServices(
             sourcePath = sourcePath,
         )
         current = projectRoot to service
+        // What the editor is actually analysing against, which is the only way
+        // to tell "the project has no dependencies" from "the context never
+        // reached this service" -- they produce the same red underlines.
+        Log.i(TAG, "java service: ${wanted.size} jars, source path $sourcePath")
         return service
     }
 
@@ -319,6 +324,10 @@ class LanguageServices(
         nativeCurrent = null
         nodeCurrent?.second?.close()
         nodeCurrent = null
+    }
+
+    private companion object {
+        const val TAG = "LanguageServices"
     }
 }
 

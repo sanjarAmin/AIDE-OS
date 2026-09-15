@@ -20,6 +20,9 @@ import java.io.File
  */
 internal object GradleOutput {
 
+    /** Named by `GradleEditorInputs`; matched by prefix, since it carries its variant. */
+    private const val RECORD_TASK = "aideRecordClasspath"
+
     private val TASK = Regex("""^> Task :(?<name>[\w:\-]+)\s*(?<state>UP-TO-DATE|NO-SOURCE|FAILED)?\s*$""")
 
     /**
@@ -54,6 +57,21 @@ internal object GradleOutput {
         // would make an incremental build look like a full one.
         if (TASK.matchEntire(line.trim())?.groups?.get("state")?.value != null) return null
         return STAGES.firstOrNull { (fragment, _) -> name.contains(fragment, ignoreCase = true) }?.second
+    }
+
+    /**
+     * The module a recording task line announces, or null.
+     *
+     * `> Task :lib0:aideRecordClasspathDebug` is a sync's only visible
+     * progress: everything else it runs is a task the user has no name for.
+     * The root project's own recording has an empty path, which is reported as
+     * the name Gradle itself uses for it.
+     */
+    fun recordedModuleOf(line: String): String? {
+        val name = TASK.matchEntire(line.trim())?.groups?.get("name")?.value ?: return null
+        if (!name.contains(RECORD_TASK)) return null
+        val module = name.substringBeforeLast(':', missingDelimiterValue = "")
+        return if (module.isEmpty()) "root project" else module
     }
 
     /** A compiler message, or null. [projectRoot] makes the path tappable. */

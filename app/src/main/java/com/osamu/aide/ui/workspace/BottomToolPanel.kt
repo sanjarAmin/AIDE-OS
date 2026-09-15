@@ -359,10 +359,10 @@ fun BottomToolDock(
                             }
                             if (buildState.log.isEmpty() && buildState.install == null) {
                                 Text(
-                                    text = if (buildState.isRun) {
-                                        "Output from the program appears here."
-                                    } else {
-                                        "Build output appears here."
+                                    text = when {
+                                        buildState.isRun -> "Output from the program appears here."
+                                        buildState.isSync -> "The modules Gradle reads appear here."
+                                        else -> "Build output appears here."
                                     },
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,

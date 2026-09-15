@@ -112,8 +112,17 @@ Checked on AGP 9.3.2 with `buildConfig` and `viewBinding` on: the record lists
 `build/generated/source/buildConfig/debug` and
 `build/generated/data_binding_base_class_source_out/debug/out`.
 
-What is still missing: go-to-definition into a dependency, which has no source;
-and any of this before the first build.
+**And none of it needed a build any more.** Everything above arrived through
+`assembleDebug`, so an imported project stayed unresolved until it had
+compiled, dexed and signed -- and a project that does not build yet, which is
+what a freshly cloned repository usually is, never got there. The recording
+tasks are now reachable on their own as a *sync*: dependencies resolve, `R`,
+`BuildConfig` and view binding are generated, and nothing is compiled.
+Opening a Gradle project with nothing recorded runs one, and the toolbar has
+it for a build script that has since changed. `engine/gradle/FINDINGS.md` §12.
+
+What is still missing: go-to-definition into a dependency, which has no
+source.
 
 ## Rebuilding after an edit
 

@@ -14,8 +14,15 @@ import java.io.File
  * script that asks AGP for each debug variant's `compileClasspath` -- AARs
  * already transformed into jars, other modules' outputs, everything javac saw --
  * and writes the list into the module's own `build/aide/`. The editor reads it
- * after the build. Before the first build there is nothing to read, which is
- * the same honest state `R` is in.
+ * after the build.
+ *
+ * **A sync is the same work without the build.** Waiting for `assembleDebug`
+ * meant an imported project was red until it had compiled, packaged and signed
+ * -- minutes, and impossible at all for a project that does not build yet,
+ * which is exactly when the editor is most wanted. The recording tasks are
+ * therefore also reachable on their own, through a fixed-name aggregate
+ * ([SYNC_TASK]) registered in every project, so the app can ask Gradle for the
+ * classpath and the generated sources and nothing else.
  *
  * Writer and reader live here together because the file's name and format are
  * a private agreement between them.
@@ -24,6 +31,19 @@ object GradleEditorInputs {
 
     private const val CLASSPATH_FILE = "compile-classpath-debug.txt"
     private const val SOURCES_FILE = "source-dirs-debug.txt"
+
+    /**
+     * The task a sync runs.
+     *
+     * A fixed name, registered in *every* project rather than only the Android
+     * ones, because the alternative is a name that has to be guessed from the
+     * outside: the recording tasks are named for their variant, and a project
+     * with flavours has `aideRecordClasspathFreeDebug` and no
+     * `aideRecordClasspathDebug` at all. Asking for a task that does not exist
+     * fails the whole invocation, so the aggregate exists everywhere and does
+     * nothing where there is nothing to record.
+     */
+    const val SYNC_TASK = "aideEditorSync"
 
     private val BUILD_FILES = setOf("build.gradle.kts", "build.gradle")
 
@@ -73,9 +93,23 @@ object GradleEditorInputs {
                 }
                 project.tasks.matching { it.name == 'assemble' + variant.name.capitalize() }
                     .configureEach { it.dependsOn(record) }
+                // A sync runs the recording, and with it whatever generates the
+                // sources it records -- BuildConfig, view binding. R is not a
+                // source folder and would be missed, so the task that writes
+                // R.jar is named too: an application links resources, a library
+                // generates its R file, and a project has whichever it has.
+                def resources = project.tasks.matching {
+                    it.name == 'process' + variant.name.capitalize() + 'Resources' ||
+                        it.name == 'generate' + variant.name.capitalize() + 'RFile'
+                }
+                project.tasks.named('$SYNC_TASK').configure { it.dependsOn(record, resources) }
             }
         }
         allprojects {
+            tasks.register('$SYNC_TASK') {
+                it.group = 'aide'
+                it.description = 'Records this module\'s compile classpath and source folders for the editor.'
+            }
             pluginManager.withPlugin('com.android.application') { aideRecordClasspath(project) }
             pluginManager.withPlugin('com.android.library') { aideRecordClasspath(project) }
         }

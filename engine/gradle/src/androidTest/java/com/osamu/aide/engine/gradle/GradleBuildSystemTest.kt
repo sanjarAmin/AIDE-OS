@@ -315,6 +315,71 @@ class GradleBuildSystemTest {
     }
 
     /**
+     * **The editor's inputs without a build**, which is what a sync is for.
+     *
+     * A Gradle project's classpath is only knowable by running Gradle, and
+     * until this existed the only thing that ran Gradle was `assembleDebug` --
+     * so an imported project was unresolved in the editor until it had
+     * compiled, dexed and signed, and a project that does not build yet never
+     * got there at all.
+     *
+     * Asserted on the multi-module fixture, because one module could be
+     * recorded by accident: the aggregate task has to exist in every project
+     * and collect every module's recording. The absence of an APK is asserted
+     * too -- a sync that quietly assembled would pass every other assertion
+     * here and cost the minutes this exists to save.
+     */
+    @Test
+    fun a_sync_records_the_editor_s_inputs_without_building() {
+        val root = writeMultiModuleProject()
+        // An AAR, so the recording is asserted to carry the thing a source file
+        // actually imports: `androidx.core.*` is the import that was red in an
+        // imported project, and it reaches a compiler only once Gradle has
+        // transformed the AAR into a jar.
+        File(root, "app/build.gradle.kts")
+            .appendText("\ndependencies { implementation(\"androidx.core:core:1.13.1\") }\n")
+        val multi = project.copy(name = "multidemo", rootDir = root, applicationId = "demo.multi")
+
+        val events = runBlocking { engine.sync(multi).toList() }
+        val finished = events.filterIsInstance<SyncEvent.Finished>().single()
+        Log.i(TAG, "sync=$finished in ${finished.durationMillis} ms")
+        assertTrue("the sync failed: ${finished.message}", finished.succeeded)
+
+        val recorded = events.filterIsInstance<SyncEvent.Recorded>().map { it.module }
+        assertTrue("no module was reported as read: $recorded", "app" in recorded && "lib" in recorded)
+
+        // The contract with the editor, read the way the editor reads it.
+        val classpath = GradleEditorInputs.classpath(root)
+        assertTrue("nothing was recorded for the editor", classpath.isNotEmpty())
+        assertTrue(
+            "the AAR dependency is not on the recorded classpath: $classpath",
+            classpath.any { "core-1.13.1" in it.path },
+        )
+        // **`R` has no source anywhere**, so a sync that recorded only the
+        // classpath would leave every `R.string.…` unresolved. Both modules',
+        // since a library has one of its own.
+        assertTrue(
+            "the modules' R jars are missing: $classpath",
+            classpath.count { it.name == "R.jar" } >= 2,
+        )
+        // android.jar is deliberately not asserted: AGP hands javac the
+        // platform as a *boot* classpath and it is not in `compileClasspath`
+        // at all. The editor gets it from `:toolchain:manager`, which is why
+        // platform types resolved in a Gradle project long before this did.
+        // The library module is a dependency of the app module and its classes
+        // are the project's own, so they stay off the classpath and its sources
+        // are on the source path instead.
+        val sources = GradleEditorInputs.sourceRoots(root)
+        assertTrue(
+            "the library's sources are not on the source path: $sources",
+            sources.any { it.path.contains("/lib/src/main/java") },
+        )
+
+        val apks = root.walkTopDown().filter { it.extension == "apk" }.toList()
+        assertTrue("a sync built an APK: $apks", apks.isEmpty())
+    }
+
+    /**
      * **A Gradle debug build carries the debugger, and the project is not
      * touched to get it there.**
      *

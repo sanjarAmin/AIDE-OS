@@ -29,6 +29,7 @@ import com.osamu.aide.toolchain.nativetools.NodeToolchain
 import com.osamu.aide.engine.api.BuildResult
 import com.osamu.aide.engine.api.DebuggerRequest
 import com.osamu.aide.engine.api.BuildStage
+import com.osamu.aide.engine.gradle.SyncEvent
 import com.osamu.aide.engine.api.Diagnostic
 import com.osamu.aide.engine.fast.ApkInstaller
 import com.osamu.aide.engine.fast.InstallStatus
@@ -97,6 +98,16 @@ enum class AfterInstall {
 
     /** The user tapped "Install dependencies" and needed Node first. */
     INSTALL_DEPENDENCIES,
+
+    /**
+     * The user asked to sync a Gradle project and needed the toolchain first.
+     *
+     * Resumed as a sync rather than a build for this enum's usual reason: a
+     * build of a project someone only asked to read is minutes of work they did
+     * not ask for, and on a project that does not compile it ends in errors
+     * about the code rather than the classpath they wanted.
+     */
+    SYNC,
 }
 
 data class BuildUiState(
@@ -128,6 +139,14 @@ data class BuildUiState(
      * the reason sat in a tab nobody had open.
      */
     val isDebug: Boolean = false,
+    /**
+     * True while this panel holds a Gradle sync rather than a build.
+     *
+     * Read by the headings, like [isRun] and for the same reason: a sync
+     * compiles nothing, so "Build output" over a list of modules it read
+     * promises something that never arrives.
+     */
+    val isSync: Boolean = false,
 )
 
 /**
@@ -444,6 +463,7 @@ class WorkspaceViewModel(
         if (_state.value.projectRoot != projectDir) return
         languageServices.setContext(projectDir, context)
         Log.i(TAG, "editor context: ${context.sourceRoots.size} extra source roots, ${context.classpath.size} jars")
+        if (context.classpath.isEmpty()) syncIfNothingRecorded(resolved)
         if (context == EditorContext()) return
         // Anything already on screen was analysed against less and is now
         // wrong -- most visibly, every androidx.* import reported unresolved.
@@ -1198,6 +1218,138 @@ class WorkspaceViewModel(
     }
 
     /**
+     * Projects this session has already asked Gradle about.
+     *
+     * So the sync that runs on open runs once. A project whose sync fails --
+     * no network, a build script that does not evaluate -- would otherwise be
+     * retried every time a file in it is opened, spending a minute each time on
+     * the same answer.
+     */
+    private val syncedProjects = mutableSetOf<String>()
+
+    /**
+     * Syncs a Gradle project the first time it is opened with nothing recorded.
+     *
+     * **Without this the editor is red until a build finishes**, and for a
+     * project that does not build yet -- the ordinary state of a repository
+     * someone has just cloned -- until it never does. A sync is the cheap half
+     * of that build: it resolves dependencies and generates sources, and
+     * compiles nothing.
+     *
+     * Automatic, and only here. The condition is narrow enough to be
+     * defensible: a Gradle project, every toolchain it needs already
+     * downloaded -- so nothing is bought on the user's behalf -- and no record
+     * of a previous sync. Offering it instead was the alternative, and a
+     * prompt on open that has to be read before the editor works is worse than
+     * the work itself, which is visible in the build panel and stoppable.
+     */
+    private fun syncIfNothingRecorded(project: Project) {
+        if (project.engine != BuildEngine.GRADLE) return
+        if (!syncedProjects.add(project.rootDir.absolutePath)) return
+        // Nothing is offered for download here: a sync is worth a minute of
+        // CPU that is already paid for, and not worth 470 MB the user has not
+        // agreed to spend.
+        if (builder.missingGradleToolchain(project) != null) return
+        if (_state.value.build.isRunning) return
+        buildJob = viewModelScope.launch { runSync(project) }
+    }
+
+    /**
+     * Asks Gradle what this project is made of, on request.
+     *
+     * The same work the open does by itself, for the times only the user knows
+     * it is wanted: a dependency added to a build script, a module added to
+     * `settings.gradle`, or a sync that failed for a reason since fixed.
+     */
+    fun sync() {
+        if (_state.value.build.isRunning) return
+        buildJob = viewModelScope.launch {
+            descriptorJob?.join()
+            val project = project ?: return@launch
+            if (project.engine != BuildEngine.GRADLE) return@launch
+            builder.missingGradleToolchain(project)?.let { component ->
+                offerComponentInstall(
+                    component = component,
+                    rationale = "Reading this project needs the Gradle toolchain: " +
+                        "${component.displayName} is about ${component.archiveBytes / (1024 * 1024)} MB " +
+                        "to download and roughly ${component.installedBytes / (1024 * 1024)} MB once installed.",
+                    then = AfterInstall.SYNC,
+                )
+                return@launch
+            }
+            syncedProjects += project.rootDir.absolutePath
+            runSync(project)
+        }
+    }
+
+    /**
+     * Runs a sync into the panel a build reports into, and re-reads the editor's
+     * inputs afterwards.
+     *
+     * Afterwards **whether or not it succeeded**: a sync that failed in one
+     * module still recorded the others, and half a classpath resolves more of
+     * the file on screen than none.
+     */
+    private suspend fun runSync(project: Project) {
+        try {
+            _state.update {
+                it.copy(
+                    isBuildPanelOpen = true,
+                    build = BuildUiState(isRunning = true, isSync = true),
+                )
+            }
+            builder.sync(project).collect(::onSyncEvent)
+        } finally {
+            _state.update {
+                it.copy(
+                    build = it.build.copy(
+                        isRunning = false,
+                        outcome = it.build.outcome ?: "Sync stopped.",
+                    ),
+                )
+            }
+            // **Dropped for a build's reason, and it was missed the first
+            // time.** A sync runs AGP's generators, and a warm javac that was
+            // analysing the file on screen came out of one unable to find
+            // `BuildConfig` or the view binding class -- with neither file
+            // changed on disk, and the same context the service was built
+            // from, so it was reused rather than replaced. Driven: open
+            // MainActivity, sync, and both references went red until the
+            // app was restarted. A cold compiler is a second against a sync
+            // of twenty.
+            languageServices.invalidateAfterBuild()
+            refreshEditorContext(project.rootDir)
+        }
+    }
+
+    private fun onSyncEvent(event: SyncEvent) {
+        when (event) {
+            is SyncEvent.Note -> _state.update {
+                it.copy(build = it.build.copy(log = it.build.log + event.message))
+            }
+
+            is SyncEvent.Recorded -> _state.update {
+                it.copy(build = it.build.copy(log = it.build.log + "Read ${event.module}"))
+            }
+
+            is SyncEvent.Finished -> _state.update {
+                it.copy(
+                    build = it.build.copy(
+                        isRunning = false,
+                        succeeded = event.succeeded,
+                        outcome = if (event.succeeded) {
+                            "Synced in ${event.durationMillis} ms"
+                        } else {
+                            event.message
+                        },
+                        log = if (event.succeeded) it.build.log + event.message else it.build.log,
+                    ),
+                )
+            }
+        }
+    }
+
+    /**
      * Changes which engine builds this project.
      *
      * Written through the repository rather than held in state, because the
@@ -1548,6 +1700,13 @@ class WorkspaceViewModel(
             AfterInstall.INSTALL_DEPENDENCIES -> {
                 afterInstall = AfterInstall.BUILD
                 installDependencies()
+            }
+
+            // The same: the download was the toll on the way to reading the
+            // project, not a way of asking for it to be built.
+            AfterInstall.SYNC -> {
+                afterInstall = AfterInstall.BUILD
+                sync()
             }
 
             // What the user asked for was a build; the download was the toll.

@@ -12,9 +12,11 @@ import java.io.File
  * fast-engine project is one module whose dependencies `aide.json` declares, so
  * its classpath is what [ProjectDependencies] resolves from that. A Gradle
  * project is whatever its build scripts make it, which only Gradle can say, so
- * its sources are every module's and its classpath is what the last build
- * recorded -- see [GradleEditorInputs]. Before a Gradle project's first build
- * that is nothing, and the platform types still resolve.
+ * its sources are every module's and its classpath is what the last build --
+ * or the last sync -- recorded; see [GradleEditorInputs]. A project that has
+ * had neither gets nothing here, which is why opening one syncs it --
+ * `WorkspaceViewModel.syncIfNothingRecorded`. The platform types resolve
+ * meanwhile.
  */
 class EditorContexts(private val dependencies: ProjectDependencies) {
 

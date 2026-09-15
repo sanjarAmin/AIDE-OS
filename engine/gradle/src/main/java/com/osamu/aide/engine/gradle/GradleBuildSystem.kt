@@ -2,6 +2,7 @@ package com.osamu.aide.engine.gradle
 
 import com.osamu.aide.core.common.AppResult
 import com.osamu.aide.core.common.DispatcherProvider
+import com.osamu.aide.core.fs.Project
 import com.osamu.aide.engine.api.BuildEvent
 import com.osamu.aide.engine.api.BuildRequest
 import com.osamu.aide.engine.api.BuildResult
@@ -165,24 +166,105 @@ class GradleBuildSystem(
     }
 
     /**
+     * Records what the editor needs to understand this project, and builds
+     * nothing.
+     *
+     * **The editor used to have to wait for a build.** A Gradle project's
+     * classpath is only knowable by running Gradle, so until one had assembled,
+     * every `androidx` import in an imported project was unresolved -- and a
+     * project that does not yet build, which is the ordinary state of a
+     * repository someone has just cloned, never got there at all. This asks for
+     * the recording tasks alone: dependencies resolve, `R`, `BuildConfig` and
+     * view binding are generated, and nothing is compiled, dexed or signed.
+     *
+     * It is still a Gradle invocation -- a JVM, a configuration phase and, the
+     * first time, a download of AGP -- so it reports progress the way a build
+     * does, and when to run one is the app's decision rather than this
+     * engine's.
+     */
+    fun sync(project: Project): Flow<SyncEvent> = channelFlow {
+        val startedAt = System.nanoTime()
+        val refusal = refuseProject(project)
+        if (refusal != null) {
+            send(SyncEvent.Finished(false, refusal, elapsed(startedAt)))
+            return@channelFlow
+        }
+
+        val projectRoot = project.rootDir
+        // For the reason build() gives: an imported project's local.properties
+        // names a desktop SDK, and AGP prefers it to anything in the environment.
+        sdk?.pointProjectAtSdk(projectRoot)
+        send(SyncEvent.Note("Asking Gradle what this project is made of."))
+
+        val editorInit = GradleEditorInputs.writeInitScript(File(gradleUserHome, "aide-editor"))
+        val transcript = StringBuilder()
+        val recorded = mutableSetOf<String>()
+        val result = jvm.run(
+            mainClass = GRADLE_MAIN,
+            classPath = launcherClassPath(),
+            vmOptions = vmOptions(),
+            arguments = buildList {
+                add(GradleEditorInputs.SYNC_TASK)
+                addAll(commonArguments(listOf(editorInit)))
+            },
+            workingDir = projectRoot,
+            environment = mapOf(
+                "TMPDIR" to temporaryDir().absolutePath,
+                "HOME" to gradleUserHome.absolutePath,
+            ),
+        ) { line ->
+            transcript.appendLine(line.text)
+            GradleOutput.recordedModuleOf(line.text)?.let {
+                if (recorded.add(it)) trySend(SyncEvent.Recorded(it))
+            }
+        }
+
+        val failure = when (result) {
+            is AppResult.Failure -> result.error.message
+            is AppResult.Success ->
+                if (result.value.isSuccess) {
+                    null
+                } else {
+                    GradleOutput.failureMessage(transcript.toString())
+                        ?: "Gradle exited with ${result.value.exitCode}."
+                }
+        }
+        send(
+            SyncEvent.Finished(
+                succeeded = failure == null,
+                message = failure ?: "Read ${recorded.size} module${if (recorded.size == 1) "" else "s"}.",
+                durationMillis = elapsed(startedAt),
+            ),
+        )
+    }.flowOn(dispatchers.io)
+
+    /**
      * Why this build cannot start, or null.
      *
      * Checked before anything runs, so a missing toolchain is a sentence rather
      * than a failure deep inside Gradle's own diagnostics.
      */
-    private fun refuse(request: BuildRequest): String? = when {
+    private fun refuse(request: BuildRequest): String? = refuseProject(request.project)
+        // As in the fast engine: a listening socket and a permission the user
+        // did not write, in an app that is not debuggable and so could never
+        // be attached to anyway.
+        ?: "A release build cannot carry a debugger.".takeIf { !request.debuggable && request.debugger != null }
+
+    /**
+     * Why Gradle cannot run here at all, or null.
+     *
+     * The half of [refuse] that is about the toolchain and the project rather
+     * than about what was asked for, so a sync -- which asks for no artifact --
+     * is refused with the same sentences.
+     */
+    private fun refuseProject(project: Project): String? = when {
         !jvm.isInstalled ->
             "The Java runtime is not installed. Gradle builds need it; the fast engine does not."
         launcherJar == null ->
             "Gradle is not installed, or its download did not finish."
-        !File(request.project.rootDir, "settings.gradle.kts").isFile &&
-            !File(request.project.rootDir, "settings.gradle").isFile ->
+        !File(project.rootDir, "settings.gradle.kts").isFile &&
+            !File(project.rootDir, "settings.gradle").isFile ->
             "This project has no settings.gradle, so Gradle has nothing to build."
-        // As in the fast engine: a listening socket and a permission the user
-        // did not write, in an app that is not debuggable and so could never
-        // be attached to anyway.
-        !request.debuggable && request.debugger != null ->
-            "A release build cannot carry a debugger."
         sdk == null ->
             "No Android SDK is installed. Gradle builds compile against a real SDK; " +
                 "the fast engine does not."
@@ -200,6 +282,11 @@ class GradleBuildSystem(
 
     private fun gradleArguments(request: BuildRequest, initScripts: List<File>): List<String> = buildList {
         add(if (request.debuggable) "assembleDebug" else "assembleRelease")
+        addAll(commonArguments(initScripts))
+    }
+
+    /** Everything an invocation of Gradle needs that is not the task to run. */
+    private fun commonArguments(initScripts: List<File>): List<String> = buildList {
         // What the editor needs recorded, and the debugger's agent when one was
         // asked for -- each added by an init script rather than by editing the
         // project. See GradleEditorInputs and GradleDebugAgent.

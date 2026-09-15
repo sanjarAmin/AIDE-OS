@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -456,6 +457,10 @@ fun WorkspaceScreen(
                             val secondary = buildList {
                                 add(ToolbarAction.ASSISTANT)
                                 if (state.active != null) add(ToolbarAction.FIND)
+                                // Only where it means something: a fast-engine
+                                // project's dependencies are in its descriptor,
+                                // and there is nothing to ask Gradle.
+                                if (state.projectEngine == BuildEngine.GRADLE) add(ToolbarAction.SYNC)
                                 if (!mode.showsToolPane) add(ToolbarAction.TOOLS)
                             }
                             val primaryCount = listOf(
@@ -491,6 +496,14 @@ fun WorkspaceScreen(
                                 if (ToolbarAction.FIND in secondary) {
                                     IconButton(onClick = viewModel::openSearch) {
                                         Icon(Icons.Default.Search, contentDescription = "Find")
+                                    }
+                                }
+                                if (ToolbarAction.SYNC in secondary) {
+                                    IconButton(
+                                        onClick = viewModel::sync,
+                                        enabled = !state.build.isRunning,
+                                    ) {
+                                        Icon(Icons.Default.Sync, contentDescription = "Sync with Gradle")
                                     }
                                 }
                             }
@@ -543,6 +556,14 @@ fun WorkspaceScreen(
                                                 onClick = { menuOpen = false; viewModel.openSearch() },
                                             )
                                         }
+                                        if (ToolbarAction.SYNC in secondary) {
+                                            DropdownMenuItem(
+                                                text = { Text("Sync with Gradle") },
+                                                leadingIcon = { Icon(Icons.Default.Sync, contentDescription = null) },
+                                                enabled = !state.build.isRunning,
+                                                onClick = { menuOpen = false; viewModel.sync() },
+                                            )
+                                        }
                                         if (ToolbarAction.TOOLS in secondary) {
                                             DropdownMenuItem(
                                                 text = { Text("Build and git tools") },
@@ -586,10 +607,10 @@ fun WorkspaceScreen(
                                     IconButton(onClick = viewModel::stopBuild) {
                                         Icon(
                                             Icons.Default.Stop,
-                                            contentDescription = if (state.build.isRun) {
-                                                "Stop the program"
-                                            } else {
-                                                "Stop the build"
+                                            contentDescription = when {
+                                                state.build.isRun -> "Stop the program"
+                                                state.build.isSync -> "Stop reading the project"
+                                                else -> "Stop the build"
                                             },
                                             tint = MaterialTheme.colorScheme.error,
                                         )
@@ -1101,7 +1122,11 @@ private fun BuildPane(
                 Text(
                     text = state.stage?.displayName
                         ?: state.outcome
-                        ?: if (state.isRun) "Running" else "Build output",
+                        ?: when {
+                            state.isRun -> "Running"
+                            state.isSync -> "Reading the project"
+                            else -> "Build output"
+                        },
                     style = MaterialTheme.typography.titleMedium,
                     color = if (state.outcome != null && !state.succeeded && !state.isRunning) {
                         MaterialTheme.colorScheme.error
@@ -1120,10 +1145,10 @@ private fun BuildPane(
 
             if (state.log.isEmpty() && state.diagnostics.isEmpty()) {
                 Text(
-                    text = if (state.isRun) {
-                        "Output from the program appears here."
-                    } else {
-                        "Compiler diagnostics appear here."
+                    text = when {
+                        state.isRun -> "Output from the program appears here."
+                        state.isSync -> "The modules Gradle reads appear here."
+                        else -> "Compiler diagnostics appear here."
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1486,7 +1511,7 @@ private enum class SideTool(val title: String) {
 }
 
 /** The toolbar buttons that may fold into More; see [ToolbarLayout]. */
-internal enum class ToolbarAction { ASSISTANT, FIND, TOOLS }
+internal enum class ToolbarAction { ASSISTANT, FIND, SYNC, TOOLS }
 
 /**
  * Whether every toolbar button fits beside the project name.

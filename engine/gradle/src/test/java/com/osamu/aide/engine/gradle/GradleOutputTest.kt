@@ -154,4 +154,31 @@ class GradleOutputTest {
     fun `output with no failure block has no message`() {
         assertNull(GradleOutput.failureMessage("BUILD SUCCESSFUL in 3s"))
     }
+
+    /**
+     * A sync's only visible progress is its own tasks, so the module has to
+     * come out of the task path and not out of the task name.
+     */
+    @Test
+    fun `a recording task names its module`() {
+        assertEquals("app", GradleOutput.recordedModuleOf("> Task :app:aideRecordClasspathDebug"))
+        assertEquals(
+            "feature:home",
+            GradleOutput.recordedModuleOf("> Task :feature:home:aideRecordClasspathDebug"),
+        )
+        // A project with flavours has no task called ...Debug at all.
+        assertEquals("app", GradleOutput.recordedModuleOf("> Task :app:aideRecordClasspathFreeDebug"))
+    }
+
+    /** A single-module project's recording task has no module path in front of it. */
+    @Test
+    fun `a recording task in the root project is named as one`() {
+        assertEquals("root project", GradleOutput.recordedModuleOf("> Task :aideRecordClasspathDebug"))
+    }
+
+    @Test
+    fun `an ordinary task line is not a recording`() {
+        assertNull(GradleOutput.recordedModuleOf("> Task :app:compileDebugJavaWithJavac"))
+        assertNull(GradleOutput.recordedModuleOf("BUILD SUCCESSFUL in 3s"))
+    }
 }

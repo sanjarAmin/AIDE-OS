@@ -15,6 +15,7 @@ import com.osamu.aide.core.fs.SourceLanguage
 import com.osamu.aide.engine.fast.NativeToolchainProvider
 import com.osamu.aide.engine.fast.ReleaseKeystoreStore
 import com.osamu.aide.engine.gradle.GradleToolchainProvider
+import com.osamu.aide.engine.gradle.SyncEvent
 import com.osamu.aide.engine.fast.KotlinCompiler
 import com.osamu.aide.toolchain.manager.ToolchainComponent
 import com.osamu.aide.toolchain.manager.ToolchainManager
@@ -237,6 +238,51 @@ class ProjectBuilder(
                 ),
             ),
         )
+    }
+
+    /**
+     * Asks Gradle what a project is made of, and builds nothing.
+     *
+     * **In this process, unlike a build.** Builds cross into `:build` because
+     * the Kotlin compiler's heap does not belong beside the editor; a sync
+     * starts no compiler, and the memory it does cost is in the JVM Gradle runs
+     * in, which is a process of its own whichever side asked for it. Going over
+     * the binder would mean a second message, a second encoding of the events,
+     * and a second thing to keep in step, for no memory saved.
+     *
+     * A fast-engine project has nothing to sync: `aide.json` lists its
+     * dependencies and `:engine:deps` resolves them, which is not a Gradle
+     * invocation and does not need one.
+     */
+    fun sync(project: Project): Flow<SyncEvent> = flow {
+        if (project.engine != BuildEngine.GRADLE) {
+            emit(
+                SyncEvent.Finished(
+                    succeeded = false,
+                    message = "Only a Gradle project has a sync; this one's dependencies are " +
+                        "listed in ${Project.DESCRIPTOR_NAME}.",
+                    durationMillis = 0,
+                ),
+            )
+            return@flow
+        }
+        // For buildWithGradle's reason: the JDK's own binaries have to point at
+        // our launcher before anything forks, and a device can have the
+        // component installed and never have run a build.
+        gradle.prepareJdk()
+        val engine = gradle.engine()
+        if (engine == null) {
+            emit(
+                SyncEvent.Finished(
+                    succeeded = false,
+                    message = "Reading a Gradle project needs a Java runtime and a Gradle " +
+                        "distribution. Neither is installed.",
+                    durationMillis = 0,
+                ),
+            )
+            return@flow
+        }
+        emitAll(engine.sync(project))
     }
 
     // Project directory names are unique within the workspace, so this is
