@@ -3,6 +3,7 @@ package com.osamu.aide.toolchain.nativetools
 import com.osamu.aide.core.common.AppError
 import com.osamu.aide.core.common.AppResult
 import com.osamu.aide.core.common.DispatcherProvider
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
@@ -90,11 +91,40 @@ class NativeToolRunner(
             coroutineScope {
                 val out = async { drain(process.inputStream, ToolStream.STDOUT, sink, onLine) }
                 val err = async { drain(process.errorStream, ToolStream.STDERR, sink, onLine) }
-                out.await()
-                err.await()
+                try {
+                    out.await()
+                    err.await()
+                } catch (e: CancellationException) {
+                    // **Stop has to reach the process, and from inside this
+                    // scope.** The drains are blocked reading a pipe that only
+                    // closes when the process ends, and cancelling a coroutine
+                    // does not interrupt a blocking read -- so `coroutineScope`
+                    // waits for children that can never finish and a cancel
+                    // that should take milliseconds never returns at all. The
+                    // `await` above, though, is suspending: it throws the
+                    // moment the job is cancelled, which is *before* that wait.
+                    // Killing the process here closes both pipes, the drains
+                    // end, and the cancellation carries on normally.
+                    //
+                    // Outside the scope is too late, and so is a completion
+                    // handler on this job: a cancelled job completes only once
+                    // its children have, which is the deadlock itself.
+                    //
+                    // Forcibly, because this is already an interruption and a
+                    // compiler that ignored SIGTERM would leave the caller
+                    // blocked in the one place it asked not to be.
+                    process.destroyForcibly()
+                    throw e
+                }
             }
 
             AppResult.Success(ToolResult(process.waitFor()))
+        } catch (e: CancellationException) {
+            // Rethrown rather than turned into a failure, and before the
+            // general catch below: a CancellationException is an Exception,
+            // and answering one with a failed build is how a stopped build
+            // reports "Could not run java: null".
+            throw e
         } catch (e: Exception) {
             AppResult.Failure(AppError("Could not run $describedAs: ${e.message}", e))
         }
