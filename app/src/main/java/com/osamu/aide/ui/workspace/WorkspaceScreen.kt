@@ -601,7 +601,12 @@ fun WorkspaceScreen(
                             state = state,
                             languages = languages,
                             controller = editorController,
-                            onTextChanged = viewModel::onTextChanged,
+                            onTextChanged = { text ->
+                                // Breakpoints first, so the gutter redrawn for
+                                // this edit already has them on their new lines.
+                                state.active?.let { debug.onEdited(it.file, text) }
+                                viewModel.onTextChanged(text)
+                            },
                             onSelectTab = viewModel::selectDocument,
                             onCloseTab = viewModel::closeDocument,
                             onRevealInTree = { directory ->

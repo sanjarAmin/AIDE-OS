@@ -376,13 +376,29 @@ reachable from the app at all** -- no download was ever offered, a downloaded
 SDK was looked for in the wrong directory, and the JDK was never prepared.
 `toolchain/manager/FINDINGS.md` section 10.
 
-## 15. What is not built yet
+## 15. Breakpoints are kept, and move with the code
 
-- **Breakpoints are not persisted.** They live in the Debug view model and are
-  gone when the workspace closes.
-- **Breakpoints do not follow edits.** A line inserted above one leaves it on
-  the old line number. The gutter mark and the debugger agree, because both
-  read the same set; the code moved under both.
+They used to live in the Debug view model: closing the workspace lost them,
+and a line inserted above one left it on the old number, beside a different
+statement -- in the gutter and in the debugger alike, since both read one set.
+
+- **Kept per project in app storage** (`BreakpointStore`), not in the project,
+  which is usually a git checkout. Restored when the project opens; one in a
+  file that no longer exists, or past its end, is dropped rather than placed
+  nowhere.
+- **Moved by comparing the buffer before and after each edit**
+  (`BreakpointLines`). The editor reports a whole buffer, not a range, so the
+  edit is recovered as the lines equal from the start and from the end: a
+  breakpoint above it stays, one below moves by the change in line count, one
+  inside it stays while its line survives -- typing on it, or Enter in it -- and
+  goes when its line is deleted, as a desktop IDE does. Only files with
+  breakpoints are compared, so an ordinary keystroke costs a map write.
+
+A breakpoint moved during a session is re-sent to the running app, whose code
+is the build's, not the buffer's; an edit mid-session puts a breakpoint where
+the new code is, which the old code may not reach until the next Debug.
+
+## 16. What is not built yet
 - **Stopping inside an inline function's own body.** kotlinc maps it to lines
   past the end of the file through an SMAP (`SourceDebugExtension`), and lines
   are matched literally, so a breakpoint in a project's own inline function does

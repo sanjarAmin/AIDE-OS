@@ -55,10 +55,10 @@ data class DebugUiState(
  * in that app it may have suspended. Leaving the screen detaches, which resumes
  * them; `DebugController.detach` has why that matters.
  *
- * **Breakpoints outlive sessions.** They are set before Debug is tapped, kept
- * when the app exits, and placed again on the next session. They live only as
- * long as this screen, which is a limitation and not a design: nothing yet
- * writes them to the project.
+ * **Breakpoints outlive sessions and the workspace.** They are set before
+ * Debug is tapped, kept when the app exits, placed again on the next session,
+ * saved per project by [BreakpointStore], and moved with the code around them
+ * as it is edited ([BreakpointLines]).
  */
 class DebugViewModel(
     private val context: Context,
@@ -81,6 +81,10 @@ class DebugViewModel(
     private val keys = mutableMapOf<FileBreakpoint, SourceLine>()
     private val executionPoint = MutableStateFlow<FileBreakpoint?>(null)
     private var projectRoot: File? = null
+    private val store = BreakpointStore(File(context.filesDir, "breakpoints"))
+
+    /** The last text seen for each edited file: the "before" of the next edit. */
+    private val texts = HashMap<File, String>()
 
     val state: StateFlow<DebugUiState> = combine(
         controller.state,
@@ -137,7 +141,57 @@ class DebugViewModel(
     }
 
     fun open(root: File) {
+        if (projectRoot == root) return
         projectRoot = root
+        texts.clear()
+        viewModelScope.launch {
+            // Each one needs its file's package for a key, and a breakpoint in
+            // a file that has since been deleted is dropped rather than kept
+            // pointing at nothing.
+            val restored = withContext(dispatchers.io) {
+                store.load(root).mapNotNull { breakpoint ->
+                    val text = runCatching { breakpoint.file.readText() }.getOrNull() ?: return@mapNotNull null
+                    if (breakpoint.line > text.count { it == '\n' } + 1) return@mapNotNull null
+                    breakpoint to SourceLine(SourceKeys.forSource(breakpoint.file.name, text), breakpoint.line)
+                }
+            }
+            if (projectRoot != root) return@launch
+            keys.clear()
+            restored.forEach { (breakpoint, key) -> keys[breakpoint] = key }
+            breakpoints.value = keys.keys.toSet()
+            controller.setBreakpoints(keys.values.toSet())
+        }
+    }
+
+    /**
+     * The buffer of [file] is now [text]: moves its breakpoints with the edit.
+     *
+     * Called on every keystroke, so a file with no breakpoints costs a map
+     * write and nothing else.
+     */
+    fun onEdited(file: File, text: String) {
+        val before = texts.put(file, text)
+        val inFile = breakpoints.value.filter { it.file == file }
+        if (inFile.isEmpty()) return
+        val previous = before ?: runCatching { file.readText() }.getOrNull() ?: return
+        val lines = inFile.mapTo(HashSet()) { it.line }
+        val moved = BreakpointLines.followEdit(lines, previous, text)
+        if (moved == lines) return
+
+        // The file's key is its package, which an edit rarely touches; taken
+        // from the text anyway, since one that did would move them all.
+        val key = SourceKeys.forSource(file.name, text)
+        inFile.forEach { keys.remove(it) }
+        moved.forEach { line -> keys[FileBreakpoint(file, line)] = SourceLine(key, line) }
+        breakpoints.value = keys.keys.toSet()
+        persist()
+        controller.setBreakpoints(keys.values.toSet())
+    }
+
+    private fun persist() {
+        val root = projectRoot ?: return
+        val snapshot = breakpoints.value
+        viewModelScope.launch(dispatchers.io) { store.save(root, snapshot) }
     }
 
     /** Sets or clears a breakpoint on a line, as a tap on the line number does. */
@@ -158,6 +212,7 @@ class DebugViewModel(
                 keys[breakpoint] = SourceLine(key, line)
                 breakpoints.update { it + breakpoint }
             }
+            persist()
             controller.setBreakpoints(keys.values.toSet())
         }
     }
