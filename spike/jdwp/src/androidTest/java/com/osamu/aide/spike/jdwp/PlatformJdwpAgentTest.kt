@@ -101,7 +101,13 @@ class PlatformJdwpAgentTest {
 
     private companion object {
         const val TAG = "JdwpSpike"
-        const val PORT = 8700
+        /**
+         * Not the debuggee's 8700. This attaches an agent to the *test* process,
+         * and when another process already holds the port libjdwp cannot bind
+         * and calls `exit(2)` -- which ended the whole instrumentation run with
+         * an empty failure, the moment a debuggee was left running.
+         */
+        const val PORT = 8711
         val HANDSHAKE = "JDWP-Handshake".toByteArray(Charsets.US_ASCII)
     }
 }

@@ -31,11 +31,8 @@ import java.net.Socket
  * that never stops anything; reading `counter` out of a suspended frame and
  * getting the number the log is printing cannot.
  *
- * Skipped, not failed, without a debuggee -- and it has to be started by hand,
- * because a `connectedAndroidTest` run uninstalls what it installs:
- *
- *     ./gradlew :spike:jdwpdebuggee:installDebug
- *     adb shell am start -n com.osamu.aide.spike.jdwpdebuggee/.DebuggeeActivity
+ * Gradle installs the debuggee before this runs and [Debuggee] starts it, so it
+ * is skipped only where the debuggee cannot be installed at all.
  */
 @RunWith(AndroidJUnit4::class)
 class DebugSessionTest {
@@ -46,6 +43,7 @@ class DebugSessionTest {
 
     @Before
     fun setUp() {
+        Debuggee.bringForward(PORT)
         assumeTrue(
             "no debuggee listening on 127.0.0.1:$PORT -- see this class's comment",
             canConnect(),

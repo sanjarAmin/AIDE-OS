@@ -42,8 +42,9 @@ class DebugControllerTest {
 
     @Before
     fun setUp() {
+        Debuggee.bringForward(PORT)
         assumeTrue(
-            "no debuggee on 127.0.0.1:$PORT: ./gradlew :spike:jdwpdebuggee:installDebug and start it",
+            "no debuggee on 127.0.0.1:$PORT, and it could not be started: is :spike:jdwpdebuggee installed?",
             canConnect(PORT),
         )
     }

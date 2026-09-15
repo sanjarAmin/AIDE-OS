@@ -51,3 +51,10 @@ dependencies {
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.kotlinx.coroutines.test)
 }
+
+// The app these device tests debug. Installed, not connected-installed: a
+// connected run uninstalls what it installs, and the tests need it to stay.
+// Without this a full sweep skipped every one of them. See Debuggee.kt.
+tasks.matching { it.name == "connectedDebugAndroidTest" }.configureEach {
+    dependsOn(":spike:jdwpdebuggee:installDebug")
+}

@@ -17,8 +17,9 @@ plugins {
  * reach another's loopback port is the question that decides whether the
  * debugger works at all, and it cannot be asked from inside a single process.
  *
- * Installed by hand, not by Gradle -- `connectedAndroidTest` would uninstall it
- * between runs, and the test that needs it assumes and skips rather than fails.
+ * Installed with `installDebug` by the modules whose device tests need it
+ * (`:debugger`, `:spike:jdwp`) -- not as a connected install, which a run
+ * uninstalls when it finishes -- and started by those tests themselves.
  */
 android {
     namespace = "com.osamu.aide.spike.jdwpdebuggee"

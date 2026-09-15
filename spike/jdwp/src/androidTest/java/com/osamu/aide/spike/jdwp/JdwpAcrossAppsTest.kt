@@ -35,9 +35,9 @@ import java.net.Socket
  *     adb install -r -t spike/jdwpdebuggee/build/outputs/apk/debug/jdwpdebuggee-debug.apk
  *     adb shell am start -n com.osamu.aide.spike.jdwpdebuggee/.DebuggeeActivity
  *
- * It is installed and started by hand on purpose: a `connectedAndroidTest` run
- * uninstalls what it installed, and a debuggee that disappears between suites
- * reads as the transport having closed.
+ * Gradle installs it before this runs, with `installDebug` -- which a connected
+ * run does not uninstall, unlike what it installs itself -- and the test starts
+ * or raises it first.
  */
 @RunWith(AndroidJUnit4::class)
 class JdwpAcrossAppsTest {
@@ -49,8 +49,23 @@ class JdwpAcrossAppsTest {
         }
     }.getOrElse { if (it is ConnectException) null else throw it }
 
+    /**
+     * Raises the debuggee, starting it if need be. **A debuggee left in the
+     * background is frozen** by Android's cached-app freezer: it accepts the
+     * connection and never answers, which failed this test with a read timeout.
+     * Starting an activity that is already running raises it, and `-W` waits
+     * until it is on screen and thawed.
+     */
+    private fun bringDebuggeeForward() {
+        val automation = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().uiAutomation
+        android.os.ParcelFileDescriptor.AutoCloseInputStream(
+            automation.executeShellCommand("am start -W -n $DEBUGGEE/.DebuggeeActivity --ei port $PORT"),
+        ).use { it.readBytes() }
+    }
+
     @Test
     fun this_app_speaks_jdwp_to_a_different_app() {
+        bringDebuggeeForward()
         val socket = connect()
         assumeTrue(
             "no debuggee on 127.0.0.1:$PORT -- see this class's comment for how to start one",
@@ -155,6 +170,7 @@ class JdwpAcrossAppsTest {
     private companion object {
         const val TAG = "JdwpSpike"
         const val PORT = 8700
+        const val DEBUGGEE = "com.osamu.aide.spike.jdwpdebuggee"
         const val HEADER_BYTES = 11
         const val REPLY_FLAG = 0x80
         val HANDSHAKE = "JDWP-Handshake".toByteArray(Charsets.US_ASCII)

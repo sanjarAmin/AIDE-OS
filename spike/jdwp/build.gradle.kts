@@ -57,3 +57,9 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.test.runner)
 }
+
+// JdwpAcrossAppsTest talks to this app. See :debugger's build file for why
+// installDebug and not a connected install.
+tasks.matching { it.name == "connectedDebugAndroidTest" }.configureEach {
+    dependsOn(":spike:jdwpdebuggee:installDebug")
+}
