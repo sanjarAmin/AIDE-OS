@@ -193,6 +193,9 @@ class FastBuildSystem(
                     // on the classpath to refer to anything Kotlin declared.
                     dependencies = request.dependencies.classpath + workspace.classes,
                     debuggable = request.debuggable,
+                    // Not with Kotlin: kotlinc has already written into the
+                    // output, and its classes are not ECJ's to account for.
+                    cacheDir = workspace.javaCache.takeIf { kotlinSources.isEmpty() },
                 )
             }
 

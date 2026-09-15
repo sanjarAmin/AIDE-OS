@@ -24,6 +24,9 @@ class BuildWorkspace(val root: File) {
      */
     val dexCache: File get() = File(root.absoluteFile.parentFile, "${root.name}.dex-cache")
 
+    /** The last successful Java compile, kept for the next; see `IncrementalJava`. */
+    val javaCache: File get() = File(root.absoluteFile.parentFile, "${root.name}.java-cache")
+
     /** Object files and the shared library built from the project's C/C++. */
     val nativeDir: File get() = File(root, "native")
 

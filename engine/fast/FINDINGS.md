@@ -224,9 +224,10 @@ that question back on the table.
 - **Incrementality is dex only.** `BuildWorkspace.prepare()` deletes the tree
   every build, deliberately: reusing a workspace from a cancelled build is how
   you get an APK containing the previous run's classes. A debug build's dex is
-  kept per package and per jar under a content key (section 16); resources and
-  Java compilation still run in full. Section 9 records the cheaper design that
-  does not work.
+  kept per package and per jar under a content key (section 16), and Java is
+  compiled incrementally when no signature changed (section 17); resources and
+  Kotlin still run in full. Section 9 records the cheaper design that does not
+  work.
 - **No `.module` parsing.** Maven resolution reads `.pom` only, and AndroidX's
   graph is correct only under Gradle Module Metadata. Section 12 records the
   three mechanisms that costs us and the narrow rules standing in for them; two
@@ -542,7 +543,69 @@ Decisions that are not obvious:
   new key over an old dex. Entries for packages and jars no longer in the build
   are deleted.
 
-Java compilation is now the larger half of an edit -- 8.4 s of 13.4 -- because
-ECJ compiles every source every time. That is the next thing to make
-incremental, and harder: which classes an edit affects is a question about
-the code, not its bytes.
+Java compilation was then the larger half of an edit -- 8.4 s of 13.4 --
+because ECJ compiled every source every time. Section 17.
+
+## 17. Compiling only the Java that changed, and when that is not allowed
+
+With dex cached (section 16) a one-class edit to the 3,000-class project still
+took 13.4 s, and 8.4 s of it was ECJ compiling 2,999 sources that had not
+changed. `IncrementalJava` keeps the last successful compile -- its classes,
+and per source a content hash, the class files it produced and its diagnostics
+-- and the stage uses it under one rule:
+
+> Recompile the sources whose content changed, against the kept classes of the
+> rest -- **unless one of them now has a different ABI, or a source was added
+> or removed, and then compile everything.**
+
+The ABI (`ClassAbi`) is what another file could have compiled against: access,
+supertypes, generic signatures, every non-private member's descriptor, and
+**every constant's value**. The constants are why the rule is blunt. ECJ copies
+a `static final` value into each class that reads it, and that class's file
+keeps no reference to where the value came from -- so a dependency graph read
+out of class files misses exactly the dependents that go stale. `R` is a class
+of such constants. A method body edit, the case this is for, never changes the
+ABI; a signature or constant change pays for a full compile, which is only
+slow. `JavaCompileStageTest` checks both directions: an untouched class's
+cached file is not rewritten after a body edit, and a class that inlined a
+changed constant is.
+
+Measured on the emulator, large project:
+
+| | Before (dex cache only) | Now |
+|---|---|---|
+| First build, empty caches | 58.6 s | 63.4 s |
+| One class edited | 13.4 s | **7.2 s** (1 of 3,002 compiled) |
+| Nothing edited | -- | **5.4 s** |
+| App restarted, nothing edited | 17.1 s | **6.8 s** |
+
+The first two attempts were slower than compiling everything, and why is the
+useful part:
+
+- **Copying kept classes cost more than compiling.** Restoring 3,000 class
+  files into the workspace was 4 s of a build that compiled nothing. They are
+  hard links now. That is safe only because nothing writes a class file in
+  place: a rebuild deletes a changed source's classes before ECJ writes new
+  ones, and a project with Kotlin -- where kotlinc writes into the same
+  directory first -- does not use incremental compilation at all.
+- **Reading every class's ABI after every full compile** cost more than the
+  compile. The ABI is now read only for a changed source, from its kept
+  classes, just before it is recompiled; a class is matched to its source by
+  name (`p/Outer$Inner.class` is `p/Outer.java`) and opened only when no source
+  has that name.
+- **Hashing every source went through FUSE.** Projects live on external
+  storage, and reading 3,000 files to hash them was 3.2 s with nothing
+  changed -- 9 s on a cold first build. Like git's index, the state keeps each
+  source's size and modification time with its hash, and a source whose size
+  and time match is not read. This is **not the rule section 9 rejects**: a
+  time never decides whether to compile, only whether an earlier hash of the
+  content still stands, and a file modified within two seconds of the state
+  being saved is always read again -- the same-tick edit that would otherwise
+  look untouched. A first build takes no hashes, having nothing to compare
+  them with.
+
+Still spent on an edit: D8 warming up in a process that has not dexed yet (up
+to 8 s the first time after an app start), linking 3,000 classes back into the
+workspace (1.6--2.3 s), and hashing each shard's class files for the dex cache
+key. Warnings from files not recompiled are replayed from the state, so the
+Problems pane does not empty on an unchanged rebuild.
