@@ -107,10 +107,34 @@ What is still missing: go-to-definition into a dependency, which has no source;
 a Gradle project's generated sources other than `R` (BuildConfig, view
 binding); and any of this before the first build.
 
+## Rebuilding after an edit
+
+Measured 2026-09-15, same emulator, after both engines learned to reuse work
+(`engine/fast/FINDINGS.md` sections 16 and 17 for the fast engine).
+
+| | Fast engine, large (3,000 classes) | Gradle, medium (480 classes, 9 modules) |
+|---|---|---|
+| First build | 63.4 s | 188 s, including the JDK, Gradle, build tools and AGP downloads |
+| Nothing edited | 5.4 s | 28.3 s |
+| One method body edited | **7.2 s** | 26.5 s (library module), 23.4 s (app module) |
+| App restarted, nothing edited | 6.8 s | -- |
+
+**Gradle's own incremental compile works on the device**: after the library
+edit only `m3/C5.class` was rewritten, and its neighbours kept the previous
+build's times. What does not shrink is **about 25 s of fixed cost per build**
+-- starting a JVM and configuring nine projects -- because the engine runs
+Gradle with `--no-daemon`, and a build that compiles one class pays it in full.
+A daemon kept for a few minutes between builds would remove most of it, at the
+price of a resident heap of roughly 500 MB on a phone; `GradleBuildSystem` gives
+the reasons it was not kept, and that trade is the next decision for this engine,
+not a fix to make quietly.
+
+So on this hardware the fast engine rebuilds a project six times the size in a
+quarter of the time, and Gradle is the path for what the fast engine cannot
+build, as `docs/PLAN.md` intends.
+
 ## Not measured
 
 - **A phone.** The emulator has a desktop CPU and more RAM than many phones.
-- **An edit on Gradle.** Only the fast engine was measured after a one-class
-  edit (section 16 of its FINDINGS).
 - **A real app's dependency graph.** These projects have no dependencies;
   resolution and AAR extraction are measured elsewhere.
