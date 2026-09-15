@@ -20,6 +20,7 @@ p.add_argument("--classes", type=int, default=100)
 p.add_argument("--single", action="store_true")
 p.add_argument("--agp", default="9.3.2")
 p.add_argument("--name", default="Large")
+p.add_argument("--kotlin", action="store_true", help="write the classes in Kotlin (with --single)")
 a = p.parse_args()
 
 
@@ -72,6 +73,40 @@ public class C{index} {{
 """
 
 
+def kotlin_class(pkg, index, prev_module_pkg):
+    prev = f"C{index - 1}" if index > 0 else None
+    calls = f"total += {prev}().compute(seed + 1)" if prev else "total += seed"
+    cross = f"total += {prev_module_pkg}.C0().compute(seed)" if prev_module_pkg and index == 0 else ""
+    methods = "\n".join(
+        f"""
+    fun step{m}(value: Int): Int {{
+        var local{m} = value * {m + 1} + counter
+        for (i in 0 until {m + 2}) {{
+            local{m} += labels[i % labels.size].length
+        }}
+        return local{m}
+    }}"""
+        for m in range(6)
+    )
+    return f"""package {pkg}
+
+class C{index} {{
+    private val counter = {index}
+    private val labels = listOf("alpha{index}", "beta{index}", "gamma{index}")
+
+    fun compute(seed: Int): Int {{
+        var total = 0
+        if (seed > {index} + 64) return seed
+        {calls}
+        {cross}
+        total += step0(seed) + step1(seed) + step2(seed)
+        return total
+    }}
+{methods}
+}}
+"""
+
+
 manifest_app = """<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application android:label="@string/app_name">
@@ -111,7 +146,10 @@ if a.single:
         pkg = f"{app_pkg}.m{m}"
         prev = f"{app_pkg}.m{m - 1}" if m > 0 else None
         for c in range(a.classes):
-            write(f"{out}/src/main/java/{pkg.replace('.', '/')}/C{c}.java", java_class(pkg, c, prev))
+            if a.kotlin:
+                write(f"{out}/src/main/java/{pkg.replace('.', '/')}/C{c}.kt", kotlin_class(pkg, c, prev))
+            else:
+                write(f"{out}/src/main/java/{pkg.replace('.', '/')}/C{c}.java", java_class(pkg, c, prev))
     write(f"{out}/src/main/java/{app_pkg.replace('.', '/')}/MainActivity.java",
           activity.replace("{last}", f"{app_pkg}.m{a.modules - 1}"))
     # The fast engine reads the package from the manifest, as AIDE-OS's own
@@ -165,6 +203,6 @@ else:
 lines = 0
 for root, _, files in os.walk(out):
     for f in files:
-        if f.endswith(".java"):
+        if f.endswith(".java") or f.endswith(".kt"):
             lines += sum(1 for _ in open(os.path.join(root, f)))
-print(f"{out}: {a.modules} modules x {a.classes} classes, {lines} lines of Java")
+print(f"{out}: {a.modules} modules x {a.classes} classes, {lines} lines of {'Kotlin' if a.kotlin else 'Java'}")

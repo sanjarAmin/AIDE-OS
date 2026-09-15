@@ -196,11 +196,14 @@ internal class IncrementalJava(private val cacheDir: File) {
                 .mapNotNull { file ->
                     val relative = file.relativeTo(dir).invariantSeparatorsPath
                     if (relative in excluding) return@mapNotNull null
-                    val byName = relative.substringBeforeLast('/', "").let { pkg ->
-                        val top = relative.substringAfterLast('/').removeSuffix(".class").substringBefore('$')
-                        if (pkg.isEmpty()) "/$top.java" else "$pkg/$top.java"
-                    }
-                    val key = if (byName in keys) byName else runCatching { sourceKey(ClassAbi.read(file)) }.getOrNull()
+                    val pkg = relative.substringBeforeLast('/', "")
+                    val top = relative.substringAfterLast('/').removeSuffix(".class").substringBefore('$')
+                    // `Main.java`, or for Kotlin `Main.kt` -- which also
+                    // compiles its top-level declarations into `MainKt`.
+                    val byName = listOf("$top.java", "$top.kt", "${top.removeSuffix("Kt")}.kt")
+                        .map { "$pkg/$it" }
+                        .firstOrNull { it in keys }
+                    val key = byName ?: runCatching { sourceKey(ClassAbi.read(file)) }.getOrNull()
                     key?.let { it to relative }
                 }
                 .groupBy({ it.first }, { it.second })
@@ -250,6 +253,7 @@ internal class IncrementalJava(private val cacheDir: File) {
 
         private val BLOCK_COMMENT = Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL)
         private val LINE_COMMENT = Regex("""//[^\n]*""")
-        private val PACKAGE = Regex("""^\s*package\s+([\w.]+)\s*;""", RegexOption.MULTILINE)
+        // The semicolon is Java's; Kotlin has none.
+        private val PACKAGE = Regex("""^\s*package\s+([\w.]+)\s*;?""", RegexOption.MULTILINE)
     }
 }

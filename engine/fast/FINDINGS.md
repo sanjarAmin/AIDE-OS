@@ -609,3 +609,48 @@ to 8 s the first time after an app start), linking 3,000 classes back into the
 workspace (1.6--2.3 s), and hashing each shard's class files for the dex cache
 key. Warnings from files not recompiled are replayed from the state, so the
 Problems pane does not empty on an unchanged rebuild.
+
+## 18. Kotlin compiles incrementally too, except around `inline`
+
+Section 17 left projects with Kotlin compiling everything, and a 480-class
+Kotlin project (`tools/bench`, `--kotlin`) rebuilt with **nothing changed in
+86 s**, the dex cache hitting every shard: kotlinc was nearly all of it. Now
+kotlinc and ECJ share one plan (`IncrementalCompile`), the same rule as
+section 17, and that project rebuilds in **2.0 s with nothing changed and
+11.9 s after a method body edit** (1 of 482 sources compiled, 1 of 10 dex
+shards).
+
+Three things Kotlin needed beyond Java's rule, each of which a plain port
+would have got wrong:
+
+- **An inline function's body is invisible to the ABI, and is its callers'
+  code.** Checked against kotlinc 2.2.10 on a desktop, rendering class files
+  with `ClassAbi`: a body edit, same ABI (correct); a private function added,
+  different; `String` to `String?`, different -- but only once `@Metadata` was
+  in the rendering, since both are `Ljava/lang/String;` -- and **an edit to the
+  body of an `inline fun`, same ABI**, which would leave every caller running
+  the old body. So a changed Kotlin file that mentions `inline` anywhere
+  compiles everything. `KotlinBuildTest.an_inline_body_edit_reaches_its_callers`.
+- **The module file.** kotlinc finds another file's top-level functions
+  through `META-INF/<module>.kotlin_module` on the classpath. A partial compile
+  writes its own, listing only the files it compiled; written into the shared
+  output it would hide every other file's top-level functions from the next
+  partial compile. So a partial compile writes elsewhere and its classes are
+  moved in without that file. It stays correct because a new top-level
+  declaration changes the ABI, which compiles everything.
+- **`internal`.** A partial compile passes the kept classes as
+  `-Xfriend-paths`, so the recompiled files can still use the module's
+  internal declarations. The body-edit test uses a top-level function and an
+  internal one from another file, and edits the caller twice -- the second
+  partial compile is the one that fails without the two points above.
+
+Java and Kotlin in one project recompile together from the one plan: a changed
+Java file is handed to kotlinc for its signatures, then to ECJ;
+`KotlinBuildTest.java_and_kotlin_edits_still_link_both_ways`.
+
+Also found on the way: **a Kotlin project could not be built from the project
+list at all on a device without the compiler.** The compiler was offered only
+when a `.kt` file was opened, so tapping Build -- or finishing the platform
+download a build asked for -- ended at "the Kotlin compiler is not installed"
+with nothing to tap. Build offers it now, as it offers clang and the Gradle
+components.

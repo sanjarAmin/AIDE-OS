@@ -169,34 +169,19 @@ class FastBuildSystem(
             // Java can see Kotlin. The other order leaves every Kotlin type
             // unresolved in the Java half.
             if (kotlinc != null && kotlinSources.isNotEmpty()) {
-                reportingStage(BuildStage.COMPILE_KOTLIN, diagnostics) { onDiagnostic ->
-                    kotlinc.compile(
-                        kotlinSources = kotlinSources,
-                        javaSources = sources,
+                compileKotlinAndJava(request, layout, platform, workspace, kotlinSources, sources, diagnostics)
+            } else {
+                stage(BuildStage.COMPILE_JAVA, diagnostics) {
+                    javac.compile(
+                        sources = sources,
                         platform = platform,
                         workspace = workspace,
                         projectRoot = layout.root,
-                        moduleName = request.project.name,
                         dependencies = request.dependencies.classpath,
-                        onDiagnostic = onDiagnostic,
+                        debuggable = request.debuggable,
+                        cacheDir = workspace.javaCache,
                     )
                 }
-            }
-
-            stage(BuildStage.COMPILE_JAVA, diagnostics) {
-                javac.compile(
-                    sources = sources,
-                    platform = platform,
-                    workspace = workspace,
-                    projectRoot = layout.root,
-                    // kotlinc's output is already in classes/, and Java needs it
-                    // on the classpath to refer to anything Kotlin declared.
-                    dependencies = request.dependencies.classpath + workspace.classes,
-                    debuggable = request.debuggable,
-                    // Not with Kotlin: kotlinc has already written into the
-                    // output, and its classes are not ECJ's to account for.
-                    cacheDir = workspace.javaCache.takeIf { kotlinSources.isEmpty() },
-                )
             }
 
             val dexFiles = stage(BuildStage.DEX, diagnostics) {
@@ -269,6 +254,162 @@ class FastBuildSystem(
                 ),
             )
         }
+    }
+
+    /**
+     * Compiles a project with Kotlin in it: kotlinc, then ECJ, each over only
+     * what changed when that is safe -- see [IncrementalCompile].
+     *
+     * **Before this, every build compiled every Kotlin file.** A 480-class
+     * Kotlin project rebuilt with nothing changed in 86 s on the emulator, the
+     * dex cache hitting every shard; kotlinc was nearly all of it.
+     *
+     * A partial Kotlin compile writes to its own directory and its classes are
+     * moved in beside the kept ones -- **all but the module file**
+     * (`META-INF/<module>.kotlin_module`), which is how kotlinc finds the rest
+     * of the module's top-level functions on the classpath. Written into the
+     * shared output, it would list only the files just compiled, and the next
+     * partial compile could no longer see the others. It stays valid because a
+     * new top-level declaration is an ABI change, and that compiles everything.
+     * `-Xfriend-paths` lets the recompiled files keep using the rest of the
+     * module's `internal` declarations.
+     */
+    private suspend fun ProducerScope<BuildEvent>.compileKotlinAndJava(
+        request: BuildRequest,
+        layout: ProjectLayout,
+        platform: AndroidPlatform,
+        workspace: BuildWorkspace,
+        kotlinSources: List<File>,
+        javaSources: List<File>,
+        diagnostics: MutableList<Diagnostic>,
+    ) {
+        val kotlinc = checkNotNull(kotlinc)
+        val compiler = checkNotNull(kotlin)
+        val classpath = platform.compileClasspath + request.dependencies.classpath
+        val incremental = IncrementalCompile(IncrementalJava(workspace.javaCache), dispatchers)
+        val settings = withContext(dispatchers.io) {
+            IncrementalJava.settings(
+                listOf("kotlin", compiler.fingerprint, request.project.name) + javac.options(request.debuggable),
+                classpath,
+            )
+        }
+        val plan = incremental.plan(kotlinSources + javaSources, settings)
+
+        suspend fun compileEverything(): List<Diagnostic> {
+            val before = diagnostics.size
+            reportingStage(BuildStage.COMPILE_KOTLIN, diagnostics) { onDiagnostic ->
+                kotlinc.compile(
+                    kotlinSources = kotlinSources,
+                    javaSources = javaSources,
+                    platform = platform,
+                    workspace = workspace,
+                    projectRoot = layout.root,
+                    moduleName = request.project.name,
+                    dependencies = request.dependencies.classpath,
+                    onDiagnostic = onDiagnostic,
+                )
+            }
+            stage(BuildStage.COMPILE_JAVA, diagnostics) {
+                javac.compile(
+                    sources = javaSources,
+                    platform = platform,
+                    workspace = workspace,
+                    projectRoot = layout.root,
+                    // kotlinc's output is already in classes/, and Java needs it
+                    // on the classpath to refer to anything Kotlin declared.
+                    dependencies = request.dependencies.classpath + workspace.classes,
+                    debuggable = request.debuggable,
+                )
+            }
+            return diagnostics.subList(before, diagnostics.size).toList()
+        }
+
+        if (plan.full) {
+            IncrementalCompile.log("Kotlin and Java: compiling all ${plan.sources.size} sources: ${plan.reason}")
+            incremental.saveFull(plan, workspace.classes, compileEverything(), layout.root)
+            return
+        }
+
+        val prepared = incremental.prepare(plan, workspace.classes)
+        if (plan.unchanged) {
+            IncrementalCompile.log("Kotlin and Java: 0 of ${plan.sources.size} sources compiled")
+            incremental.keptDiagnostics(plan).forEach {
+                diagnostics += it
+                send(BuildEvent.DiagnosticReported(it))
+            }
+            return
+        }
+
+        val changed = plan.changed.orEmpty()
+        val changedKotlin = changed.filter { it.extension == "kt" }
+        val changedJava = changed.filter { it.extension == "java" }
+        val before = diagnostics.size
+        if (changedKotlin.isNotEmpty()) {
+            reportingStage(BuildStage.COMPILE_KOTLIN, diagnostics) { onDiagnostic ->
+                withContext(dispatchers.io) {
+                    workspace.kotlinPartial.deleteRecursively()
+                    workspace.kotlinPartial.mkdirs()
+                }
+                val result = kotlinc.compile(
+                    kotlinSources = changedKotlin,
+                    // Only the Java that is being recompiled: the rest is in
+                    // classes/ already, from the kept build.
+                    javaSources = changedJava,
+                    platform = platform,
+                    workspace = workspace,
+                    projectRoot = layout.root,
+                    moduleName = request.project.name,
+                    dependencies = request.dependencies.classpath + workspace.classes,
+                    onDiagnostic = onDiagnostic,
+                    outputDir = workspace.kotlinPartial,
+                    friendPaths = listOf(workspace.classes),
+                )
+                if (result.succeeded) {
+                    withContext(dispatchers.io) {
+                        workspace.kotlinPartial.walkTopDown()
+                            .filter { it.isFile && it.extension != "kotlin_module" }
+                            .forEach { file ->
+                                val target = File(workspace.classes, file.relativeTo(workspace.kotlinPartial).path)
+                                target.parentFile?.mkdirs()
+                                target.delete()
+                                check(file.renameTo(target)) { "could not move ${file.name} into the build" }
+                            }
+                    }
+                }
+                result
+            }
+        }
+        if (changedJava.isNotEmpty()) {
+            stage(BuildStage.COMPILE_JAVA, diagnostics) {
+                javac.compile(
+                    sources = changedJava,
+                    platform = platform,
+                    workspace = workspace,
+                    projectRoot = layout.root,
+                    dependencies = request.dependencies.classpath + workspace.classes,
+                    debuggable = request.debuggable,
+                )
+            }
+        }
+        val compiled = diagnostics.subList(before, diagnostics.size).toList()
+
+        if (!incremental.abiChanged(plan, prepared, workspace.classes)) {
+            // Replaces the compilers' own diagnostics with every source's: the
+            // untouched ones' were earned by an earlier build and still stand.
+            val all = incremental.savePartial(plan, prepared, workspace.classes, compiled, layout.root)
+            (all - compiled.toSet()).forEach {
+                diagnostics += it
+                send(BuildEvent.DiagnosticReported(it))
+            }
+            IncrementalCompile.log("Kotlin and Java: ${changed.size} of ${plan.sources.size} sources compiled")
+            return
+        }
+
+        send(BuildEvent.Note("An edit changed a signature other files compile against, so everything is compiled."))
+        IncrementalCompile.log("Kotlin and Java: an edit changed an ABI; compiling all ${plan.sources.size} sources")
+        withContext(dispatchers.io) { workspace.classes.listFiles()?.forEach { it.deleteRecursively() } }
+        diagnostics.subList(before, diagnostics.size).clear()
+        incremental.saveFull(plan, workspace.classes, compileEverything(), layout.root)
     }
 
     /**

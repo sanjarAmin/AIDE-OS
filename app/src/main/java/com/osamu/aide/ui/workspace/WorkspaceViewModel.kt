@@ -896,6 +896,16 @@ class WorkspaceViewModel(
                 )
                 return@launch
             }
+            builder.missingKotlinCompiler(project)?.let { component ->
+                offerComponentInstall(
+                    component = component,
+                    rationale = "This project has Kotlin sources. Building it needs " +
+                        "${component.displayName}, which is about ${component.archiveBytes / (1024 * 1024)} MB " +
+                        "to download.",
+                    then = resume,
+                )
+                return@launch
+            }
             builder.missingNativeToolchain(project)?.let { component ->
                 // Offered before the build starts rather than after it fails,
                 // for the same reason the platform is: the refusal names a

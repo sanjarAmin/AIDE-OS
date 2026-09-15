@@ -60,7 +60,8 @@ internal class JavaCompileStage(private val dispatchers: DispatcherProvider) {
         return compileIncrementally(sources, options, classpath, workspace, projectRoot, IncrementalJava(cacheDir))
     }
 
-    private fun options(debuggable: Boolean) = buildList {
+    /** ECJ's arguments besides the classpath and files, for a cache key that has to change with them. */
+    fun options(debuggable: Boolean) = buildList {
         add("-source"); add(SOURCE_LEVEL)
         add("-target"); add(SOURCE_LEVEL)
 
@@ -123,12 +124,8 @@ internal class JavaCompileStage(private val dispatchers: DispatcherProvider) {
     }
 
     /**
-     * Recompiles what changed, or everything when that is not safe.
-     *
-     * Not safe, and so a full compile: no previous state, different options or
-     * classpath, a source added or removed, or a changed source whose classes
-     * now show a different ABI -- see [IncrementalJava] for why the last is not
-     * narrowed further.
+     * Recompiles what changed, or everything when that is not safe; the rule
+     * and its reasons are [IncrementalCompile]'s.
      */
     private suspend fun compileIncrementally(
         sources: List<File>,
@@ -138,152 +135,38 @@ internal class JavaCompileStage(private val dispatchers: DispatcherProvider) {
         projectRoot: File,
         cache: IncrementalJava,
     ): StageResult<File> {
-        class Read(
-            val path: String,
-            val hash: String,
-            val key: String,
-            val size: Long,
-            val modified: Long,
-            /** Unchanged by size and time, so [hash] is the kept one and not compared. */
-            val trusted: Boolean = false,
-        )
-        val startedAt = System.nanoTime()
+        val incremental = IncrementalCompile(cache, dispatchers)
         val settings = withContext(dispatchers.io) { IncrementalJava.settings(options, classpath.filter { it != workspace.classes }) }
-        val state = withContext(dispatchers.io) { cache.load() }
-        var hashed = 0
-        val read = withContext(dispatchers.io) {
-            sources.associateWith { source ->
-                // Absolute rather than canonical: resolving 3,000 paths through
-                // FUSE is itself a cost, and the sources list is built the same
-                // way every build.
-                val path = source.absolutePath
-                val modified = source.lastModified()
-                val size = source.length()
-                state?.trustedHash(path, source)?.let { return@associateWith Read(path, it.hash, it.key, size, modified, trusted = true) }
-                if (state == null) {
-                    // Nothing to compare a hash with, so none is taken: this build
-                    // compiles everything anyway, and the next compares size and
-                    // time first. A source without a kept hash that fails that
-                    // comparison simply counts as changed. The package is still
-                    // needed, and a first line is enough to find it.
-                    return@associateWith Read(path, NO_HASH, IncrementalJava.sourceKey(source.name, source.readText()), size, modified)
-                }
-                hashed++
-                // One read of each source for both its hash and its package.
-                val bytes = source.readBytes()
-                Read(path, IncrementalJava.hash(bytes), IncrementalJava.sourceKey(source.name, String(bytes)), size, modified)
+        val plan = incremental.plan(sources, settings)
+
+        if (!plan.full) {
+            val prepared = incremental.prepare(plan, workspace.classes)
+            if (plan.unchanged) {
+                Log.i(TAG, "Java: 0 of ${sources.size} sources compiled")
+                return StageResult.ok(workspace.classes, incremental.keptDiagnostics(plan))
             }
-        }
-        val readAt = System.nanoTime()
-        Log.i(TAG, "timing: hashed $hashed of ${sources.size} sources in ${(readAt - startedAt) / 1_000_000} ms")
-        val byPath = read.values.associateBy { it.path }
-        val keys = read.values.mapTo(HashSet()) { it.key }
-
-        val previous = state?.takeIf { it.settings == settings }
-        val structural = previous == null || byPath.keys != previous.sources.keys
-        val changed = if (structural) {
-            emptyList()
-        } else {
-            sources.filter {
-                val r = read.getValue(it)
-                val kept = previous!!.sources.getValue(r.path).hash
-                !r.trusted && (kept == NO_HASH || kept != r.hash)
-            }
-        }
-
-        if (!structural && changed.isEmpty()) {
-            // Nothing to compile: the last build's classes are this build's.
-            withContext(dispatchers.io) { linkTree(cache.classes, workspace.classes, excluding = emptySet()) }
-            Log.i(TAG, "timing: linked in ${(System.nanoTime() - readAt) / 1_000_000} ms")
-            Log.i(TAG, "Java: 0 of ${sources.size} sources compiled")
-            return StageResult.ok(workspace.classes, previous!!.sources.values.flatMap { it.diagnostics })
-        }
-
-        if (!structural) {
-            val old = changed.associate { source -> read.getValue(source).path to previous!!.sources.getValue(read.getValue(source).path) }
-            val stale = old.values.flatMapTo(HashSet()) { it.classFiles }
-            val oldAbi = withContext(dispatchers.io) {
-                old.mapValues { (_, source) -> IncrementalJava.abiOf(source.classFiles.map { ClassAbi.read(File(cache.classes, it)) }) }
-            }
-            withContext(dispatchers.io) { linkTree(cache.classes, workspace.classes, excluding = stale) }
-
+            val changed = plan.changed.orEmpty()
             val result = runEcj(options, classpath + workspace.classes, changed, workspace.classes, projectRoot)
             if (result.failure != null) return StageResult.failed(result.failure, result.diagnostics)
-
-            val produced = withContext(dispatchers.io) {
-                // Anything in the output that was not linked in was written just now.
-                val reused = (previous!!.sources.values.flatMapTo(HashSet()) { it.classFiles }) - stale
-                IncrementalJava.classFilesBySource(workspace.classes, keys, excluding = reused)
-            }
-            val abiChanged = withContext(dispatchers.io) {
-                changed.any { source ->
-                    val files = produced[read.getValue(source).key].orEmpty()
-                    IncrementalJava.abiOf(files.map { ClassAbi.read(File(workspace.classes, it)) }) != oldAbi[read.getValue(source).path]
-                }
-            }
-            if (!abiChanged) {
-                val next = withContext(dispatchers.io) {
-                    val next = previous!!.sources.toMutableMap()
-                    changed.forEach { source ->
-                        val r = read.getValue(source)
-                        val files = produced[r.key].orEmpty()
-                        // The cache follows the build: old classes out, new in.
-                        next.getValue(r.path).classFiles.forEach { File(cache.classes, it).delete() }
-                        files.forEach { IncrementalJava.link(File(workspace.classes, it), File(cache.classes, it)) }
-                        next[r.path] = IncrementalJava.Source(r.hash, files, result.diagnostics.filter { it.belongsTo(source, projectRoot) }, r.key, r.size, r.modified)
-                    }
-                    cache.save(IncrementalJava.State(settings, next))
-                    next
-                }
+            if (!incremental.abiChanged(plan, prepared, workspace.classes)) {
+                val diagnostics = incremental.savePartial(plan, prepared, workspace.classes, result.diagnostics, projectRoot)
                 Log.i(TAG, "Java: ${changed.size} of ${sources.size} sources compiled")
-                return StageResult.ok(workspace.classes, next.values.flatMap { it.diagnostics })
+                return StageResult.ok(workspace.classes, diagnostics)
             }
             Log.i(TAG, "Java: an edit changed a class's ABI; compiling all ${sources.size} sources")
             withContext(dispatchers.io) { workspace.classes.listFiles()?.forEach { it.deleteRecursively() } }
+        } else {
+            Log.i(TAG, "Java: compiling all ${sources.size} sources: ${plan.reason}")
         }
 
-        // In full. Classes compiled by kotlinc would be in the output already,
-        // which is why the caller passes no cache for a project with Kotlin.
-        val ecjAt = System.nanoTime()
         val result = runEcj(options, classpath, sources, workspace.classes, projectRoot)
-        Log.i(TAG, "timing: full ECJ in ${(System.nanoTime() - ecjAt) / 1_000_000} ms")
-        withContext(dispatchers.io) { cache.clear() }
-        // A failed build leaves nothing trustworthy to compare against.
-        if (result.failure != null) return StageResult.failed(result.failure, result.diagnostics)
-        withContext(dispatchers.io) {
-            val produced = IncrementalJava.classFilesBySource(workspace.classes, keys)
-            val next = sources.associate { source ->
-                val r = read.getValue(source)
-                r.path to IncrementalJava.Source(
-                    r.hash,
-                    produced[r.key].orEmpty(),
-                    result.diagnostics.filter { it.belongsTo(source, projectRoot) },
-                    r.key,
-                    r.size,
-                    r.modified,
-                )
-            }
-            linkTree(workspace.classes, cache.classes, excluding = emptySet())
-            cache.save(IncrementalJava.State(settings, next))
+        if (result.failure != null) {
+            // A failed build leaves nothing trustworthy to compare against.
+            incremental.clear()
+            return StageResult.failed(result.failure, result.diagnostics)
         }
-        Log.i(TAG, "timing: bookkeeping in ${(System.nanoTime() - ecjAt) / 1_000_000} ms since ECJ started")
-        Log.i(TAG, "Java: all ${sources.size} sources compiled")
+        incremental.saveFull(plan, workspace.classes, result.diagnostics, projectRoot)
         return StageResult.ok(workspace.classes, result.diagnostics)
-    }
-
-    /** Every file under [from] linked into [to] at the same relative path, except [excluding]. */
-    private fun linkTree(from: File, to: File, excluding: Set<String>) {
-        from.walkTopDown().filter { it.isFile }.forEach { file ->
-            val relative = file.relativeTo(from).invariantSeparatorsPath
-            if (relative !in excluding) IncrementalJava.link(file, File(to, relative))
-        }
-    }
-
-    /** Whether ECJ reported [this] against [source]; paths come back relative to the project when inside it. */
-    private fun Diagnostic.belongsTo(source: File, projectRoot: File): Boolean {
-        val reported = file ?: return false
-        val expected = com.osamu.aide.engine.api.ProjectPaths.relativise(source, projectRoot)
-        return reported.path == expected.path || reported.path == source.path
     }
 
     private fun summarise(diagnostics: List<Diagnostic>, raw: String): String {
@@ -308,7 +191,5 @@ internal class JavaCompileStage(private val dispatchers: DispatcherProvider) {
         const val SOURCE_LEVEL = "11"
         const val TAG = "JavaCompileStage"
 
-        /** Stands in for a hash that was not taken; never equal to a real one. */
-        const val NO_HASH = "-"
     }
 }

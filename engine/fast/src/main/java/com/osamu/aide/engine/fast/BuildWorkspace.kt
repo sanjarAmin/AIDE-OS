@@ -17,6 +17,9 @@ class BuildWorkspace(val root: File) {
     val classes: File get() = File(root, "classes")
     val dex: File get() = File(root, "dex")
 
+    /** Where a partial Kotlin compile writes, before its classes join [classes]; see `IncrementalCompile`. */
+    val kotlinPartial: File get() = File(root, "kotlin-partial")
+
     /**
      * Each debug build's dex, by shard, kept between builds -- beside the
      * workspace rather than in it, because [prepare] empties the workspace.

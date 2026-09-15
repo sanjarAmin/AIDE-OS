@@ -231,6 +231,116 @@ class KotlinBuildTest {
         )
     }
 
+    // ---- Incremental compilation with Kotlin. See IncrementalCompile. ----
+
+    private fun kt(layout: ProjectLayout, name: String, body: String) =
+        File(layout.javaDir, "com/example/demo/$name.kt").apply {
+            parentFile?.mkdirs()
+            writeText("package com.example.demo\n\n$body\n")
+        }
+
+    /** A build into the same output each time, so the caches beside it are reused. */
+    private suspend fun rebuild(project: com.osamu.aide.core.fs.Project): BuildResult {
+        val events = engine().build(BuildRequest(project, File(fixture.workDir, "build-incremental"))).toList()
+        return (events.last() as BuildEvent.Finished).result
+    }
+
+    private fun classBytes(name: String) =
+        File(fixture.workDir, "build-incremental/classes/com/example/demo/$name.class").readBytes()
+
+    private fun apkText(result: BuildResult): String = ZipFile((result as BuildResult.Success).apk).use { zip ->
+        zip.entries().toList().filter { it.name.endsWith(".dex") }
+            .joinToString("") { String(zip.getInputStream(it).readBytes(), Charsets.ISO_8859_1) }
+    }
+
+    private fun assertBuilt(result: BuildResult) = assertTrue(
+        "build failed: ${(result as? BuildResult.Failure)?.message} ${result.diagnostics.map { it.describe() }}",
+        result is BuildResult.Success,
+    )
+
+    /**
+     * **A body edit recompiles that file only, and still finds the rest of the
+     * module.** `Caller.kt` uses a top-level function and an `internal` one
+     * from `Helpers.kt`; after the first build only `Caller.kt` changes, twice.
+     * The second partial compile is the one that would fail if the first had
+     * replaced the module file kotlinc finds top-level functions through, and
+     * `internal` would be unreachable without the friend path.
+     */
+    @Test
+    fun a_kotlin_body_edit_recompiles_one_file_and_still_sees_the_module() = runTest(timeout = 10.minutes) {
+        val project = fixture.project(applicationId = "com.example.demo")
+        val layout = ProjectLayout.of(project)
+        kt(layout, "Helpers", "fun shout(s: String) = s.uppercase()\ninternal fun secret() = 41")
+        kt(layout, "Caller", "object Caller { fun run() = shout(\"one\") + secret() }")
+        Thread.sleep(IncrementalJava.RACY_MILLIS + 200)
+        assertBuilt(rebuild(project))
+        val helpersStamp = File(fixture.workDir, "build-incremental.java-cache/classes/com/example/demo/HelpersKt.class").lastModified()
+
+        kt(layout, "Caller", "object Caller { fun run() = shout(\"two\") + secret() }")
+        assertBuilt(rebuild(project))
+        kt(layout, "Caller", "object Caller { fun run() = shout(\"three\") + secret() }")
+        val result = rebuild(project)
+
+        assertBuilt(result)
+        assertEquals(
+            "Helpers.kt was recompiled for an edit to Caller.kt",
+            helpersStamp,
+            File(fixture.workDir, "build-incremental.java-cache/classes/com/example/demo/HelpersKt.class").lastModified(),
+        )
+        assertTrue("the last edit is not in the app", apkText(result).contains("three"))
+    }
+
+    /**
+     * **An inline function's body is its callers' code.** Its class file shows
+     * the same ABI after a body edit -- checked against kotlinc 2.2.10 -- so
+     * without the `inline` rule `Caller` would keep running the old body.
+     */
+    @Test
+    fun an_inline_body_edit_reaches_its_callers() = runTest(timeout = 10.minutes) {
+        val project = fixture.project(applicationId = "com.example.demo")
+        val layout = ProjectLayout.of(project)
+        kt(layout, "Inline", "inline fun greeting(): String = \"old greeting\"")
+        kt(layout, "Caller", "object Caller { fun run() = greeting() }")
+        Thread.sleep(IncrementalJava.RACY_MILLIS + 200)
+        assertBuilt(rebuild(project))
+        val before = classBytes("Caller")
+
+        kt(layout, "Inline", "inline fun greeting(): String = \"new greeting\"")
+        val result = rebuild(project)
+
+        assertBuilt(result)
+        assertTrue("Caller still holds the old inlined body", !before.contentEquals(classBytes("Caller")))
+        assertTrue(String(classBytes("Caller"), Charsets.ISO_8859_1).contains("new greeting"))
+    }
+
+    /** Java calling Kotlin and Kotlin calling Java, each edited on its own. */
+    @Test
+    fun java_and_kotlin_edits_still_link_both_ways() = runTest(timeout = 10.minutes) {
+        val project = fixture.project(applicationId = "com.example.demo")
+        val layout = ProjectLayout.of(project)
+        kt(layout, "FromKotlin", "object FromKotlin { @JvmStatic fun text() = \"k1\" + FromJava.text() }")
+        File(layout.javaDir, "com/example/demo/FromJava.java").writeText(
+            "package com.example.demo;\npublic final class FromJava { public static String text() { return \"j1\"; } }\n",
+        )
+        File(layout.javaDir, "com/example/demo/UsesKotlin.java").writeText(
+            "package com.example.demo;\npublic final class UsesKotlin { public static String go() { return FromKotlin.text(); } }\n",
+        )
+        Thread.sleep(IncrementalJava.RACY_MILLIS + 200)
+        assertBuilt(rebuild(project))
+
+        File(layout.javaDir, "com/example/demo/FromJava.java").writeText(
+            "package com.example.demo;\npublic final class FromJava { public static String text() { return \"j2\"; } }\n",
+        )
+        assertBuilt(rebuild(project))
+        kt(layout, "FromKotlin", "object FromKotlin { @JvmStatic fun text() = \"k2\" + FromJava.text() }")
+        val result = rebuild(project)
+
+        assertBuilt(result)
+        val dex = apkText(result)
+        assertTrue("the Java edit is missing", dex.contains("j2"))
+        assertTrue("the Kotlin edit is missing", dex.contains("k2"))
+    }
+
     private companion object {
         const val TAG = "KotlinBuild"
     }

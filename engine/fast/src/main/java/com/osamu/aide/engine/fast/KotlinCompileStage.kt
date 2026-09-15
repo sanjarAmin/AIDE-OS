@@ -35,6 +35,9 @@ internal class KotlinCompileStage(
         moduleName: String,
         dependencies: List<File> = emptyList(),
         onDiagnostic: (Diagnostic) -> Unit = {},
+        /** Where classes go; the workspace's classes unless a partial compile says otherwise. */
+        outputDir: File = workspace.classes,
+        friendPaths: List<File> = emptyList(),
     ): StageResult<File> {
         if (kotlinSources.isEmpty()) return StageResult.ok(workspace.classes)
 
@@ -42,15 +45,16 @@ internal class KotlinCompileStage(
             compiler.compile(
                 sources = kotlinSources + javaSources,
                 classpath = platform.compileClasspath + dependencies,
-                outputDir = workspace.classes,
+                outputDir = outputDir,
                 moduleName = moduleName,
+                friendPaths = friendPaths,
             )
         }
 
         val diagnostics = KotlincDiagnostics.parse(outcome.output, projectRoot)
         diagnostics.forEach(onDiagnostic)
 
-        if (outcome.succeeded) return StageResult.ok(workspace.classes, diagnostics)
+        if (outcome.succeeded) return StageResult.ok(outputDir, diagnostics)
 
         // A failure the parser found nothing in is worse than no parser at all:
         // the user is told the build failed and shown a list of warnings. When

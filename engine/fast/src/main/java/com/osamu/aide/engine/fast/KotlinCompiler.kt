@@ -93,11 +93,21 @@ class KotlinCompiler(private val toolchain: KotlinToolchain, cacheDir: File) {
     /** What the compiler said, and whether it succeeded. */
     data class Outcome(val succeeded: Boolean, val output: String)
 
+    /** What identifies this compiler's output, for a cache of it: the archive it runs from. */
+    internal val fingerprint: String
+        get() = "${toolchain.archive.name}:${toolchain.archive.length()}:${toolchain.stdlib.length()}"
+
     internal fun compile(
         sources: List<File>,
         classpath: List<File>,
         outputDir: File,
         moduleName: String,
+        /**
+         * Output directories whose `internal` declarations these sources may
+         * use as if they were their own module's. A partial compile names the
+         * kept classes of the rest of the module here; see `IncrementalCompile`.
+         */
+        friendPaths: List<File> = emptyList(),
     ): Outcome {
         val compilerClass = loader.loadClass(K2JVM_COMPILER)
         val compiler = compilerClass.getDeclaredConstructor().newInstance()
@@ -137,6 +147,9 @@ class KotlinCompiler(private val toolchain: KotlinToolchain, cacheDir: File) {
             add("-d"); add(outputDir.absolutePath)
             add("-jvm-target"); add(JVM_TARGET)
             add("-module-name"); add(moduleName)
+            if (friendPaths.isNotEmpty()) {
+                add("-Xfriend-paths=" + friendPaths.joinToString(",") { it.absolutePath })
+            }
 
             addAll(sources.map { it.absolutePath })
         }

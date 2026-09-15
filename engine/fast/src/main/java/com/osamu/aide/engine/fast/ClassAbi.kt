@@ -21,6 +21,13 @@ import java.io.File
  * declares anonymously are left out: nothing outside the source file can refer
  * to them, so a change to them needs only that file recompiled.
  *
+ * **For Kotlin, `@kotlin.Metadata` is ABI too.** Nullability, `internal`,
+ * default arguments, whether a function is `inline` -- a Kotlin caller compiles
+ * against all of these, and none of them is in a JVM descriptor: `String` and
+ * `String?` are both `Ljava/lang/String;`. The annotation's declarations are
+ * therefore part of the rendering. A body edit leaves them alone; an edit that
+ * adds a private function does not, which only costs a full compile.
+ *
  * Read by hand because the format is small and stable, and the alternatives are
  * internal: ECJ's reader is `org.eclipse.jdt.internal`, and D8's copy of ASM is
  * shaded under a package name that changes with its version.
@@ -115,12 +122,25 @@ internal data class ClassAbi(
 
             var sourceFile: String? = null
             var signature = ""
+            var kotlinMetadata = ""
             repeat(input.readUnsignedShort()) {
                 val attribute = utf8[input.readUnsignedShort()]
                 val length = input.readInt()
                 when (attribute) {
                     "SourceFile" -> sourceFile = utf8[input.readUnsignedShort()]
                     "Signature" -> signature = utf8[input.readUnsignedShort()].orEmpty()
+                    "RuntimeVisibleAnnotations" -> {
+                        repeat(input.readUnsignedShort()) {
+                            val type = utf8[input.readUnsignedShort()]
+                            val rendered = StringBuilder()
+                            repeat(input.readUnsignedShort()) {
+                                rendered.append(utf8[input.readUnsignedShort()]).append('=')
+                                readElementValue(input, rendered, utf8, ::constantValue)
+                                rendered.append(';')
+                            }
+                            if (type == KOTLIN_METADATA) kotlinMetadata = rendered.toString()
+                        }
+                    }
                     else -> input.skipFully(length)
                 }
             }
@@ -130,9 +150,45 @@ internal data class ClassAbi(
                 append(" super=").append(superName)
                 append(" implements=").append(interfaces.sorted())
                 append(" sig=").append(signature).append('\n')
+                if (kotlinMetadata.isNotEmpty()) append("K ").append(kotlinMetadata).append('\n')
                 (fields + methods).forEach { append(it).append('\n') }
             }
             return ClassAbi(name, sourceFile, abi)
+        }
+
+        private const val KOTLIN_METADATA = "Lkotlin/Metadata;"
+
+        /** One annotation element value, rendered; the format is the JVM spec's, section 4.7.16.1. */
+        private fun readElementValue(
+            input: DataInputStream,
+            out: StringBuilder,
+            utf8: Array<String?>,
+            constant: (Int) -> String,
+        ) {
+            when (val tag = input.readUnsignedByte().toChar()) {
+                's' -> out.append('"').append(utf8[input.readUnsignedShort()]).append('"')
+                'B', 'C', 'D', 'F', 'I', 'J', 'S', 'Z' -> out.append(constant(input.readUnsignedShort()))
+                'e' -> out.append(utf8[input.readUnsignedShort()]).append('.').append(utf8[input.readUnsignedShort()])
+                'c' -> out.append(utf8[input.readUnsignedShort()])
+                '@' -> {
+                    out.append('@').append(utf8[input.readUnsignedShort()]).append('(')
+                    repeat(input.readUnsignedShort()) {
+                        out.append(utf8[input.readUnsignedShort()]).append('=')
+                        readElementValue(input, out, utf8, constant)
+                        out.append(',')
+                    }
+                    out.append(')')
+                }
+                '[' -> {
+                    out.append('[')
+                    repeat(input.readUnsignedShort()) {
+                        readElementValue(input, out, utf8, constant)
+                        out.append(',')
+                    }
+                    out.append(']')
+                }
+                else -> error("unknown annotation element tag $tag")
+            }
         }
 
         private fun DataInputStream.skipFully(bytes: Int) {

@@ -11,6 +11,7 @@ import android.os.Build
 import com.osamu.aide.core.fs.ProjectLayout
 import com.osamu.aide.engine.fast.FastBuildSystem
 import com.osamu.aide.core.fs.BuildEngine
+import com.osamu.aide.core.fs.SourceLanguage
 import com.osamu.aide.engine.fast.NativeToolchainProvider
 import com.osamu.aide.engine.fast.ReleaseKeystoreStore
 import com.osamu.aide.engine.gradle.GradleToolchainProvider
@@ -112,6 +113,22 @@ class ProjectBuilder(
         if (gradle.gradleHome() == null) return ToolchainComponent.GRADLE
         if (toolchain.canBuild() && gradle.androidSdk() == null) return ToolchainComponent.ANDROID_BUILD_TOOLS
         return null
+    }
+
+    /**
+     * The Kotlin compiler, when a fast-engine project has Kotlin to compile and
+     * the device does not have it yet.
+     *
+     * **Offered from Build as well as from the editor.** It was only offered
+     * when a `.kt` file was opened, so building a Kotlin project from the
+     * projects list -- or after the platform download -- ended at "the Kotlin
+     * compiler is not installed" with no way to get it.
+     */
+    fun missingKotlinCompiler(project: Project): ToolchainComponent? {
+        if (project.engine != BuildEngine.FAST) return null
+        if (project.language != SourceLanguage.KOTLIN && ProjectLayout.of(project).kotlinSources().isEmpty()) return null
+        if (kotlin.compiler() != null) return null
+        return ToolchainComponent.KOTLIN_COMPILER
     }
 
     fun build(
