@@ -394,6 +394,17 @@ statement -- in the gutter and in the debugger alike, since both read one set.
   goes when its line is deleted, as a desktop IDE does. Only files with
   breakpoints are compared, so an ordinary keystroke costs a map write.
 
+**Saved at two lines, because only the disk survives the app.** A breakpoint
+moved by an edit that was never saved would come back at the buffer's line,
+against a file that does not have that line. So each is stored at its buffer
+line, at that line carried onto the file as saved, and with a hash of the
+buffer; on restore, a file that now hashes as the buffer did was saved and
+gets the buffer line, and any other gets the disk line. Driven: a breakpoint on
+15, two lines inserted above it -- 17 in the editor -- the app closed without
+saving, and it came back on 15, still on the same statement. The save is
+debounced and runs after every edit to a file with breakpoints, so the hash is
+the latest buffer's and a later save needs no notice of its own.
+
 A breakpoint moved during a session is re-sent to the running app, whose code
 is the build's, not the buffer's; an edit mid-session puts a breakpoint where
 the new code is, which the old code may not reach until the next Debug.

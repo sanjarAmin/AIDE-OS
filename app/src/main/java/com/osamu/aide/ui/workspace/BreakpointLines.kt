@@ -51,33 +51,72 @@ object BreakpointLines {
  * Breakpoints saved per project, so they survive the workspace closing.
  *
  * **In app storage, not in the project.** The project is usually a git
- * checkout, and a file of breakpoints in it is one more thing to ignore or, worse,
- * commit. Named by a hash of the project's path, one line per breakpoint:
- * the file relative to the project, a tab, the line.
+ * checkout, and a file of breakpoints in it is one more thing to ignore or,
+ * worse, commit. Named by a hash of the project's path.
+ *
+ * **Each breakpoint is kept at two lines.** Its line in the editor's buffer,
+ * and that line carried onto the file as it is on disk -- because the buffer
+ * may not have been saved, and only the disk survives the app closing. With
+ * the buffer's hash beside them, [load] can tell which applies: if the file
+ * now hashes as the buffer did, the edit was saved and the buffer's line is
+ * right; otherwise the disk's is. Keeping one number could not tell a saved
+ * edit from an abandoned one, and put the breakpoint beside the wrong line
+ * after either.
  */
 class BreakpointStore(private val dir: File) {
 
+    /** One breakpoint as saved: [line] in the buffer whose text hashed to [bufferHash], [diskLine] in the file. */
+    data class Entry(val file: File, val line: Int, val diskLine: Int?, val bufferHash: String)
+
     fun load(projectRoot: File): Set<FileBreakpoint> = runCatching {
-        fileFor(projectRoot).readLines().mapNotNullTo(HashSet()) { entry ->
-            val (path, line) = entry.split('\t').takeIf { it.size == 2 } ?: return@mapNotNullTo null
-            FileBreakpoint(File(projectRoot, path), line.toIntOrNull() ?: return@mapNotNullTo null)
+        val entries = fileFor(projectRoot).readLines().mapNotNull { row ->
+            val f = row.split('\t')
+            if (f.size != 4) return@mapNotNull null
+            Entry(File(projectRoot, f[0]), f[1].toIntOrNull() ?: return@mapNotNull null, f[2].toIntOrNull(), f[3])
         }
+        entries.groupBy { it.file }.flatMap { (file, inFile) ->
+            val disk = runCatching { hash(file.readText()) }.getOrNull() ?: return@flatMap emptyList()
+            inFile.mapNotNull { entry ->
+                val line = if (entry.bufferHash == disk) entry.line else entry.diskLine
+                line?.let { FileBreakpoint(file, it) }
+            }
+        }.toSet()
     }.getOrDefault(emptySet())
 
-    fun save(projectRoot: File, breakpoints: Set<FileBreakpoint>) {
+    fun save(projectRoot: File, entries: List<Entry>) {
         runCatching {
             dir.mkdirs()
-            val text = breakpoints
+            val text = entries
                 .sortedWith(compareBy({ it.file.path }, { it.line }))
-                .joinToString("") { "${it.file.relativeTo(projectRoot).invariantSeparatorsPath}\t${it.line}\n" }
+                .joinToString("") {
+                    "${it.file.relativeTo(projectRoot).invariantSeparatorsPath}\t${it.line}\t${it.diskLine ?: "-"}\t${it.bufferHash}\n"
+                }
             val partial = File(dir, fileFor(projectRoot).name + ".partial")
             partial.writeText(text)
             partial.renameTo(fileFor(projectRoot))
         }
     }
 
-    private fun fileFor(projectRoot: File): File {
-        val digest = MessageDigest.getInstance("SHA-1").digest(projectRoot.absolutePath.toByteArray())
-        return File(dir, digest.joinToString("") { "%02x".format(it) } + ".breakpoints")
-    }
+    /**
+     * The entries for [breakpoints], given each file's buffer where the editor
+     * holds one; a file without a buffer is its disk text.
+     */
+    fun entriesFor(breakpoints: Set<FileBreakpoint>, buffers: Map<File, String>): List<Entry> =
+        breakpoints.groupBy { it.file }.flatMap { (file, inFile) ->
+            val disk = runCatching { file.readText() }.getOrNull() ?: return@flatMap emptyList()
+            val buffer = buffers[file] ?: disk
+            inFile.map { breakpoint ->
+                // Carried one at a time: followEdit drops a line that has no
+                // place on disk, and which breakpoint it dropped matters here.
+                val onDisk = if (buffer == disk) breakpoint.line
+                else BreakpointLines.followEdit(setOf(breakpoint.line), buffer, disk).singleOrNull()
+                Entry(file, breakpoint.line, onDisk, hash(buffer))
+            }
+        }
+
+    private fun fileFor(projectRoot: File): File =
+        File(dir, hash(projectRoot.absolutePath) + ".breakpoints")
+
+    private fun hash(text: String): String =
+        MessageDigest.getInstance("SHA-1").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }
 }

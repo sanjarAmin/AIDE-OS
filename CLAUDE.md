@@ -186,13 +186,16 @@ failed to load still produces a clean compile.
   height, and use `FlowRow` when there are more than three.
   `CreateProjectDialogTest`.
 
-  **This is the most common defect in this codebase: seven instances so far.**
+  **This is the most common defect in this codebase: nine instances so far.**
   The shape is always a `Row` holding a variable-width label beside a control,
   with no `weight` on the label. The label measures at whatever width it wants,
   the control is measured in the remainder, and the remainder is often nothing:
   a settings `Switch` at `Rect(0, 0, 0, 0)`, a `Remove` button 61 px wide
   instead of 197 and 360 px tall with its label running down the screen, a dock
-  whose close button drew nothing while the dock covered half the editor.
+  whose close button drew nothing while the dock covered half the editor, a
+  workspace toolbar whose project name drew as "…" once Save joined six other
+  buttons on a phone -- a `TopAppBar` gives its title only what the actions
+  leave, so those now fold into a More menu when they do not fit.
   **The control is usually the consequential half of the row** — Save, Remove,
   Restart the shell, revoke this token, close this panel — because that is the
   half a designer puts on the right.

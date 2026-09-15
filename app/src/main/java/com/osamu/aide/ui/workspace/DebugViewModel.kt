@@ -176,7 +176,11 @@ class DebugViewModel(
         val previous = before ?: runCatching { file.readText() }.getOrNull() ?: return
         val lines = inFile.mapTo(HashSet()) { it.line }
         val moved = BreakpointLines.followEdit(lines, previous, text)
-        if (moved == lines) return
+        if (moved == lines) {
+            // Not moved, but the buffer is not what was saved with them.
+            persist()
+            return
+        }
 
         // The file's key is its package, which an edit rarely touches; taken
         // from the text anyway, since one that did would move them all.
@@ -188,10 +192,24 @@ class DebugViewModel(
         controller.setBreakpoints(keys.values.toSet())
     }
 
+    private var persistJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * Saves the breakpoints, at their buffer lines and at those lines carried
+     * onto the files as saved -- see [BreakpointStore]. Debounced, because it
+     * runs after every edit to a file with breakpoints, moved or not: the
+     * buffer's hash has to be the latest, so that saving the file afterwards
+     * is recognised on restore without being told about.
+     */
     private fun persist() {
         val root = projectRoot ?: return
         val snapshot = breakpoints.value
-        viewModelScope.launch(dispatchers.io) { store.save(root, snapshot) }
+        val buffers = HashMap(texts)
+        persistJob?.cancel()
+        persistJob = viewModelScope.launch(dispatchers.io) {
+            kotlinx.coroutines.delay(PERSIST_DEBOUNCE_MILLIS)
+            store.save(root, store.entriesFor(snapshot, buffers))
+        }
     }
 
     /** Sets or clears a breakpoint on a line, as a tap on the line number does. */
@@ -292,5 +310,9 @@ class DebugViewModel(
             controller.detachNow()
             controllerScope.cancel()
         }
+    }
+
+    private companion object {
+        const val PERSIST_DEBOUNCE_MILLIS = 500L
     }
 }

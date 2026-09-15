@@ -52,16 +52,51 @@ class BreakpointLinesTest {
         assertEquals(setOf(1, 33, 40), edit(setOf(1, 3, 10), code.replace("line 3\n", block + "line 3\n")))
     }
 
+    private fun source(root: File, text: String) =
+        File(root, "src/main/java/a/Main.java").apply { parentFile.mkdirs(); writeText(text) }
+
+    /** Saved and restored with the file as it was: the same lines, relative to the project. */
     @Test
     fun the_store_keeps_them_across_a_restart_relative_to_the_project() {
         val root = temp.newFolder("project")
         val store = BreakpointStore(temp.newFolder("breakpoints"))
-        val saved = setOf(
-            FileBreakpoint(File(root, "src/main/java/a/Main.java"), 12),
-            FileBreakpoint(File(root, "lib/src/main/kotlin/b/Lib.kt"), 3),
-        )
-        store.save(root, saved)
-        assertEquals(saved, store.load(root))
+        val file = source(root, code)
+        val set = setOf(FileBreakpoint(file, 3), FileBreakpoint(file, 7))
+
+        store.save(root, store.entriesFor(set, emptyMap()))
+
+        assertEquals(set, store.load(root))
         assertEquals(emptySet<FileBreakpoint>(), store.load(temp.newFolder("other")))
+    }
+
+    /**
+     * **An edit that was never saved.** Two lines inserted above the breakpoint
+     * moved it from 5 to 7 in the buffer, and then the app closed. The file on
+     * disk still has it at 5, which is where it must come back.
+     */
+    @Test
+    fun an_unsaved_edit_restores_them_where_the_file_has_them() {
+        val root = temp.newFolder("project")
+        val store = BreakpointStore(temp.newFolder("breakpoints"))
+        val file = source(root, code)
+        val buffer = code.replace("line 2\n", "line 2\nnew\nnewer\n")
+
+        store.save(root, store.entriesFor(setOf(FileBreakpoint(file, 7)), mapOf(file to buffer)))
+
+        assertEquals(setOf(FileBreakpoint(file, 5)), store.load(root))
+    }
+
+    /** The same edit, saved afterwards: now the file has the buffer's lines. */
+    @Test
+    fun a_saved_edit_restores_them_where_the_buffer_had_them() {
+        val root = temp.newFolder("project")
+        val store = BreakpointStore(temp.newFolder("breakpoints"))
+        val file = source(root, code)
+        val buffer = code.replace("line 2\n", "line 2\nnew\nnewer\n")
+
+        store.save(root, store.entriesFor(setOf(FileBreakpoint(file, 7)), mapOf(file to buffer)))
+        file.writeText(buffer)
+
+        assertEquals(setOf(FileBreakpoint(file, 7)), store.load(root))
     }
 }

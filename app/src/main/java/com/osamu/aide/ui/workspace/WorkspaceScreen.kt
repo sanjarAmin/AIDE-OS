@@ -73,6 +73,10 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -439,28 +443,55 @@ fun WorkspaceScreen(
                             }
                         },
                         actions = {
-                            Box(contentAlignment = Alignment.Center) {
-                                if (isCompleting) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(36.dp)
-                                            .background(
-                                                MaterialTheme.colorScheme.primary.copy(alpha = aiPulseAlpha * 0.35f),
-                                                CircleShape,
-                                            ),
-                                    )
-                                }
-                                IconButton(onClick = { isChatOpen = true }) {
-                                    Icon(
-                                        Icons.AutoMirrored.Filled.Chat,
-                                        contentDescription = "Ask the assistant",
-                                        tint = if (isCompleting) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                    )
-                                }
+                            // **What does not fit goes in a menu, and the name
+                            // keeps a width.** Seven 48 dp buttons are 336 dp,
+                            // and with the drawer button that is wider than a
+                            // 360 or 411 dp phone before the title gets
+                            // anything: with a file unsaved the project name
+                            // was laid out 25 px wide and drew as "…". The
+                            // row squeeze CLAUDE.md records, again in the
+                            // toolbar. ToolbarLayout does the arithmetic. The consequential buttons -- Save,
+                            // Debug, Build -- always stay; the others fold
+                            // into More when the window is too narrow.
+                            val secondary = buildList {
+                                add(ToolbarAction.ASSISTANT)
+                                if (state.active != null) add(ToolbarAction.FIND)
+                                if (!mode.showsToolPane) add(ToolbarAction.TOOLS)
                             }
-                            if (state.active != null) {
-                                IconButton(onClick = viewModel::openSearch) {
-                                    Icon(Icons.Default.Search, contentDescription = "Find")
+                            val primaryCount = listOf(
+                                state.isDocumentDirty,
+                                !state.build.isRunning && debugActions.start != null && !debugState.isActive,
+                                true,
+                            ).count { it }
+                            val inline = ToolbarLayout.fitsInline(
+                                widthDp = LocalConfiguration.current.screenWidthDp,
+                                primary = primaryCount,
+                                secondary = secondary.size,
+                            )
+                            if (inline) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    if (isCompleting) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(36.dp)
+                                                .background(
+                                                    MaterialTheme.colorScheme.primary.copy(alpha = aiPulseAlpha * 0.35f),
+                                                    CircleShape,
+                                                ),
+                                        )
+                                    }
+                                    IconButton(onClick = { isChatOpen = true }) {
+                                        Icon(
+                                            Icons.AutoMirrored.Filled.Chat,
+                                            contentDescription = "Ask the assistant",
+                                            tint = if (isCompleting) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                        )
+                                    }
+                                }
+                                if (ToolbarAction.FIND in secondary) {
+                                    IconButton(onClick = viewModel::openSearch) {
+                                        Icon(Icons.Default.Search, contentDescription = "Find")
+                                    }
                                 }
                             }
                             if (state.isDocumentDirty) {
@@ -472,12 +503,54 @@ fun WorkspaceScreen(
                             // needs a way open that is not "start a build".
                             // Hidden on the wide layout, where the same panels
                             // are always on screen in the side pane.
-                            if (!mode.showsToolPane) {
+                            if (inline && ToolbarAction.TOOLS in secondary) {
                                 IconButton(onClick = viewModel::toggleToolPanel) {
                                     Icon(
                                         Icons.Default.AccountTree,
                                         contentDescription = "Show build and git tools",
                                     )
+                                }
+                            }
+                            if (!inline) {
+                                var menuOpen by remember { mutableStateOf(false) }
+                                Box(contentAlignment = Alignment.Center) {
+                                    // The assistant's pulse moves with it, or an
+                                    // inline completion in progress would show
+                                    // nowhere.
+                                    if (isCompleting) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(36.dp)
+                                                .background(
+                                                    MaterialTheme.colorScheme.primary.copy(alpha = aiPulseAlpha * 0.35f),
+                                                    CircleShape,
+                                                ),
+                                        )
+                                    }
+                                    IconButton(onClick = { menuOpen = true }) {
+                                        Icon(Icons.Default.MoreVert, contentDescription = "More actions")
+                                    }
+                                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                        DropdownMenuItem(
+                                            text = { Text("Ask the assistant") },
+                                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null) },
+                                            onClick = { menuOpen = false; isChatOpen = true },
+                                        )
+                                        if (ToolbarAction.FIND in secondary) {
+                                            DropdownMenuItem(
+                                                text = { Text("Find") },
+                                                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                                                onClick = { menuOpen = false; viewModel.openSearch() },
+                                            )
+                                        }
+                                        if (ToolbarAction.TOOLS in secondary) {
+                                            DropdownMenuItem(
+                                                text = { Text("Build and git tools") },
+                                                leadingIcon = { Icon(Icons.Default.AccountTree, contentDescription = null) },
+                                                onClick = { menuOpen = false; viewModel.toggleToolPanel() },
+                                            )
+                                        }
+                                    }
                                 }
                             }
                             // The same button does two different things, and
@@ -1410,4 +1483,25 @@ private enum class SideTool(val title: String) {
     PROBLEMS("Problems"),
     TERMINAL("Terminal"),
     LOGCAT("Logcat"),
+}
+
+/** The toolbar buttons that may fold into More; see [ToolbarLayout]. */
+internal enum class ToolbarAction { ASSISTANT, FIND, TOOLS }
+
+/**
+ * Whether every toolbar button fits beside the project name.
+ *
+ * Counted rather than measured: a `TopAppBar` gives its title whatever the
+ * actions leave, and the actions are laid out first, so by the time a
+ * measurement could tell the name is squeezed the decision has been made.
+ * [MIN_TITLE_DP] is enough for a short project name and its language badge.
+ */
+internal object ToolbarLayout {
+    private const val BUTTON_DP = 48
+    private const val MIN_TITLE_DP = 96
+    /** The navigation button and the bar's own start and end insets. */
+    private const val CHROME_DP = BUTTON_DP + 8
+
+    fun fitsInline(widthDp: Int, primary: Int, secondary: Int): Boolean =
+        CHROME_DP + (primary + secondary) * BUTTON_DP + MIN_TITLE_DP <= widthDp
 }
