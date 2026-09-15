@@ -23,6 +23,7 @@ import java.io.File
 object GradleEditorInputs {
 
     private const val CLASSPATH_FILE = "compile-classpath-debug.txt"
+    private const val SOURCES_FILE = "source-dirs-debug.txt"
 
     private val BUILD_FILES = setOf("build.gradle.kts", "build.gradle")
 
@@ -46,14 +47,28 @@ object GradleEditorInputs {
             def components = project.extensions.getByName('androidComponents')
             components.onVariants(components.selector().withBuildType('debug')) { variant ->
                 def classpath = variant.compileClasspath
+                // Every source directory the variant compiles, generated ones
+                // included -- BuildConfig, view binding, src/debug -- which is
+                // what AGP reports and what no walk of src/ can find.
+                def javaDirs = variant.sources.java?.all
+                def kotlinDirs = variant.sources.kotlin?.all
                 def output = project.layout.buildDirectory.file('aide/$CLASSPATH_FILE')
+                def sourcesOutput = project.layout.buildDirectory.file('aide/$SOURCES_FILE')
                 def record = project.tasks.register('aideRecordClasspath' + variant.name.capitalize()) { task ->
                     task.inputs.files(classpath)
+                    // As inputs, so the tasks that generate them run first.
+                    if (javaDirs != null) task.inputs.files(javaDirs)
+                    if (kotlinDirs != null) task.inputs.files(kotlinDirs)
                     task.outputs.file(output)
+                    task.outputs.file(sourcesOutput)
                     task.doLast {
                         def file = output.get().asFile
                         file.parentFile.mkdirs()
                         file.text = classpath.files.collect { it.absolutePath }.join('\n')
+                        def dirs = []
+                        if (javaDirs != null) dirs.addAll(javaDirs.get().collect { it.asFile.absolutePath })
+                        if (kotlinDirs != null) dirs.addAll(kotlinDirs.get().collect { it.asFile.absolutePath })
+                        sourcesOutput.get().asFile.text = dirs.unique().join('\n')
                     }
                 }
                 project.tasks.matching { it.name == 'assemble' + variant.name.capitalize() }
@@ -79,8 +94,8 @@ object GradleEditorInputs {
      * build-script reason above; a stray module folder that is not included
      * costs a few extra source files on the path, which is harmless.
      */
-    fun sourceRoots(root: File): List<File> =
-        root.walkTopDown()
+    fun sourceRoots(root: File): List<File> {
+        val walked = root.walkTopDown()
             .maxDepth(MAX_DEPTH)
             .onEnter { it == root || (it.name !in SKIPPED && !it.name.startsWith(".")) }
             .filter {
@@ -89,6 +104,36 @@ object GradleEditorInputs {
             }
             .sortedBy { it.invariantSeparatorsPath }
             .toList()
+        // What the last build compiled, which the walk cannot see: generated
+        // sources -- BuildConfig and view binding, before this, were
+        // unresolved in a project that built -- and variant folders such as
+        // src/debug/java. Only folders that exist, since a clean leaves the
+        // record pointing at generated folders that are gone.
+        val recorded = buildDirs(root)
+            .map { File(it, "aide/$SOURCES_FILE") }
+            .filter { it.isFile }
+            .flatMap { it.readLines() }
+            .filter { it.isNotBlank() }
+            .map(::File)
+            .filter { it.isDirectory }
+        return (walked + recorded).distinctBy { it.canonicalPath }
+    }
+
+    /**
+     * Each module's build directory, found from its build file without
+     * entering any build/: a walk that did would read every intermediate AGP
+     * wrote, thousands of files in a project of any size, to find a few.
+     */
+    private fun buildDirs(root: File): List<File> = root.walkTopDown()
+        .maxDepth(MAX_DEPTH)
+        .onEnter { it == root || (it.name !in SKIPPED && !it.name.startsWith(".")) }
+        .filter { it.isFile && it.name in BUILD_FILES }
+        .mapNotNull { it.parentFile }
+        .plus(root)
+        .distinct()
+        .map { File(it, "build") }
+        .filter { it.isDirectory }
+        .toList()
 
     /**
      * The jars the last debug build compiled against, and each module's `R`.
@@ -104,19 +149,7 @@ object GradleEditorInputs {
         // project the app knows as `/sdcard/...`, and the same directory under
         // two spellings would not be recognised as the project's own.
         val canonicalRoot = root.canonicalFile
-        // Each module's build directory, found from its build file without
-        // entering any build/: a walk that did would read every intermediate
-        // AGP wrote, thousands of files in a project of any size, to find a few.
-        val buildDirs = root.walkTopDown()
-            .maxDepth(MAX_DEPTH)
-            .onEnter { it == root || (it.name !in SKIPPED && !it.name.startsWith(".")) }
-            .filter { it.isFile && it.name in BUILD_FILES }
-            .mapNotNull { it.parentFile }
-            .plus(root)
-            .distinct()
-            .map { File(it, "build") }
-            .filter { it.isDirectory }
-            .toList()
+        val buildDirs = buildDirs(root)
 
         val recorded = buildDirs
             .map { File(it, "aide/$CLASSPATH_FILE") }

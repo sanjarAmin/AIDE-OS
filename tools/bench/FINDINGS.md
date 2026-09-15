@@ -103,9 +103,17 @@ Two defects in the wiring surfaced on the way, and both predate multi-module:
   waited for nothing, found no project, and returned. Nothing said so --
   platform types resolved, only dependencies stayed red.
 
+**Generated sources come from the build too.** `BuildConfig` and view binding
+were still unresolved: they are written under `build/generated/`, which no walk
+of `src/` finds. The same init script records the variant's
+`sources.java.all` and `sources.kotlin.all` -- AGP includes its own generated
+folders and `src/debug` there -- and the editor adds the ones that exist.
+Checked on AGP 9.3.2 with `buildConfig` and `viewBinding` on: the record lists
+`build/generated/source/buildConfig/debug` and
+`build/generated/data_binding_base_class_source_out/debug/out`.
+
 What is still missing: go-to-definition into a dependency, which has no source;
-a Gradle project's generated sources other than `R` (BuildConfig, view
-binding); and any of this before the first build.
+and any of this before the first build.
 
 ## Rebuilding after an edit
 

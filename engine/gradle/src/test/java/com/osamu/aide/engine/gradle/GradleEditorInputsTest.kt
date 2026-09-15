@@ -65,6 +65,38 @@ class GradleEditorInputsTest {
         assertTrue("a jar that no longer exists was kept", classpath.none { it.name == "gone.jar" })
     }
 
+    /**
+     * Generated sources come from what the build recorded, since no walk of
+     * `src/` finds them: `BuildConfig` and view binding were unresolved in a
+     * project that built. A recorded folder a clean has since removed is not
+     * put on the path.
+     */
+    @Test
+    fun generated_source_folders_the_build_recorded_are_sources_too() {
+        val root = temp.newFolder("project")
+        file(root, "app/build.gradle.kts")
+        file(root, "app/src/main/java/a/Main.java")
+        val buildConfig = File(root, "app/build/generated/source/buildConfig/debug").apply { mkdirs() }
+        val binding = File(root, "app/build/generated/data_binding_base_class_source_out/debug/out").apply { mkdirs() }
+        file(
+            root,
+            "app/build/aide/source-dirs-debug.txt",
+            listOf(File(root, "app/src/main/java"), buildConfig, binding, File(root, "app/src/debug/java"))
+                .joinToString("\n") { it.absolutePath },
+        )
+
+        val roots = GradleEditorInputs.sourceRoots(root).map { it.relativeTo(root).invariantSeparatorsPath }
+
+        assertEquals(
+            listOf(
+                "app/src/main/java",
+                "app/build/generated/source/buildConfig/debug",
+                "app/build/generated/data_binding_base_class_source_out/debug/out",
+            ),
+            roots,
+        )
+    }
+
     @Test
     fun a_project_never_built_has_no_classpath_yet() {
         val root = temp.newFolder("project")
@@ -79,5 +111,6 @@ class GradleEditorInputsTest {
         assertTrue(script, "withBuildType('debug')" in script)
         assertTrue(script, "compileClasspath" in script)
         assertTrue(script, "compile-classpath-debug.txt" in script)
+        assertTrue(script, "source-dirs-debug.txt" in script && "sources.java?.all" in script)
     }
 }
