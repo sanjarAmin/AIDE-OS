@@ -280,6 +280,12 @@ data class WorkspaceUiState(
 
     val hasUnsavedChanges: Boolean get() = openFiles.any { it.isDirty }
 
+    /** What the file tree marks: a tab open, and a tab with unsaved work. */
+    val openPaths: Set<String> get() = openFiles.mapTo(HashSet()) { it.file.absolutePath }
+
+    val dirtyPaths: Set<String>
+        get() = openFiles.filter { it.isDirty }.mapTo(HashSet()) { it.file.absolutePath }
+
     /**
      * What the gutter shows.
      *
@@ -470,6 +476,23 @@ class WorkspaceViewModel(
         _state.value.active?.let { active ->
             analyse(active.file, pendingText[active.file] ?: active.document.text)
         }
+    }
+
+    /**
+     * Closes every folder, leaving the project's own top level.
+     *
+     * Reaching a file in a Gradle project takes several folders, and the tree
+     * that gets you there is then a screenful of open ones you have to scroll
+     * past to reach anything else. The selection is kept: collapsing is about
+     * the folders, not about what you were looking at.
+     */
+    fun collapseAll() {
+        // The project's own folder stays open: it is the row the tree hangs
+        // off, and the pane does not draw it -- collapsing it would leave a
+        // header over nothing at all.
+        val root = _state.value.projectRoot?.absolutePath ?: return
+        _state.update { it.copy(expandedPaths = setOf(root)) }
+        rebuildTree()
     }
 
     fun toggle(node: FileNode) {

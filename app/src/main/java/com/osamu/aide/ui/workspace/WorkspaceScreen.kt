@@ -639,10 +639,15 @@ fun WorkspaceScreen(
                     modifier = Modifier.padding(padding).imePadding(),
                     fileTree = {
                         FileTreePane(
+                            projectName = state.projectName.ifEmpty { projectDir.name },
+                            language = state.projectLanguage,
                             nodes = state.visibleNodes,
                             expandedPaths = state.expandedPaths,
                             selected = state.selectedFile,
+                            openPaths = state.openPaths,
+                            dirtyPaths = state.dirtyPaths,
                             onNodeClick = viewModel::toggle,
+                            onCollapseAll = viewModel::collapseAll,
                         )
                     },
                     toolPane = {
@@ -751,13 +756,18 @@ fun WorkspaceScreen(
                 drawerContent = {
                     ModalDrawerSheet {
                         FileTreePane(
+                            projectName = state.projectName.ifEmpty { projectDir.name },
+                            language = state.projectLanguage,
                             nodes = state.visibleNodes,
                             expandedPaths = state.expandedPaths,
                             selected = state.selectedFile,
+                            openPaths = state.openPaths,
+                            dirtyPaths = state.dirtyPaths,
                             onNodeClick = { node ->
                                 viewModel.toggle(node)
                                 if (!node.isDirectory) scope.launch { drawerState.close() }
                             },
+                            onCollapseAll = viewModel::collapseAll,
                         )
                     }
                 },
@@ -1342,67 +1352,6 @@ private fun InstallProgressRow(
             } else {
                 LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 6.dp))
             }
-        }
-    }
-}
-
-@Composable
-private fun FileTreePane(
-    nodes: List<FileNode>,
-    expandedPaths: Set<String>,
-    selected: File?,
-    onNodeClick: (FileNode) -> Unit,
-) {
-    Surface(color = MaterialTheme.colorScheme.surface) {
-        LazyColumn(Modifier.fillMaxSize()) {
-            items(nodes, key = { it.file.absolutePath }) { node ->
-                FileTreeRow(
-                    node = node,
-                    isExpanded = node.file.absolutePath in expandedPaths,
-                    isSelected = selected == node.file,
-                    onClick = { onNodeClick(node) },
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun FileTreeRow(
-    node: FileNode,
-    isExpanded: Boolean,
-    isSelected: Boolean,
-    onClick: () -> Unit,
-) {
-    val background = if (isSelected) {
-        MaterialTheme.colorScheme.surfaceVariant
-    } else {
-        MaterialTheme.colorScheme.surface
-    }
-    val iconInfo = FileIcons.infoFor(node.file, node.isDirectory, isExpanded)
-    Surface(color = background, onClick = onClick) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                // Indentation is capped so deep package trees stay readable on a
-                // phone-width pane instead of pushing names off-screen.
-                .padding(start = (8 + node.depth.coerceAtMost(6) * 12).dp, end = 8.dp)
-                .padding(vertical = 7.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Icon(
-                imageVector = iconInfo.icon,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-                tint = iconInfo.tint,
-            )
-            Text(
-                text = node.name,
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
         }
     }
 }
