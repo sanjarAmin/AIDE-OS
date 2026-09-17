@@ -489,7 +489,12 @@ private fun LocalModelBenchmarkEntry(onOpen: () -> Unit) {
         androidx.compose.foundation.layout.Column(Modifier.weight(1f).padding(end = 12.dp)) {
             Text("Local model benchmark (preview)", style = MaterialTheme.typography.bodyLarge)
             Text(
-                "Download a coding model and measure how it runs on this phone. Not used by the chat yet.",
+                // "Not used by the chat yet" was true when this was written and
+                // is not any more -- the models it downloads are what the
+                // on-device assistant runs. A screen that describes a shipped
+                // feature as unfinished is worse than saying nothing.
+                "Download a coding model and measure how it runs on this phone. " +
+                    "The chat uses the same downloads.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

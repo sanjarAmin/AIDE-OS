@@ -130,6 +130,9 @@ class ChatStreamingTest {
         )
     }
 
+    /** Long enough that billing it to the tool would be unmistakable. */
+    private val APPROVAL_PAUSE_MS = 300L
+
     private val ChatUiState.assistantTexts: List<String>
         get() = entries.filterIsInstance<ChatEntry.FromAssistant>().map { it.text }
 
@@ -250,6 +253,40 @@ class ChatStreamingTest {
 
         val card = controller.state.value.entries.filterIsInstance<ChatEntry.Tool>().single()
         assertTrue("duration was not measured", card.durationMs >= 0)
+    }
+
+    /**
+     * **The card must not charge the tool for the user's thinking time.**
+     *
+     * Driving the phone showed `ls -la` labelled `40.0s`, because the clock
+     * started before the approval prompt and a person took that long to read
+     * it. The number is an account of the tool, and a reader takes it to mean
+     * the command was slow.
+     */
+    @Test
+    fun `the duration excludes the wait for approval`() = runTest(StandardTestDispatcher()) {
+        val calls = listOf(AiPart.FunctionCall("1", "edit_file", mapOf("path" to "Main.kt", "content" to "x")))
+        val client = FakeClient(listOf(Turn(emptyList(), calls), Turn(listOf("done"))))
+        val assistant = object : Assistant() {
+            override fun session(projectDir: File, approver: Approver, extraTools: List<AideTool>) =
+                AiSession(client, ProjectToolset(ProjectFiles(projectDir), extraTools), approver, unconfined)
+
+            override fun completer(): InlineCompleter? = null
+        }
+        val controller = ChatController(assistant, projectDir, this)
+
+        controller.send("edit it")
+        advanceUntilIdle()
+        // A deliberate wait, standing in for a person reading the prompt.
+        Thread.sleep(APPROVAL_PAUSE_MS)
+        controller.resolveApproval(true)
+        advanceUntilIdle()
+
+        val card = controller.state.value.entries.filterIsInstance<ChatEntry.Tool>().single()
+        assertTrue(
+            "the approval wait was billed to the tool: ${card.durationMs}ms",
+            card.durationMs < APPROVAL_PAUSE_MS,
+        )
     }
 
     @Test

@@ -89,14 +89,18 @@ data class ToolRun(
     val approved: Boolean,
     val outcome: ProjectFiles.Outcome,
     /**
-     * Wall-clock cost of the call.
+     * How long the tool itself took, excluding any wait for approval.
      *
      * Measured here because this is the only place that knows both ends, and
      * shown on the card so a turn that felt slow can be attributed: a grep over
      * a large project and a model thinking for a minute are the same spinner
-     * from the outside. Includes time spent waiting for the user to approve,
-     * which is the honest number for "how long did this take" even though it is
-     * not the tool's own cost.
+     * from the outside.
+     *
+     * **The approval wait is deliberately not counted.** It was, and driving
+     * the phone showed why that was wrong: `ls -la` came back labelled `40.0s`
+     * because the clock had been running while a person read the prompt and
+     * decided. The card is an account of what the tool cost, and a reader takes
+     * the number to mean the command was slow.
      */
     val durationMs: Long = 0,
 )
@@ -437,8 +441,9 @@ class AiSession(
 
     private suspend fun executeTool(name: String, input: Map<String, String>): ToolRun {
         val risk = toolset.find(name)?.risk ?: ToolRisk.READ_ONLY
-        val started = System.currentTimeMillis()
         val approved = risk == ToolRisk.MUTATING && approver.approve(name, input)
+        // After the approval, not before it: see [ToolRun.durationMs].
+        val started = System.currentTimeMillis()
 
         return ToolRun(
             name = name,

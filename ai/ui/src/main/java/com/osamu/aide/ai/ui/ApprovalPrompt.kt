@@ -64,7 +64,12 @@ internal fun ApprovalPrompt(
     val isCommand = request.toolName == "run_shell"
 
     Surface(
-        color = colors.secondaryContainer,
+        // **Neutral, not `secondaryContainer`.** That token is green in this
+        // theme, so the gate in front of rewriting someone's files rendered as
+        // a green banner -- which reads as "approved" at a glance, the opposite
+        // of what it is asking. A lifted neutral separates it from the
+        // transcript without colouring the decision.
+        color = colors.surfaceContainerHighest,
         modifier = Modifier.fillMaxWidth().testTag(APPROVAL_TAG),
     ) {
         Column(
@@ -78,7 +83,7 @@ internal fun ApprovalPrompt(
                 Icon(
                     if (isCommand) Icons.Default.Terminal else Icons.Default.EditNote,
                     contentDescription = null,
-                    tint = colors.onSecondaryContainer,
+                    tint = colors.primary,
                     modifier = Modifier.size(18.dp),
                 )
                 // Names the thing, in the user's terms. "Run a command in your
@@ -91,7 +96,7 @@ internal fun ApprovalPrompt(
                         "Change ${request.path.ifBlank { "a file" }}?"
                     },
                     style = MaterialTheme.typography.titleSmall,
-                    color = colors.onSecondaryContainer,
+                    color = colors.onSurface,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f),
                 )
