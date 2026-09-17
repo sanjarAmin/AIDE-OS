@@ -44,6 +44,29 @@ class LocalModelServer(
     private var process: Process? = null
     private val log = StringBuilder()
 
+    /**
+     * Forgets an address left behind by a process that is gone.
+     *
+     * **Found by driving the app.** Force-stopping it kills the server, but
+     * nothing runs to clear the address it published, so the next launch read
+     * `local.baseUrl`, reported the provider ready, and sent the first message
+     * to a port nobody was listening on -- a connection refused where the
+     * honest answer is "start the server".
+     *
+     * Probed rather than assumed cleared, because the opposite case is real
+     * too: a `llama-server` is an ordinary child process and can outlive an app
+     * that crashed rather than being force-stopped. If it still answers it is
+     * still usable, and dropping the address would strand it holding a
+     * gigabyte of model with nothing able to stop it.
+     */
+    fun adoptOrForgetExistingServer() {
+        val address = keys.localBaseUrl()?.takeIf { it.isNotBlank() } ?: return
+        if (!answersHealth(address)) {
+            Log.i(TAG, "clearing stale address $address; nothing is listening")
+            keys.saveLocalBaseUrl(null)
+        }
+    }
+
     /** True while a server this class started is still alive. */
     val isRunning: Boolean get() = process?.isAlive == true
 
@@ -167,18 +190,20 @@ class LocalModelServer(
         val deadline = System.currentTimeMillis() + HEALTH_TIMEOUT_MS
         while (System.currentTimeMillis() < deadline) {
             if (!started.isAlive) return false
-            val ok = runCatching {
-                (URL("$address/health").openConnection() as HttpURLConnection).run {
-                    connectTimeout = 1_000
-                    readTimeout = 1_000
-                    responseCode == 200
-                }
-            }.getOrDefault(false)
-            if (ok) return true
+            if (answersHealth(address)) return true
             Thread.sleep(250)
         }
         return false
     }
+
+    /** One `/health` probe. Short timeouts: this is loopback, or it is nothing. */
+    private fun answersHealth(address: String): Boolean = runCatching {
+        (URL("$address/health").openConnection() as HttpURLConnection).run {
+            connectTimeout = 1_000
+            readTimeout = 1_000
+            responseCode == 200
+        }
+    }.getOrDefault(false)
 
     private companion object {
         const val TAG = "LocalModelServer"

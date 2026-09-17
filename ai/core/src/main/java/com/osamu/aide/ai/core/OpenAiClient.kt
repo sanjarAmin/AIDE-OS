@@ -20,7 +20,9 @@ class OpenAiClient(
     private val customBaseUrl: String? = null,
     override val model: String = AiProviderType.OPENAI.defaultModel,
     override val provider: AiProviderType = AiProviderType.OPENAI,
-    private val httpClient: OkHttpClient = OkHttpClient(),
+    // Declared after `provider` on purpose: the default reads it, and a model
+    // running on this phone needs a wholly different patience from a cloud API.
+    private val httpClient: OkHttpClient = defaultHttpClient(provider),
 ) : AiClient {
 
     /**
@@ -323,6 +325,42 @@ class OpenAiClient(
 
     companion object {
         const val DEFAULT_BASE_URL = "https://api.openai.com"
+
+        /**
+         * **A local model needs minutes where a cloud API needs seconds.**
+         *
+         * OkHttp's default read timeout is ten seconds, which is generous for a
+         * hosted API and hopeless for a `llama-server` on a phone: the first
+         * message to an on-device 1.5B timed out on hardware, with the server
+         * still running and still working. The reply never had a chance to
+         * arrive.
+         *
+         * The number is not arbitrary. `tools/localai/FINDINGS.md` §8 measured
+         * a project-sized prompt at 306 s on a 7B and the assistant sends the
+         * project listing with every question, so anything under a few minutes
+         * would fail on the model sizes this app offers to download.
+         *
+         * **Only the local provider gets it.** Raising it everywhere would mean
+         * a wedged cloud request sitting for five minutes with a spinner rather
+         * than failing while the user still remembers asking.
+         */
+        internal fun defaultHttpClient(provider: AiProviderType): OkHttpClient =
+            if (provider == AiProviderType.LOCAL) {
+                OkHttpClient.Builder()
+                    // Connecting is loopback and either works at once or never.
+                    .connectTimeout(java.time.Duration.ofSeconds(10))
+                    .readTimeout(LOCAL_READ_TIMEOUT)
+                    .writeTimeout(LOCAL_READ_TIMEOUT)
+                    // No call timeout: the read timeout is the one that should
+                    // fire, and a call timeout would cut a reply that is still
+                    // arriving token by token.
+                    .build()
+            } else {
+                OkHttpClient()
+            }
+
+        /** @see defaultHttpClient */
+        internal val LOCAL_READ_TIMEOUT: java.time.Duration = java.time.Duration.ofMinutes(10)
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
         private val COMPLETION_INSTRUCTIONS = """

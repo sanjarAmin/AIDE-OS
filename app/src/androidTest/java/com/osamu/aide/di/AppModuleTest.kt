@@ -1,6 +1,7 @@
 package com.osamu.aide.di
 
 import androidx.test.platform.app.InstrumentationRegistry
+import com.osamu.aide.ai.LocalModelServer
 import com.osamu.aide.ai.core.ApiKeyStore
 import com.osamu.aide.ai.core.Assistant
 import com.osamu.aide.engine.fast.KotlinToolchainProvider
@@ -62,6 +63,11 @@ class AppModuleTest {
         assertNotNull(koin.get<LanguageServices>())
         assertNotNull(koin.get<Assistant>())
         assertNotNull(koin.get<ApiKeyStore>())
+        // The on-device model server joined the graph with the LOCAL provider.
+        // A singleton because it owns a `llama-server` process, which is
+        // exactly the shape that must not be constructed twice -- two
+        // instances would mean two servers each holding a gigabyte of model.
+        assertNotNull(koin.get<LocalModelServer>())
         // Version control joined the graph with M8. GitWorkspace takes four
         // constructor arguments, two of which have defaults that Koin does not
         // use -- so a definition that named them in the wrong order would

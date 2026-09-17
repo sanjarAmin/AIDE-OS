@@ -62,6 +62,7 @@ import com.osamu.aide.ai.core.ApiKeyStore
 import com.osamu.aide.ai.core.Endpoint
 import com.osamu.aide.ai.core.GoogleAuthManager
 import com.osamu.aide.ai.core.parseEndpoint
+import org.koin.compose.koinInject
 
 /**
  * Choosing an assistant and giving it a key.
@@ -285,150 +286,168 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                     )
                 }
 
+                // The on-device provider's equivalent of the key field: it is
+                // configured by downloading a model and starting a process, not
+                // by pasting a secret, so the control replaces the key rather
+                // than sitting beside it. Inside the provider's surface for the
+                // reason Gemini's card is.
+                if (activeProvider == AiProviderType.LOCAL) {
+                    LocalServerControl(
+                        server = koinInject(),
+                        toolchain = koinInject(),
+                        keys = keys,
+                    )
+                }
+
                 // -- Key ---------------------------------------------------
 
-                ProviderProperty(
-                    label = "Key",
-                    value = if (saved) "Saved on this device" else "Not set",
-                    expanded = editingKey,
-                    onToggle = { editingKey = !editingKey },
-                ) {
-                    providerConsoleUrl(activeProvider)?.let { url ->
-                        OutlinedButton(
-                            onClick = {
-                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.OpenInNew,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
-                            )
-                            Text(
-                                text = providerConsoleLabel(activeProvider),
-                                modifier = Modifier.padding(start = 8.dp),
-                            )
-                        }
-                    }
-
-                    val detectedKey = clipboardKey
-                    if (detectedKey != null && detectedKey != draft) {
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = MaterialTheme.colorScheme.primaryContainer,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween,
+                // **No key row for the on-device provider.** A field labelled
+                // Key that can never be filled is a question with no right
+                // answer, and the tick beside it would never light.
+                if (activeProvider != AiProviderType.LOCAL) {
+                    ProviderProperty(
+                        label = "Key",
+                        value = if (saved) "Saved on this device" else "Not set",
+                        expanded = editingKey,
+                        onToggle = { editingKey = !editingKey },
+                    ) {
+                        providerConsoleUrl(activeProvider)?.let { url ->
+                            OutlinedButton(
+                                onClick = {
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                                },
+                                modifier = Modifier.fillMaxWidth(),
                             ) {
-                                Column(Modifier.weight(1f).padding(end = 8.dp)) {
-                                    Text(
-                                        text = "Found ${activeProvider.displayName} key in clipboard",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    )
-                                    Text(
-                                        text = detectedKey.take(8) + "..." + detectedKey.takeLast(4),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
-                                    )
-                                }
-                                Button(
-                                    onClick = { draft = detectedKey },
-                                    contentPadding = ButtonDefaults.TextButtonContentPadding,
-                                ) {
-                                    Text("Use key")
-                                }
-                            }
-                        }
-                    }
-
-                    OutlinedTextField(
-                        value = draft,
-                        onValueChange = { draft = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .semantics { contentDescription = "API key" },
-                        label = { Text(if (saved) "Replace key" else "API key") },
-                        placeholder = { Text(keyPlaceholder(activeProvider)) },
-                        supportingText = { Text(whereToGetAKey(activeProvider)) },
-                        singleLine = true,
-                        visualTransformation = if (revealed) {
-                            VisualTransformation.None
-                        } else {
-                            PasswordVisualTransformation()
-                        },
-                        trailingIcon = {
-                            IconButton(onClick = { revealed = !revealed }) {
                                 Icon(
-                                    if (revealed) {
-                                        Icons.Default.VisibilityOff
-                                    } else {
-                                        Icons.Default.Visibility
-                                    },
-                                    contentDescription = if (revealed) "Hide key" else "Show key",
+                                    Icons.AutoMirrored.Filled.OpenInNew,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Text(
+                                    text = providerConsoleLabel(activeProvider),
+                                    modifier = Modifier.padding(start = 8.dp),
                                 )
                             }
-                        },
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Button(
-                            onClick = {
-                                val trimmed = draft.trim()
-                                when (activeProvider) {
-                                    // Only Anthropic writes the legacy slot.
-                                    // Every provider used to write it, so saving
-                                    // a Gemini key put that key in Anthropic's
-                                    // store and lit Anthropic's tick.
-                                    AiProviderType.ANTHROPIC -> keys.save(trimmed)
-                                    AiProviderType.GEMINI -> keys.saveGeminiApiKey(trimmed)
-                                    AiProviderType.OPENAI -> keys.saveOpenAiApiKey(trimmed)
-                                    AiProviderType.CUSTOM -> keys.saveCustomApiKey(trimmed)
-                                    // Nothing to save. The server is on this
-                                    // phone's loopback and authenticates nobody;
-                                    // the key field is not shown for it.
-                                    AiProviderType.LOCAL -> Unit
-                                }
-                                saved = true
-                                draft = ""
-                                revealed = false
-                                editingKey = false
-                            },
-                            enabled = draft.isNotBlank(),
-                        ) { Text("Save key") }
+                        }
 
-                        TextButton(
-                            onClick = {
-                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                                val clipText = clipboard?.primaryClip?.let { clip ->
-                                    if (clip.itemCount > 0) clip.getItemAt(0)?.text?.toString() else null
-                                }?.trim().orEmpty()
-                                if (clipText.isNotEmpty()) {
-                                    draft = clipText
+                        val detectedKey = clipboardKey
+                        if (detectedKey != null && detectedKey != draft) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                                        Text(
+                                            text = "Found ${activeProvider.displayName} key in clipboard",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        )
+                                        Text(
+                                            text = detectedKey.take(8) + "..." + detectedKey.takeLast(4),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                                        )
+                                    }
+                                    Button(
+                                        onClick = { draft = detectedKey },
+                                        contentPadding = ButtonDefaults.TextButtonContentPadding,
+                                    ) {
+                                        Text("Use key")
+                                    }
+                                }
+                            }
+                        }
+
+                        OutlinedTextField(
+                            value = draft,
+                            onValueChange = { draft = it },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .semantics { contentDescription = "API key" },
+                            label = { Text(if (saved) "Replace key" else "API key") },
+                            placeholder = { Text(keyPlaceholder(activeProvider)) },
+                            supportingText = { Text(whereToGetAKey(activeProvider)) },
+                            singleLine = true,
+                            visualTransformation = if (revealed) {
+                                VisualTransformation.None
+                            } else {
+                                PasswordVisualTransformation()
+                            },
+                            trailingIcon = {
+                                IconButton(onClick = { revealed = !revealed }) {
+                                    Icon(
+                                        if (revealed) {
+                                            Icons.Default.VisibilityOff
+                                        } else {
+                                            Icons.Default.Visibility
+                                        },
+                                        contentDescription = if (revealed) "Hide key" else "Show key",
+                                    )
                                 }
                             },
-                        ) { Text("Paste") }
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Button(
+                                onClick = {
+                                    val trimmed = draft.trim()
+                                    when (activeProvider) {
+                                        // Only Anthropic writes the legacy slot.
+                                        // Every provider used to write it, so saving
+                                        // a Gemini key put that key in Anthropic's
+                                        // store and lit Anthropic's tick.
+                                        AiProviderType.ANTHROPIC -> keys.save(trimmed)
+                                        AiProviderType.GEMINI -> keys.saveGeminiApiKey(trimmed)
+                                        AiProviderType.OPENAI -> keys.saveOpenAiApiKey(trimmed)
+                                        AiProviderType.CUSTOM -> keys.saveCustomApiKey(trimmed)
+                                        // Nothing to save. The server is on this
+                                        // phone's loopback and authenticates nobody;
+                                        // the key field is not shown for it.
+                                        AiProviderType.LOCAL -> Unit
+                                    }
+                                    saved = true
+                                    draft = ""
+                                    revealed = false
+                                    editingKey = false
+                                },
+                                enabled = draft.isNotBlank(),
+                            ) { Text("Save key") }
 
-                        if (saved) {
                             TextButton(
                                 onClick = {
-                                    keys.clearProviderKey(activeProvider)
-                                    saved = keys.hasProviderKey(activeProvider)
-                                    draft = ""
-                                    // Left open: there is now nothing stored,
-                                    // and the field is what to do about it.
-                                    editingKey = true
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                    val clipText = clipboard?.primaryClip?.let { clip ->
+                                        if (clip.itemCount > 0) clip.getItemAt(0)?.text?.toString() else null
+                                    }?.trim().orEmpty()
+                                    if (clipText.isNotEmpty()) {
+                                        draft = clipText
+                                    }
                                 },
-                            ) { Text("Remove") }
+                            ) { Text("Paste") }
+
+                            if (saved) {
+                                TextButton(
+                                    onClick = {
+                                        keys.clearProviderKey(activeProvider)
+                                        saved = keys.hasProviderKey(activeProvider)
+                                        draft = ""
+                                        // Left open: there is now nothing stored,
+                                        // and the field is what to do about it.
+                                        editingKey = true
+                                    },
+                                ) { Text("Remove") }
+                            }
                         }
                     }
                 }

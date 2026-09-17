@@ -1,6 +1,7 @@
 package com.osamu.aide.di
 
 import android.content.Context
+import com.osamu.aide.ai.LocalModelServer
 import com.osamu.aide.ai.core.ApiKeyStore
 import com.osamu.aide.ai.core.Assistant
 import com.osamu.aide.core.common.DefaultDispatcherProvider
@@ -72,6 +73,14 @@ val appModule = module {
     single { ReleaseKeystoreStore(get()) }
     single { ApiKeyStore(get()) }
     single { Assistant(get(), get()) }
+
+    // **A singleton because it owns a process.** LocalModelServer holds the
+    // `llama-server` it started, and a second instance would start a second
+    // server on a second port while the first went on holding a gigabyte of
+    // model. It also has to outlive the settings screen: starting a server and
+    // navigating away must leave it running, since that is the whole point of
+    // starting it.
+    single { LocalModelServer(get(), get(), get()) }
 
     // Version control. The two stores are singletons for the same reason
     // ApiKeyStore is: each holds a handle to preferences and a Keystore entry

@@ -116,4 +116,35 @@ class LocalProviderTest {
             (parsed as? Endpoint.Custom)?.baseUrl,
         )
     }
+
+    /**
+     * **The local provider waits minutes; the others do not.**
+     *
+     * Found by driving the app: the first message to an on-device 1.5B came
+     * back `timeout` while the server was still running and still working.
+     * OkHttp's default read timeout is ten seconds, which is right for a hosted
+     * API and hopeless for a model generating on a phone —
+     * `tools/localai/FINDINGS.md` §8 measured a project-sized prompt at 306 s
+     * on a 7B, and the assistant sends the project listing with every question.
+     *
+     * The second assertion matters as much as the first: raising the timeout
+     * everywhere would leave a wedged cloud request spinning for minutes rather
+     * than failing while the user still remembers asking.
+     */
+    @Test
+    fun the_local_client_is_patient_and_the_others_are_not() {
+        val local = OpenAiClient.defaultHttpClient(AiProviderType.LOCAL)
+        val remote = OpenAiClient.defaultHttpClient(AiProviderType.OPENAI)
+
+        assertTrue(
+            "the local read timeout is ${local.readTimeoutMillis} ms, too short for " +
+                "a model generating on a phone",
+            local.readTimeoutMillis >= 5 * 60_000,
+        )
+        assertTrue(
+            "a cloud request would now hang for ${remote.readTimeoutMillis} ms " +
+                "before failing",
+            remote.readTimeoutMillis in 1..60_000,
+        )
+    }
 }

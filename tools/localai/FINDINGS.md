@@ -73,7 +73,7 @@ sends the project listing with every question.
 > not evidence about instruction sets. §8 also measures what the missing
 > instructions are actually worth: about a quarter, not an order of magnitude.
 
-## 4. Tool use separates the model sizes, and the 1.5B is recoverable
+## 4. Tool use separates the model sizes, and the 1.5B is recoverable (but see §9)
 
 The assistant reads and edits files through tools, so each model was offered a
 `read_file` tool and asked what a file contains, five times:
@@ -85,6 +85,11 @@ The assistant reads and edits files through tools, so each model was offered a
 
 The 0.5B is unusable for the assistant, and worse than unusable: it answers
 questions about files it never opened, plausibly.
+
+> **§9 qualifies this section's conclusion.** The parsing problem below is real
+> and is now solved, but "recoverable" was about the *transport*. Driven end to
+> end, the 1.5B chose the right tool and then called it twelve times without
+> ever answering. Choosing correctly is not terminating.
 
 The 1.5B chooses correctly and then prints the call as a fenced `json` block
 instead of in the markup the chat template expects, so the server's parser
@@ -412,6 +417,40 @@ A chat template that the server parses natively would still be better: a
 recovered call has no id, so it relies on the generic loop matching results by
 name, which is the path Gemini needs anyway.
 
+## 9. The whole path works, and the 1.5B cannot stop
+
+Driven on the NX809J, 2026-09-17: `llama-server` started from Settings, the
+address published, a message sent from the chat panel, tool calls parsed and
+executed against the project. **Every piece this app owns works.** What does
+not work is the model.
+
+Asked a bare `hello`, Qwen2.5-Coder 1.5B called `list_files` **twelve times in
+succession** and never produced an answer. `AiSession`'s loop guard ended it:
+*"I stopped after 12 rounds of tool calls without finishing."* Eighteen and a
+half minutes of CPU time for no reply.
+
+**This revises §4.** That section measured the 1.5B choosing `read_file`
+correctly 5/5 and called it "recoverable", meaning the written-JSON calls could
+be parsed. They can, and they were — the tool cards in the panel are real
+executions. But *choosing* the right tool is not the same as *deciding to
+stop*, and a model that cannot terminate is not an agent however well it picks.
+A one-shot question needs no tools at all, and this one reached for them twelve
+times.
+
+Two things follow for anyone continuing this:
+
+- **Test termination, not just selection.** §4's five trials all asked a
+  question whose answer was one tool call. None asked whether the model would
+  stop, and that is the property that decides whether the assistant is usable.
+- **The loop guard is doing real work.** Without it the session would have run
+  until the read timeout, which for this provider is ten minutes (§8's model
+  sizes need it). A guard measured in *rounds* rather than seconds is the right
+  shape, and twelve is generous.
+
+Untested: whether the 3B terminates, and whether a system prompt that tells the
+model it may answer without tools changes the 1.5B's behaviour. The second is
+cheap and worth trying before concluding the small models are unusable.
+
 ## What this makes a local model
 
 **Viable to build, with the 1.5B as the smallest model worth offering**, and
@@ -439,10 +478,16 @@ worth building only once a phone's numbers are in:
    every question and a phone pays for it twice, in KV cache and in
    prompt-reading time.
 
-   **What is not done: nothing calls `LocalModelServer` yet.** There is no UI
-   to choose a model, start it, or stop it, and no lifecycle tying it to the
-   chat panel. Until that exists the provider can be selected and will report
-   itself not ready, which is honest but not useful.
+   ~~**What is not done: nothing calls `LocalModelServer`**~~ — the control is
+   in Settings now (status, a size picker, start/stop), and the path works end
+   to end on hardware (§9). Two defects that only driving found: the HTTP read
+   timeout was OkHttp's ten-second default, which a model generating on a phone
+   cannot meet; and a force-stop left the published address behind, so the
+   provider reported itself ready with nothing listening. Both fixed.
+
+   **What remains is the model, not the plumbing** (§9): the 1.5B loops on tool
+   calls and never finishes. Try a system prompt that permits answering without
+   tools, and measure the 3B, before offering this as a feature.
 
 Still unasked: whether Android freezes or kills a `llama-server` child process
 when the IDE is in the background (the debugger's §9 problem), whether the
