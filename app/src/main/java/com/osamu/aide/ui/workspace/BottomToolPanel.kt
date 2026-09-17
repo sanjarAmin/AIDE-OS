@@ -67,7 +67,7 @@ import com.osamu.aide.engine.api.DiagnosticSeverity
 import java.io.File
 
 /** Tabs whose content needs more than a strip: see the height below. */
-private val TALL_TABS = setOf(ToolTab.DEBUG, ToolTab.GIT, ToolTab.TERMINAL)
+private val TALL_TABS = setOf(ToolTab.DEBUG, ToolTab.GIT, ToolTab.TERMINAL, ToolTab.LOGCAT)
 
 enum class ToolTab(val title: String, val icon: ImageVector) {
     BUILD("Build", Icons.Default.PlayCircleOutline),
