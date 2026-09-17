@@ -53,6 +53,9 @@ interface ProjectRepository {
      * to be recreated. It is one field in the descriptor and always was.
      */
     suspend fun setEngine(project: Project, engine: BuildEngine): AppResult<Project>
+
+    /** Deletes [project] and all its files from disk. */
+    suspend fun deleteProject(project: Project): AppResult<Unit>
 }
 
 class FileProjectRepository(
@@ -156,6 +159,17 @@ class FileProjectRepository(
         withContext(dispatchers.io) {
             runCatchingResult {
                 writeDescriptor(project.copy(lastOpenedAt = System.currentTimeMillis()))
+            }
+        }
+
+    override suspend fun deleteProject(project: Project): AppResult<Unit> =
+        withContext(dispatchers.io) {
+            runCatchingResult {
+                val dir = project.rootDir
+                if (dir.exists()) {
+                    dir.deleteRecursively()
+                }
+                Unit
             }
         }
 

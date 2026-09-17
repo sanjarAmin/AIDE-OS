@@ -113,6 +113,47 @@ class GitRepository internal constructor(
             AppResult.Success(Unit)
         }
 
+    /** Discards unstaged modifications in [paths], or deletes untracked files. */
+    suspend fun discard(paths: Collection<String>): AppResult<Unit> =
+        io("Could not discard changes") {
+            if (paths.isEmpty()) return@io AppResult.Success(Unit)
+            val stat = git.status().call()
+            val untracked = stat.untracked
+            val checkout = git.checkout()
+            var hasCheckout = false
+            for (path in paths) {
+                if (path in untracked) {
+                    File(workTree, path).delete()
+                } else {
+                    checkout.addPath(path)
+                    hasCheckout = true
+                }
+            }
+            if (hasCheckout) {
+                checkout.call()
+            }
+            AppResult.Success(Unit)
+        }
+
+    /** Lists all local branch names. */
+    suspend fun listBranches(): AppResult<List<String>> =
+        io("Could not list branches") {
+            val refs = git.branchList().call()
+            val branches = refs.map { it.name.removePrefix(Constants.R_HEADS) }
+            AppResult.Success(branches)
+        }
+
+    /** Checks out an existing branch, or creates a new one if [createNew] is true. */
+    suspend fun checkoutBranch(name: String, createNew: Boolean = false): AppResult<Unit> =
+        io("Could not checkout branch $name") {
+            val cmd = git.checkout().setName(name)
+            if (createNew) {
+                cmd.setCreateBranch(true)
+            }
+            cmd.call()
+            AppResult.Success(Unit)
+        }
+
     /**
      * Commits what is staged.
      *

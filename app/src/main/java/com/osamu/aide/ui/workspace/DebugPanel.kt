@@ -15,19 +15,32 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
@@ -82,6 +95,7 @@ fun DebugPanel(
 ) {
     val session = state.session
     val building = session == DebugState.Idle && buildStatus != null
+    var variableFilter by remember { mutableStateOf("") }
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -137,7 +151,7 @@ fun DebugPanel(
 
         LazyColumn(Modifier.fillMaxWidth()) {
             if (session is DebugState.Stopped) {
-                stopped(session, actions)
+                stopped(session, actions, variableFilter, onFilterChange = { variableFilter = it })
             } else {
                 breakpoints(state, actions, projectRoot)
             }
@@ -183,10 +197,42 @@ private fun SessionControls(session: DebugState, actions: DebugActions) {
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        FilledTonalButton(onClick = actions.resume, enabled = stopped) { Text("Resume") }
-        OutlinedButton(onClick = actions.stepOver, enabled = stopped) { Text("Step over") }
-        OutlinedButton(onClick = actions.stepInto, enabled = stopped) { Text("Step into") }
-        OutlinedButton(onClick = actions.stepOut, enabled = stopped) { Text("Step out") }
+        FilledTonalButton(
+            onClick = actions.resume,
+            enabled = stopped,
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+        ) {
+            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("Resume")
+        }
+        OutlinedButton(
+            onClick = actions.stepOver,
+            enabled = stopped,
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+        ) {
+            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("Over")
+        }
+        OutlinedButton(
+            onClick = actions.stepInto,
+            enabled = stopped,
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+        ) {
+            Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("Into")
+        }
+        OutlinedButton(
+            onClick = actions.stepOut,
+            enabled = stopped,
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+        ) {
+            Icon(Icons.Default.KeyboardArrowUp, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("Out")
+        }
     }
 }
 
@@ -261,18 +307,67 @@ private fun LazyListScope.breakpoints(state: DebugUiState, actions: DebugActions
     }
 }
 
-private fun LazyListScope.stopped(session: DebugState.Stopped, actions: DebugActions) {
+private fun LazyListScope.stopped(
+    session: DebugState.Stopped,
+    actions: DebugActions,
+    variableFilter: String,
+    onFilterChange: (String) -> Unit,
+) {
     // **Variables first.** They are what a breakpoint is for; the stack is how
     // execution got there, and on a phone it is fifty frames of framework that
     // pushed the variables below the bottom of the dock. Selecting a frame
     // still changes which variables show.
     sectionTitle("Variables")
+    if (session.variables.isNotEmpty() || variableFilter.isNotEmpty()) {
+        item(key = "variables-filter") {
+            OutlinedTextField(
+                value = variableFilter,
+                onValueChange = onFilterChange,
+                placeholder = { Text("Filter variables…", style = MaterialTheme.typography.bodySmall) },
+                leadingIcon = {
+                    Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp))
+                },
+                trailingIcon = if (variableFilter.isNotEmpty()) {
+                    {
+                        IconButton(onClick = { onFilterChange("") }, modifier = Modifier.size(24.dp)) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear search", modifier = Modifier.size(16.dp))
+                        }
+                    }
+                } else null,
+                singleLine = true,
+                textStyle = CodeTextStyle,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+            )
+        }
+    }
     session.variablesNote?.let { note ->
         item(key = "variables-note") {
             Text(note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
-    variables(session.variables, session.expanded, depth = 0, path = "v", actions)
+    val filteredList = if (variableFilter.isBlank()) {
+        session.variables
+    } else {
+        session.variables.filter {
+            it.name.contains(variableFilter, ignoreCase = true) ||
+                it.value.contains(variableFilter, ignoreCase = true) ||
+                it.type.contains(variableFilter, ignoreCase = true)
+        }
+    }
+    if (filteredList.isEmpty() && session.variables.isNotEmpty()) {
+        item(key = "no-matching-variables") {
+            Text(
+                text = "No variables match \"$variableFilter\"",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 4.dp),
+            )
+        }
+    } else {
+        variables(filteredList, session.expanded, depth = 0, path = "v", actions)
+    }
 
     sectionTitle("Frames")
     items(session.frames.withIndex().toList(), key = { "frame-${it.index}" }) { (index, frame) ->

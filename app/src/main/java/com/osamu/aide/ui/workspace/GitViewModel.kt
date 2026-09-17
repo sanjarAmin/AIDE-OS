@@ -35,6 +35,7 @@ data class GitUiState(
     val hasIdentity: Boolean = false,
     /** The diff being looked at, or null. */
     val diff: GitDiff? = null,
+    val branches: List<String> = emptyList(),
 )
 
 /**
@@ -209,10 +210,12 @@ class GitViewModel(
         val status = repo.status()
         val log = repo.log(limit = RECENT_COMMITS)
         val branch = repo.currentBranch()
+        val branches = repo.listBranches()
         val hasIdentity = identities.read() != null
         _state.update {
             it.copy(
                 branch = branch,
+                branches = (branches as? AppResult.Success)?.value ?: it.branches,
                 status = (status as? AppResult.Success)?.value ?: it.status,
                 recent = (log as? AppResult.Success)?.value ?: it.recent,
                 hasIdentity = hasIdentity,
@@ -254,6 +257,22 @@ class GitViewModel(
     fun stage(paths: Collection<String>) = mutate { it.stage(paths) }
 
     fun unstage(paths: Collection<String>) = mutate { it.unstage(paths) }
+
+    fun stageAll() {
+        val s = _state.value.status
+        val unstaged = (s.unstaged + s.untracked).toList()
+        if (unstaged.isNotEmpty()) stage(unstaged)
+    }
+
+    fun unstageAll() {
+        val s = _state.value.status
+        val staged = s.staged.toList()
+        if (staged.isNotEmpty()) unstage(staged)
+    }
+
+    fun discard(paths: Collection<String>) = mutate { it.discard(paths) }
+
+    fun checkoutBranch(name: String, createNew: Boolean = false) = mutate { it.checkoutBranch(name, createNew) }
 
     /**
      * Commits what is staged, then clears the message.

@@ -1,45 +1,61 @@
 package com.osamu.aide.ui.workspace
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.osamu.aide.core.ui.theme.CodeTextStyle
+import com.osamu.aide.ui.util.FileIcons
+import java.io.File
 
 /**
  * What the git panel can do, gathered so it can be passed through the layout.
- *
- * [EditorArea] and [BottomToolDock] only forward these; threading six lambdas
- * through two signatures that do not use any of them makes both harder to read
- * than the indirection costs.
  */
 data class GitActions(
     val stage: (String) -> Unit,
@@ -51,18 +67,14 @@ data class GitActions(
     val initialise: () -> Unit,
     val showDiff: (path: String, staged: Boolean) -> Unit,
     val dismissDiff: () -> Unit,
+    val stageAll: () -> Unit = {},
+    val unstageAll: () -> Unit = {},
+    val discard: (String) -> Unit = {},
+    val checkoutBranch: (name: String, createNew: Boolean) -> Unit = { _, _ -> },
 )
 
 /**
  * Stage, commit and push, in the dock beside the build output.
- *
- * A list of changed paths rather than a diff, because there is no diff yet --
- * `vcs/git/FINDINGS.md` lists it as the next thing the panel needs. Saying so
- * with file names is honest; a mocked-up diff would not be.
- *
- * Staged and unstaged are shown as one list with a `+`/`-` per row rather than
- * as two sections. On a phone the dock is 200dp tall, and two scrolling
- * sections in that space means neither is usable.
  */
 @Composable
 fun GitPanel(
@@ -70,22 +82,52 @@ fun GitPanel(
     actions: GitActions,
     modifier: Modifier = Modifier,
 ) {
+    var confirmingDiscard by remember { mutableStateOf<String?>(null) }
+    var showBranchDialog by remember { mutableStateOf(false) }
+
     when (state.isRepository) {
         null -> Text("Looking for a repository…", style = MaterialTheme.typography.bodySmall)
         false -> NotARepository(modifier, state.isBusy, actions.initialise)
         true -> Column(modifier.fillMaxSize()) {
-            Header(state, actions.push)
+            Header(
+                state = state,
+                onPush = actions.push,
+                onOpenBranches = { showBranchDialog = true },
+            )
 
             val staged = state.status.staged.sorted()
             val unstaged = (state.status.unstaged + state.status.untracked).sorted()
 
-            // **`weight(1f)`, filling.** With `fill = false` the list took only
-            // the height it wanted, and the dock is a fixed 200dp that the
-            // header and commit row nearly fill on their own -- so the list was
-            // laid out at zero height and a repository full of changes showed
-            // nothing at all. Found by opening the panel in the running app;
-            // every test asserts through the view model, where the layout does
-            // not exist.
+            // Quick Stage/Unstage all row when files are present
+            if (staged.isNotEmpty() || unstaged.isNotEmpty()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (unstaged.isNotEmpty()) {
+                            TextButton(
+                                onClick = actions.stageAll,
+                                enabled = !state.isBusy,
+                                modifier = Modifier.semantics { contentDescription = "Stage All" },
+                            ) {
+                                Text("Stage All (${unstaged.size})", fontSize = 12.sp)
+                            }
+                        }
+                        if (staged.isNotEmpty()) {
+                            TextButton(
+                                onClick = actions.unstageAll,
+                                enabled = !state.isBusy,
+                                modifier = Modifier.semantics { contentDescription = "Unstage All" },
+                            ) {
+                                Text("Unstage All (${staged.size})", fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+            }
+
             Box(Modifier.fillMaxWidth().weight(1f)) {
                 if (staged.isEmpty() && unstaged.isEmpty()) {
                     Text(
@@ -112,6 +154,7 @@ fun GitPanel(
                                 enabled = !state.isBusy,
                                 onToggle = { actions.stage(path) },
                                 onOpen = { actions.showDiff(path, false) },
+                                onDiscard = { confirmingDiscard = path },
                             )
                         }
                     }
@@ -123,31 +166,88 @@ fun GitPanel(
     }
 
     state.diff?.let { diff -> DiffDialog(diff, actions.dismissDiff) }
+
+    confirmingDiscard?.let { path ->
+        AlertDialog(
+            onDismissRequest = { confirmingDiscard = null },
+            title = { Text("Discard changes?") },
+            text = { Text("Are you sure you want to discard changes in '$path'? This cannot be undone.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        actions.discard(path)
+                        confirmingDiscard = null
+                    },
+                ) { Text("Discard") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmingDiscard = null }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (showBranchDialog) {
+        BranchDialog(
+            currentBranch = state.branch,
+            branches = state.branches,
+            onSelect = { branch ->
+                actions.checkoutBranch(branch, false)
+                showBranchDialog = false
+            },
+            onCreate = { branch ->
+                actions.checkoutBranch(branch, true)
+                showBranchDialog = false
+            },
+            onDismiss = { showBranchDialog = false },
+        )
+    }
 }
 
 /**
- * One file's diff.
- *
- * A dialog rather than a pane in the dock: the dock is 340dp at its tallest and
- * a diff is the one thing here that genuinely wants the screen. Monospace and
- * horizontally scrollable, because a wrapped diff line is unreadable -- the
- * leading `+`/`-` stops lining up and that column is the whole point.
+ * One file's diff with syntax highlighting and line numbers.
  */
 @Composable
 private fun DiffDialog(diff: GitDiff, onDismiss: () -> Unit) {
+    val file = remember(diff.path) { File(diff.path) }
+    val iconInfo = FileIcons.infoFor(file, isDirectory = false)
+    val lines = remember(diff.text) { diff.text.lines() }
+
+    val additionBg = Color(0x2234D399)
+    val additionText = Color(0xFF34D399)
+    val deletionBg = Color(0x22FB7185)
+    val deletionText = Color(0xFFFB7185)
+    val hunkBg = Color(0x22A78BFA)
+    val hunkText = Color(0xFFA78BFA)
+    val defaultText = MaterialTheme.colorScheme.onSurface
+    val variantText = MaterialTheme.colorScheme.onSurfaceVariant
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Column {
-                Text(diff.path.substringAfterLast('/'), style = MaterialTheme.typography.titleMedium)
-                Text(
-                    // Says which of the two diffs this is. They differ, and a
-                    // label that did not distinguish them would be wrong half
-                    // the time.
-                    text = if (diff.staged) "Staged, against the last commit" else "Not staged yet",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(
+                    imageVector = iconInfo.icon,
+                    contentDescription = null,
+                    tint = iconInfo.tint,
+                    modifier = Modifier.size(22.dp),
                 )
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = diff.path.substringAfterLast('/'),
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = if (diff.staged) "Staged, against the last commit" else "Not staged yet",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         },
         text = {
@@ -157,19 +257,50 @@ private fun DiffDialog(diff: GitDiff, onDismiss: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                 )
             } else {
-                Column(
-                    Modifier
-                        .heightIn(max = 420.dp)
-                        .verticalScroll(rememberScrollState()),
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 440.dp),
                 ) {
-                    Text(
-                        text = diff.text,
-                        style = CodeTextStyle,
-                        softWrap = false,
-                        modifier = Modifier
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
                             .horizontalScroll(rememberScrollState())
                             .semantics { contentDescription = "Diff" },
-                    )
+                    ) {
+                        lines.forEachIndexed { index, line ->
+                            val (bgColor, textColor) = when {
+                                line.startsWith("+++") || line.startsWith("---") ->
+                                    Color.Transparent to variantText
+                                line.startsWith("+") -> additionBg to additionText
+                                line.startsWith("-") -> deletionBg to deletionText
+                                line.startsWith("@@") -> hunkBg to hunkText
+                                else -> Color.Transparent to defaultText
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(bgColor)
+                                    .padding(horizontal = 6.dp, vertical = 1.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = "${index + 1}".padStart(3),
+                                    style = CodeTextStyle.copy(fontSize = 11.sp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                    modifier = Modifier.padding(end = 8.dp),
+                                )
+                                Text(
+                                    text = line,
+                                    style = CodeTextStyle.copy(fontSize = 12.sp),
+                                    color = textColor,
+                                    softWrap = false,
+                                )
+                            }
+                        }
+                    }
                 }
             }
         },
@@ -183,18 +314,47 @@ private fun DiffDialog(diff: GitDiff, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun Header(state: GitUiState, onPush: () -> Unit) {
+private fun Header(
+    state: GitUiState,
+    onPush: () -> Unit,
+    onOpenBranches: () -> Unit,
+) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(
-                text = state.branch ?: "detached HEAD",
-                style = MaterialTheme.typography.titleSmall,
+            Surface(
+                onClick = onOpenBranches,
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
                 modifier = Modifier.semantics { contentDescription = "Current branch" },
-            )
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AccountTree,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = state.branch ?: "detached HEAD",
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Icon(
+                        imageVector = Icons.Default.ArrowDropDown,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
             val subtitle = state.progress
                 ?: state.errorMessage
                 ?: state.notice
@@ -228,7 +388,11 @@ private fun ChangedFile(
     enabled: Boolean,
     onToggle: () -> Unit,
     onOpen: () -> Unit,
+    onDiscard: (() -> Unit)? = null,
 ) {
+    val file = remember(path) { File(path) }
+    val iconInfo = FileIcons.infoFor(file, isDirectory = false)
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -250,9 +414,13 @@ private fun ChangedFile(
                 },
             )
         }
-        // The path opens the diff; the icon stages. Two targets in one row,
-        // because "look at it" and "commit it" are different decisions and
-        // making one of them require a long press hides it.
+        Icon(
+            imageVector = iconInfo.icon,
+            contentDescription = null,
+            tint = iconInfo.tint,
+            modifier = Modifier.size(16.dp),
+        )
+        Spacer(Modifier.width(8.dp))
         Text(
             text = path,
             style = CodeTextStyle,
@@ -262,16 +430,29 @@ private fun ChangedFile(
                 MaterialTheme.colorScheme.onSurfaceVariant
             },
             modifier = Modifier
+                .weight(1f)
                 .clickable(enabled = enabled, onClick = onOpen)
                 .semantics { contentDescription = "Show changes in $path" },
         )
+        if (onDiscard != null) {
+            IconButton(
+                onClick = onDiscard,
+                enabled = enabled,
+                modifier = Modifier.size(36.dp).semantics { contentDescription = "Discard changes in $path" },
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.Undo,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error.copy(alpha = 0.8f),
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
     }
 }
 
 @Composable
 private fun CommitRow(state: GitUiState, hasStagedFiles: Boolean, actions: GitActions) {
-    // Named rather than left to the disabled button, because "why is this grey"
-    // is the whole question -- and the answer is in a different screen.
     if (!state.hasIdentity) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
@@ -310,6 +491,90 @@ private fun CommitRow(state: GitUiState, hasStagedFiles: Boolean, actions: GitAc
             modifier = Modifier.semantics { contentDescription = "Commit" },
         ) { Text("Commit") }
     }
+}
+
+@Composable
+private fun BranchDialog(
+    currentBranch: String?,
+    branches: List<String>,
+    onSelect: (String) -> Unit,
+    onCreate: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var newBranchName by remember { mutableStateOf("") }
+    var isCreating by remember { mutableStateOf(false) }
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val onSurfaceColor = MaterialTheme.colorScheme.onSurface
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (isCreating) "Create Branch" else "Branches") },
+        text = {
+            if (isCreating) {
+                OutlinedTextField(
+                    value = newBranchName,
+                    onValueChange = { newBranchName = it },
+                    label = { Text("Branch name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 300.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    branches.forEach { branch ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onSelect(branch) }
+                                .padding(vertical = 10.dp, horizontal = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text(
+                                text = branch,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (branch == currentBranch) {
+                                    primaryColor
+                                } else {
+                                    onSurfaceColor
+                                },
+                            )
+                            if (branch == currentBranch) {
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                                ) {
+                                    Text(
+                                        text = "CURRENT",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (isCreating) {
+                Button(
+                    onClick = { if (newBranchName.isNotBlank()) onCreate(newBranchName.trim()) },
+                    enabled = newBranchName.isNotBlank(),
+                ) { Text("Create & Switch") }
+            } else {
+                TextButton(onClick = { isCreating = true }) { Text("New Branch") }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 @Composable

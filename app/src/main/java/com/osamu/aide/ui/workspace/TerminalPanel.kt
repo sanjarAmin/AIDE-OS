@@ -1,6 +1,7 @@
 package com.osamu.aide.ui.workspace
 
 import android.view.KeyEvent
+import android.widget.Toast
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -29,20 +31,22 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import com.osamu.aide.core.ui.theme.CodeTextStyle
@@ -92,6 +96,8 @@ fun TerminalPanel(
     val vertical = rememberScrollState()
     val horizontal = rememberScrollState()
     val focus = remember { FocusRequester() }
+    val clipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
     var control by remember { mutableStateOf(false) }
 
     /** Emptied after every send; see the field below for why that matters. */
@@ -183,6 +189,19 @@ fun TerminalPanel(
                 control = false
             },
             onInterrupt = actions.interrupt,
+            onCopy = {
+                val text = state.screen.text
+                if (text.isNotEmpty()) {
+                    clipboardManager.setText(AnnotatedString(text))
+                    Toast.makeText(context, "Terminal output copied", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onPaste = {
+                val clipText = clipboardManager.getText()?.text
+                if (!clipText.isNullOrEmpty()) {
+                    actions.type(clipText)
+                }
+            },
         )
 
         // **Held in a TextFieldState and cleared after every send.** The first
@@ -246,6 +265,8 @@ private fun KeyRow(
     enabled: Boolean,
     onKey: (Int) -> Unit,
     onInterrupt: () -> Unit,
+    onCopy: () -> Unit,
+    onPaste: () -> Unit,
 ) {
     // Scrollable: the row is wider than a phone. Clipping it silently loses
     // whichever key is last, which was ^C -- the one nobody can do without.
@@ -289,6 +310,18 @@ private fun KeyRow(
             enabled = enabled,
             modifier = Modifier.semantics { contentDescription = "Interrupt" },
         ) { Text("^C", style = MaterialTheme.typography.labelSmall) }
+
+        TextButton(
+            onClick = onCopy,
+            enabled = enabled,
+            modifier = Modifier.semantics { contentDescription = "Copy terminal text" },
+        ) { Text("COPY", style = MaterialTheme.typography.labelSmall) }
+
+        TextButton(
+            onClick = onPaste,
+            enabled = enabled,
+            modifier = Modifier.semantics { contentDescription = "Paste to terminal" },
+        ) { Text("PASTE", style = MaterialTheme.typography.labelSmall) }
     }
 }
 

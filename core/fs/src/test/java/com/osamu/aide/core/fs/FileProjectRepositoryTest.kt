@@ -128,4 +128,25 @@ class FileProjectRepositoryTest {
         val reopened = repository.openProject(created.rootDir) as AppResult.Success<Project>
         assertEquals(BuildEngine.GRADLE, reopened.value.engine)
     }
+
+    @Test
+    fun `deleting a project removes its directory and unlists it`() = runTest {
+        val repository = newRepository()
+        val created = (
+            repository.createProject(
+                name = "To Delete",
+                applicationId = "com.example.todelete",
+                language = SourceLanguage.JAVA,
+                engine = BuildEngine.FAST,
+            ) as AppResult.Success<Project>
+        ).value
+
+        assertTrue(created.rootDir.exists())
+        val deleteResult = repository.deleteProject(created)
+        assertTrue(deleteResult is AppResult.Success)
+        org.junit.Assert.assertFalse(created.rootDir.exists())
+
+        val listed = (repository.listProjects() as AppResult.Success).value
+        assertTrue(listed.none { it.rootDir == created.rootDir })
+    }
 }

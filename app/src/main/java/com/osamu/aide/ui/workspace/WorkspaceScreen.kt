@@ -194,6 +194,10 @@ fun WorkspaceScreen(
             initialise = git::initialise,
             showDiff = git::showDiff,
             dismissDiff = git::dismissDiff,
+            stageAll = git::stageAll,
+            unstageAll = git::unstageAll,
+            discard = { git.discard(listOf(it)) },
+            checkoutBranch = { name, createNew -> git.checkoutBranch(name, createNew) },
         )
     }
 
@@ -203,6 +207,7 @@ fun WorkspaceScreen(
             stop = logcat::stop,
             clear = logcat::clear,
             setFilter = logcat::setFilter,
+            setLevel = logcat::setLevel,
         )
     }
 

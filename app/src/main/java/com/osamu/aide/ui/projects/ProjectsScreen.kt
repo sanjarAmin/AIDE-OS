@@ -13,6 +13,11 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.FilterChip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,6 +45,9 @@ import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.DriveFolderUpload
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -108,6 +116,7 @@ fun ProjectsScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var showCreateDialog by remember { mutableStateOf(false) }
     var showCloneDialog by remember { mutableStateOf(false) }
+    var confirmingDelete by remember { mutableStateOf<Project?>(null) }
 
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree(),
@@ -219,8 +228,83 @@ fun ProjectsScreen(
                     bottom = padding.calculateBottomPadding() + 88.dp,
                 ),
             ) {
-                itemsIndexed(state.projects, key = { _, it -> it.rootDir.absolutePath }) { index, project ->
-                    ProjectRow(project, index = index) { onOpenProject(project.rootDir) }
+                item(key = "projects-search-bar") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                    ) {
+                        OutlinedTextField(
+                            value = state.searchQuery,
+                            onValueChange = viewModel::setSearchQuery,
+                            placeholder = { Text("Search projects…", style = MaterialTheme.typography.bodyMedium) },
+                            leadingIcon = {
+                                Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(20.dp))
+                            },
+                            trailingIcon = {
+                                if (state.searchQuery.isNotEmpty()) {
+                                    IconButton(onClick = { viewModel.setSearchQuery("") }) {
+                                        Icon(Icons.Default.Close, contentDescription = "Clear search", modifier = Modifier.size(18.dp))
+                                    }
+                                }
+                            },
+                            singleLine = true,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Search projects" },
+                        )
+
+                        Spacer(Modifier.height(8.dp))
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            FilterChip(
+                                selected = state.selectedLanguage == null,
+                                onClick = { viewModel.setLanguageFilter(null) },
+                                label = { Text("All", fontSize = 12.sp) },
+                                modifier = Modifier.semantics { contentDescription = "Filter all languages" },
+                            )
+                            SourceLanguage.entries.forEach { lang ->
+                                FilterChip(
+                                    selected = state.selectedLanguage == lang,
+                                    onClick = {
+                                        viewModel.setLanguageFilter(if (state.selectedLanguage == lang) null else lang)
+                                    },
+                                    label = { Text(lang.displayName, fontSize = 12.sp) },
+                                    modifier = Modifier.semantics { contentDescription = "Filter ${lang.displayName}" },
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(6.dp))
+                    }
+                }
+
+                if (state.filteredProjects.isEmpty()) {
+                    item(key = "no-matching-projects") {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(32.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = if (state.searchQuery.isNotBlank()) "No projects matching \"${state.searchQuery}\"" else "No projects matching this filter",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                } else {
+                    itemsIndexed(state.filteredProjects, key = { _, it -> it.rootDir.absolutePath }) { index, project ->
+                        ProjectRow(
+                            project = project,
+                            index = index,
+                            onClick = { onOpenProject(project.rootDir) },
+                            onDelete = { confirmingDelete = project },
+                        )
+                    }
                 }
             }
         }
@@ -249,10 +333,45 @@ fun ProjectsScreen(
             },
         )
     }
+
+    confirmingDelete?.let { project ->
+        AlertDialog(
+            onDismissRequest = { confirmingDelete = null },
+            title = { Text("Delete ${project.name}?") },
+            text = { Text("Are you sure you want to delete '${project.name}'? This permanently removes the project files from device storage.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.deleteProject(project)
+                        confirmingDelete = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                ) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmingDelete = null }) { Text("Cancel") }
+            },
+        )
+    }
 }
 
 @Composable
-private fun ProjectRow(project: Project, index: Int, onClick: () -> Unit) {
+private fun ProjectRow(
+    project: Project,
+    index: Int,
+    onClick: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val projectSize by produceState(initialValue = "…", project.rootDir) {
+        value = withContext(Dispatchers.IO) {
+            val bytes = project.rootDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+            when {
+                bytes < 1024 -> "$bytes B"
+                bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+                else -> String.format(java.util.Locale.US, "%.1f MB", bytes.toDouble() / (1024 * 1024))
+            }
+        }
+    }
     val dummyFile = remember(project.language) {
         val extension = when (project.language) {
             SourceLanguage.KOTLIN -> "kt"
@@ -368,12 +487,41 @@ private fun ProjectRow(project: Project, index: Int, onClick: () -> Unit) {
                     )
                 }
 
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                )
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    var showMenu by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(
+                            onClick = { showMenu = true },
+                            modifier = Modifier.size(32.dp).semantics { contentDescription = "Project options for ${project.name}" },
+                        ) {
+                            Icon(Icons.Default.MoreVert, contentDescription = null, modifier = Modifier.size(20.dp))
+                        }
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Delete Project", color = MaterialTheme.colorScheme.error) },
+                                leadingIcon = {
+                                    Icon(Icons.Default.DeleteOutline, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                                },
+                                onClick = {
+                                    showMenu = false
+                                    onDelete()
+                                },
+                            )
+                        }
+                    }
+                    Text(
+                        text = projectSize,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier.padding(end = 4.dp),
+                    )
+                }
             }
         }
     }

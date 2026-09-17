@@ -57,4 +57,19 @@ class LogcatLineTest {
         assertEquals(uidOf(ours), uidOf(alsoOurs))
         assertEquals("10118", uidOf(theirs))
     }
+
+    @Test
+    fun `parses log levels accurately`() {
+        val debugLine = "09-09 00:09:17.732 10118   740   740 D StatusBarIconController: ignoring"
+        val infoLine = "09-09 00:09:17.528  wifi   727   727 I wpa_supplicant: CTRL-EVENT-BEACON-LOSS"
+        val warnLine = "09-09 00:09:18.000 10118   740   740 W Tag: something warned"
+        val errorLine = "09-09 00:09:19.000 10118   740   740 E AndroidRuntime: FATAL EXCEPTION"
+        val verboseLine = "09-09 00:09:20.000 10118   740   740 V Tag: verbose detail"
+
+        assertEquals(LogcatLevel.DEBUG, levelOf(debugLine))
+        assertEquals(LogcatLevel.INFO, levelOf(infoLine))
+        assertEquals(LogcatLevel.WARN, levelOf(warnLine))
+        assertEquals(LogcatLevel.ERROR, levelOf(errorLine))
+        assertEquals(LogcatLevel.VERBOSE, levelOf(verboseLine))
+    }
 }

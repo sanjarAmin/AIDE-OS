@@ -8,6 +8,7 @@ import com.osamu.aide.core.fs.ProjectAdoption
 import com.osamu.aide.core.fs.ProjectImporter
 import com.osamu.aide.core.fs.ProjectRepository
 import com.osamu.aide.core.fs.ProjectTemplate
+import com.osamu.aide.core.fs.SourceLanguage
 import com.osamu.aide.core.common.AppResult
 import android.net.Uri
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,6 +25,9 @@ import java.io.File
 data class ProjectsUiState(
     val isLoading: Boolean = true,
     val projects: List<Project> = emptyList(),
+    val filteredProjects: List<Project> = emptyList(),
+    val searchQuery: String = "",
+    val selectedLanguage: SourceLanguage? = null,
     val errorMessage: String? = null,
     /** True while a picked folder is being copied in, which is not instant. */
     val isImporting: Boolean = false,
@@ -60,6 +64,33 @@ class ProjectsViewModel(
         viewModelScope.launch { reload() }
     }
 
+    fun setSearchQuery(query: String) {
+        _state.update {
+            it.copy(
+                searchQuery = query,
+                filteredProjects = applyFilter(it.projects, query, it.selectedLanguage),
+            )
+        }
+    }
+
+    fun setLanguageFilter(language: SourceLanguage?) {
+        _state.update {
+            it.copy(
+                selectedLanguage = language,
+                filteredProjects = applyFilter(it.projects, it.searchQuery, language),
+            )
+        }
+    }
+
+    fun deleteProject(project: Project) {
+        viewModelScope.launch {
+            when (val result = repository.deleteProject(project)) {
+                is AppResult.Success -> refresh()
+                is AppResult.Failure -> _state.update { it.copy(errorMessage = result.error.message) }
+            }
+        }
+    }
+
     /**
      * The reload itself, so a caller already inside a coroutine can await it.
      *
@@ -73,7 +104,12 @@ class ProjectsViewModel(
         _state.update { it.copy(isLoading = true) }
         when (val result = repository.listProjects()) {
             is AppResult.Success -> _state.update {
-                it.copy(isLoading = false, projects = result.value, errorMessage = null)
+                it.copy(
+                    isLoading = false,
+                    projects = result.value,
+                    filteredProjects = applyFilter(result.value, it.searchQuery, it.selectedLanguage),
+                    errorMessage = null,
+                )
             }
             is AppResult.Failure -> _state.update {
                 it.copy(isLoading = false, errorMessage = result.error.message)
@@ -212,4 +248,18 @@ class ProjectsViewModel(
     }
 
     fun dismissError() = _state.update { it.copy(errorMessage = null) }
+}
+
+internal fun applyFilter(
+    projects: List<Project>,
+    query: String,
+    language: SourceLanguage?,
+): List<Project> {
+    return projects.filter { project ->
+        val matchesQuery = query.isBlank() ||
+            project.name.contains(query, ignoreCase = true) ||
+            project.applicationId.contains(query, ignoreCase = true)
+        val matchesLanguage = language == null || project.language == language
+        matchesQuery && matchesLanguage
+    }
 }

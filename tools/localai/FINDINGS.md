@@ -66,13 +66,12 @@ establish that the route works and nothing else.** Measuring on a phone is the
 next step, and prompt-reading speed is the number to watch: the assistant
 sends the project listing with every question.
 
-> **Amended by §8, and the cause is one level up from this paragraph.** A phone
-> with `i8mm`, `sve2` and `bf16` produced the *same* reading-to-writing ratio.
-> Disassembling the engine shows why: Termux's build has **no** i8mm, dotprod
-> or bf16 instructions in any of its libraries, on either ABI. The emulator's
-> missing AVX2 is a symptom of the same thing — Termux packages for a portable
-> baseline everywhere — so "the guest CPU hides what ggml needs" was true of
-> the emulator and beside the point. §8.
+> **Amended by §8: the ratio is not the signal this paragraph takes it for.**
+> `llama-bench` on a real phone reads a 0.5B prompt at 103 tok/s with this same
+> Termux engine, so nothing is structurally broken. A ratio near 1 appears when
+> one side is memory-bandwidth-bound — a 7B streams 4.4 GB per token — and it is
+> not evidence about instruction sets. §8 also measures what the missing
+> instructions are actually worth: about a quarter, not an order of magnitude.
 
 ## 4. Tool use separates the model sizes, and the 1.5B is recoverable
 
@@ -158,7 +157,7 @@ drive changed:
   screen until the user scrolled. They are at the top, and the list scrolls to
   them.
 
-## 8. The phone numbers, and the one prediction §3 got wrong
+## 8. The phone numbers, a rebuilt engine, and a wrong turn worth recording
 
 Measured 2026-09-16 with the §7 benchmark screen, on a **nubia NX809J**,
 Android 16 / API 36, QTI SM8850, 8 cores, 11.0 GB RAM (4.4 GB free), CPU
@@ -172,21 +171,30 @@ Memory    server uses 4453 MB (resident)
 Tool calls  0/3 structured, 3/3 written as JSON in the reply, 0/3 no call
 ```
 
-### Prefill is still barely faster than generation, and §3's reason cannot explain it
+### The ratio is not the anomaly it looked like, and chasing it was a mistake
+
+The first reading of the table above was that reading a prompt is batched and
+should be *many* times faster than writing, so 1.34 meant the batched path was
+broken. That inference drove everything that followed and **it was wrong**.
+Recorded because the reasoning was seductive and the correction cost a day:
 
 | | reading | writing | ratio |
 |---|---|---|---|
 | 0.5B, emulator (§3) | 20 | 13.8 | 1.45 |
 | 1.5B, emulator (§3) | 9.7 | 6.8 | 1.43 |
-| **7B, NX809J** | **7.1** | **5.3** | **1.34** |
+| 7B, NX809J | 7.1 | 5.3 | 1.34 |
 
-Reading a prompt is batched and should run *many* times faster than writing.
-§3 blamed the emulator's virtual CPU for hiding the instructions ggml's fast
-paths need, and said a phone's cores take a different path — `dotprod`/`i8mm`
-— with the clear implication that the ratio would improve on hardware. **This
-phone has `i8mm`, `sve2` and `bf16`, and the ratio did not move.** So the
-missing AVX2 was never the whole account, and §3 should be read as describing a
-symptom rather than the cause.
+**The 7B's numbers are what a 7B costs on a phone.** `llama-bench` on the same
+handset with Termux's own engine and the 0.5B gives **103 tok/s** prompt
+processing. A 7B is about twelve times the parameters, and 103/12 ≈ 8.6 against
+the 7.1 measured in the app — the rest being the memory pressure below. Nothing
+exotic is happening.
+
+And writing at 5.3 tok/s on a 4.4 GB model means streaming those weights once
+per token: ~23 GB/s, which is roughly what a phone's memory bus delivers. **That
+is a bandwidth wall, and no kernel work moves it.** A ratio near 1 is what you
+get when one side is bandwidth-bound and the model is far too big for the
+device; it is not evidence about instruction sets.
 
 ### The engine cannot issue the instructions the phone has. Confirmed statically.
 
@@ -222,13 +230,11 @@ AVX2 for the same reason the aarch64 build misses i8mm. One explanation, both
 ABIs, and it predicts the ratio staying ~1.4 on hardware, which is what
 happened.
 
-**So the fix is the engine, not the model.** `fetch-llama.sh` repackages
-Termux's `.deb`; getting the kernels means compiling llama.cpp with the NDK
-against `armv8.2-a+dotprod+i8mm` (or enabling ggml's multi-variant dispatch)
-and pinning that instead — this repo already drives the NDK for
-`tools/treesitter/build-grammars.sh`, so the machinery exists. **The speedup is
-predicted, not measured**: what is established here is that the fast paths are
-absent, not what they are worth once present.
+**This is a true fact about the package and it is not why the 7B was slow.**
+It was written up here as the explanation before anything was measured with it,
+which was the error: the disassembly confirms the *premise* of the argument
+above — no fast paths — and says nothing about the *consequence*. What they are
+worth is the next section, and it is far less than was claimed.
 
 **The benchmark now reports this, so no future run needs a disassembly.** §7's
 screen prints a `CPU backend` line from the server's own `system_info`, naming
@@ -237,21 +243,119 @@ the paths that are on *and* the accelerations that are off —
 build should produce. Listing only what is enabled would read as everything
 being fine, which is how this went unnoticed for a run.
 
-### The memory question is still open, and no longer needed to explain the ratio
+### Rebuilt with the NDK: +27% reading, +36% writing, and one flag that costs 12x
+
+Built from upstream (`aa39d7a`, ggml 0.24.0) with the NDK, and measured against
+Termux's engine on the same phone, same model, both warm:
+
+```
+cmake -B build -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE=$NDK/build/cmake/android.toolchain.cmake \
+  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-24 \
+  -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
+  -DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON \
+  -DGGML_OPENMP=OFF -DLLAMA_CURL=OFF
+```
+
+| engine (0.5B Q4_K_M, NX809J, 8 threads, warm) | pp512 | tg64 |
+|---|---|---|
+| Termux `llama-cpp` 0.4.0 | 103.1 | 60.3 |
+| this build, **OpenMP on** | 134.9 ± 24 | **6.5 ± 1.0** |
+| this build, **OpenMP off** | **130.7 ± 0.1** | **82.1 ± 2.3** |
+
+**`GGML_OPENMP=OFF` is not optional; it is worth 12x on generation.** With
+OpenMP linked, writing collapsed to 6.5 tok/s — *eleven times slower than the
+engine it was meant to replace*. Generation is thousands of small ops and the
+per-op thread handoff dominates; prefill, being a few large batched ops, barely
+noticed and looked fine. **Termux ships no `libomp.so` at all**, which is the
+clue that was walked past: their binary would not link without one being added,
+and that was the signal to leave OpenMP out, not to supply the library.
+
+So the rebuild is worth doing — **+27% reading and +36% writing** — and it is
+worth roughly a quarter, not the order of magnitude this document previously
+implied.
+
+### `GGML_CPU_ALL_VARIANTS` solves the SIGILL problem upstream
+
+Baking `+i8mm` into one binary would crash every arm64 device older than
+ARMv8.6. Upstream already handles this for Android specifically:
+
+```
+android_armv8.0_1                                     (no dotprod, no i8mm)
+android_armv8.2_1    DOTPROD
+android_armv8.2_2    DOTPROD FP16_VECTOR_ARITHMETIC
+android_armv8.6_1    DOTPROD FP16 MATMUL_INT8
+android_armv9.0_1    DOTPROD MATMUL_INT8 FP16 SVE2
+android_armv9.2_1/2  … + SVE, SME
+```
+
+With `GGML_BACKEND_DL=ON` all seven are built; at startup ggml `dlopen`s each,
+calls `ggml_backend_score()` and keeps the best. Verified: the NX809J selected
+`android_armv9.2_2` on its own, and the disassembly confirms the split — 0 i8mm
+instructions in `armv8.0_1`, 244 in `armv8.6_1`, 376 in `armv9.0_1` and above.
+
+**This changes how the archive is launched.** `GGML_BACKEND_PATH` names *one*
+`.so` (§2); variant selection needs a *directory* scan, and the search path is
+the current working directory when none is given. So the server must be started
+with its working directory set to the `lib` directory, rather than pointed at a
+single backend file. A build shipping variants and launched the old way loads
+nothing and falls back.
+
+### The kernels are worth a lot, and the honest number is not pinned down
+
+Forcing the same no-OpenMP build to one variant at a time, `GGML_BACKEND_PATH`
+naming the `.so` directly, phone cooled to 43 °C first, 6 threads, 5 reps:
+
+| variant | pp512 | tg32 |
+|---|---|---|
+| `android_armv8.0_1` (no dotprod, no i8mm) | 86.03 ± 0.09 | 63.77 ± 1.45 |
+| `android_armv8.6_1` (dotprod + i8mm) | 212.88 ± **64.01** | 97.80 ± **13.98** |
+| `android_armv9.2_2` (… + SVE, SVE2, SME) — *the one ggml picks* | 111.33 ± **33.28** | 64.44 ± 1.33 |
+
+The direction is unambiguous — even the bottom of the i8mm variant's range is
+well above the top of the baseline's — but **the magnitude is not measurable on
+this device without more care than has been taken**. Two reasons, both worth
+knowing before anyone repeats this:
+
+- **The fast variant is unstable where the slow one is not.** The baseline came
+  back at ±0.09 and the i8mm build at ±64 on the same phone, same cooldown, same
+  five repetitions. That is not measurement error; it is the faster kernel
+  reaching the thermal limit part-way through the run. A throttling curve is not
+  a throughput number.
+- **Thread count moves it more than the kernels appear to.** The auto-selected
+  variant measured 130.7 at 8 threads and `armv8.6_1` measured 212.9 at 6. On a
+  big.LITTLE phone, spilling onto the little cores costs more than it adds, so
+  `-t 8` on an 8-core handset is not the right default and every number in this
+  document taken at 8 threads understates the engine.
+
+**And the variant ggml selects may not be the fastest one.** `armv9.2_2` scored
+highest and was chosen automatically, yet measured *below* `armv8.6_1` on this
+SoC — 111 against 213. `ggml_backend_score()` counts features, it does not
+measure them, so a chip whose SVE or SME path is slower than its plain
+NEON+i8mm path gets the wrong answer by construction. The error bars are too
+wide to call this settled, but it is the first thing to check before shipping a
+multi-variant archive: **benchmark the variants and consider pinning one**
+rather than trusting the score. If it holds, the fix is to ship only up to
+`armv8.6_1`, or to select by measurement at install time.
+
+So: the rebuild's +27%/+36% headline (measured at 8 threads, both engines, warm)
+is a *floor*, and the kernels are clearly most of it. **Pinning the real figure
+needs a cooled phone, a thread sweep, and repetitions long enough for throttling
+to reach steady state** — not a single run. Do not quote a number from this
+section; quote the headline comparison and say it is a floor.
+
+### The memory question, revisited
 
 The 7B's pinned GGUF is 4,683,073,536 bytes ≈ 4467 MB and the server's RSS came
-back 4453 MB against 4.4 GB free — essentially the whole model resident with
-nothing spare, mmap'd and therefore reclaimable (§7's note), so pages may be
-evicted and re-faulted from flash. That would *also* flatten reading and
-writing toward the same rate.
+back 4453 MB against 4.4 GB free — the whole model resident with nothing spare,
+mmap'd and therefore reclaimable (§7's note), so pages may be evicted and
+re-faulted from flash.
 
-It is no longer a competing explanation — the missing kernels account for the
-ratio on their own, and on the emulator too, where memory was never tight. It
-remains a plausible *additional* cost on this phone, and the run that would
-show it is the 1.5B (1.1 GB, fits comfortably) on the same device. Worth doing
-after the engine is rebuilt, not before: with baseline NEON on both, the two
-sizes are not expected to differ in ratio, so the experiment tells you little
-until the kernels are there.
+Earlier revisions of this section demoted this to a secondary explanation
+because the missing kernels supposedly accounted for the ratio. They did not,
+so **this is now the stronger half of the 7B's story**, alongside a 7B simply
+being twelve times a 0.5B. It is still not separated from plain model size, and
+the run that would do it is the 1.5B on the same phone.
 
 ### The 7B is not the model to ship, whatever the cause
 
@@ -291,12 +395,13 @@ name, which is the path Gemini needs anyway.
 worth building only once a phone's numbers are in:
 
 1. ~~**Measure on a phone**~~ — done for the 7B (§8), and it rules the 7B out.
-2. **Rebuild the engine with the kernels.** §8 establishes that Termux's build
-   can issue no i8mm, dotprod or bf16 instruction at all, which is why reading
-   a prompt is no faster than writing one. Compile llama.cpp with the NDK
-   against `armv8.2-a+dotprod+i8mm` and pin that in place of the repackaged
-   `.deb`. **This is the one that matters**; everything else here is tuning
-   around a missing fast path. Then re-measure the 1.5B and 3B.
+2. **Rebuild the engine, with `GGML_OPENMP=OFF` and `GGML_CPU_ALL_VARIANTS=ON`.**
+   Measured at +27% reading and +36% writing over Termux's build (§8) — a real
+   gain, and a smaller one than this list once claimed. The OpenMP flag is the
+   part that must not be got wrong: with it on, writing is *eleven times slower
+   than the engine being replaced*. Packaging it also means launching the
+   server with its working directory in `lib/`, because variant selection scans
+   a directory where `GGML_BACKEND_PATH` names one file.
 2. ~~**Make tool calls structured**~~ — the lenient parser is in (§8). A
    natively parsed template is still worth having, for the call id.
 3. **Allow loopback cleartext** deliberately: a network security config for
