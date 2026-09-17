@@ -1,7 +1,9 @@
 package com.osamu.aide.ai.core
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -22,6 +24,8 @@ sealed interface ChatEntry {
         val detail: String,
         val declined: Boolean,
         val failed: Boolean,
+        val input: Map<String, String> = emptyMap(),
+        val result: String? = null,
     ) : ChatEntry
 }
 
@@ -35,6 +39,7 @@ data class ApprovalRequest(
 data class ChatUiState(
     val entries: List<ChatEntry> = emptyList(),
     val sending: Boolean = false,
+    val activeStatus: String? = null,
     val pendingApproval: ApprovalRequest? = null,
     val error: String? = null,
     /**
@@ -89,6 +94,7 @@ class ChatController(
 
     private var session: AiSession? = null
     private var awaitingUser: CompletableDeferred<Boolean>? = null
+    private var sendJob: Job? = null
 
     fun send(text: String) {
         val message = text.trim()
@@ -98,16 +104,17 @@ class ChatController(
             it.copy(
                 entries = it.entries + ChatEntry.FromUser(message),
                 sending = true,
+                activeStatus = "Thinking...",
                 error = null,
                 needsKey = false,
             )
         }
 
-        scope.launch {
+        sendJob = scope.launch {
             val active = session
                 ?: assistant.session(projectDir, ::approve, extraTools)?.also { session = it }
             if (active == null) {
-                _state.update { it.copy(sending = false, needsKey = true) }
+                _state.update { it.copy(sending = false, activeStatus = null, needsKey = true) }
                 return@launch
             }
 
@@ -117,21 +124,64 @@ class ChatController(
                 "Project context sharing disabled by user preference."
             }
 
-            val reply = runCatching {
-                active.send(contextString, message)
+            try {
+                val done = active.send(
+                    projectContext = contextString,
+                    userText = message,
+                    onStatus = { status ->
+                        _state.update { it.copy(activeStatus = status) }
+                    },
+                )
+                _state.update { it.render(done) }
+            } catch (cancellation: CancellationException) {
+                _state.update {
+                    it.copy(
+                        sending = false,
+                        activeStatus = null,
+                        pendingApproval = null,
+                    )
+                }
+            } catch (failure: Throwable) {
+                _state.update {
+                    it.copy(
+                        sending = false,
+                        activeStatus = null,
+                        pendingApproval = null,
+                        error = failure.message ?: failure::class.java.simpleName,
+                    )
+                }
+            } finally {
+                sendJob = null
             }
+        }
+    }
 
-            reply.fold(
-                onSuccess = { done -> _state.update { it.render(done) } },
-                onFailure = { failure ->
-                    _state.update {
-                        it.copy(
-                            sending = false,
-                            pendingApproval = null,
-                            error = failure.message ?: failure::class.java.simpleName,
-                        )
-                    }
-                },
+    fun cancelSend() {
+        sendJob?.cancel()
+        sendJob = null
+        awaitingUser?.let {
+            it.complete(false)
+            awaitingUser = null
+        }
+        _state.update {
+            it.copy(
+                sending = false,
+                activeStatus = null,
+                pendingApproval = null,
+            )
+        }
+    }
+
+    fun newChat() {
+        cancelSend()
+        session = null
+        _state.update {
+            it.copy(
+                entries = emptyList(),
+                sending = false,
+                activeStatus = null,
+                pendingApproval = null,
+                error = null,
             )
         }
     }
@@ -194,8 +244,8 @@ class ChatController(
             it.copy(
                 pendingApproval = ApprovalRequest(
                     toolName = toolName,
-                    path = input["path"].orEmpty(),
-                    preview = input["content"].orEmpty().take(PREVIEW_CHARS),
+                    path = input["path"] ?: input["command"].orEmpty(),
+                    preview = (input["content"] ?: input["command"]).orEmpty().take(PREVIEW_CHARS),
                 ),
             )
         }
@@ -207,6 +257,7 @@ class ChatController(
             reply.toolRuns.map { it.asEntry() } +
             ChatEntry.FromAssistant(reply.text),
         sending = false,
+        activeStatus = null,
         pendingApproval = null,
     )
 
@@ -215,11 +266,17 @@ class ChatController(
 
         fun ToolRun.asEntry(): ChatEntry.Tool {
             val declined = risk == ToolRisk.MUTATING && !approved
+            val output = when (outcome) {
+                is ProjectFiles.Outcome.Ok -> outcome.content
+                is ProjectFiles.Outcome.Refused -> outcome.reason
+            }
             return ChatEntry.Tool(
                 name = name,
-                detail = input["path"] ?: input["query"] ?: "",
+                detail = input["path"] ?: input["query"] ?: input["command"] ?: "",
                 declined = declined,
                 failed = !declined && outcome is ProjectFiles.Outcome.Refused,
+                input = input,
+                result = output,
             )
         }
     }

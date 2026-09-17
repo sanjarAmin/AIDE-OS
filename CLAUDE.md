@@ -48,6 +48,8 @@ emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu host
                      third of them: they produce an APK, this starts a program
 :engine:mono         The same, for C#: mcs and then the assembly, so a run is
                      two processes and reports two starts
+:engine:python       The same, for Python: one process, and the only runtime the
+                     linker route does not mislead about its own path. FINDINGS.
 :lsp:api             The LanguageService contract; both services implement it
 :lsp:java            nb-javac kept warm: completion, diagnostics, definitions
 :lsp:native          clangd over stdio, for C and C++
@@ -63,11 +65,14 @@ emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu host
 tools/               Scripts that produce the toolchains and the one grammar
                      nobody publishes, and their FINDINGS.
                      Several assemble from Termux's package repo, because only
-                     Bionic-linked binaries start here: clang, a JDK, node, mono
+                     Bionic-linked binaries start here: clang, a JDK, node, mono,
+                     CPython. `tools/flutter/FINDINGS.md` says why Dart is not
+                     among them, and what a spike would have to settle first
 ```
 
-`docs/PLAN.md` lists 22 modules. Twenty-two exist, plus ten spikes. Do not
-create the rest speculatively — each arrives with the milestone that needs it.
+`docs/PLAN.md` lists 22 modules. Twenty-three exist — `:engine:python` is the
+one the plan does not name, added with Python support — plus ten spikes. Do not
+create the rest speculatively; each arrives with the milestone that needs it.
 
 ## Conventions
 

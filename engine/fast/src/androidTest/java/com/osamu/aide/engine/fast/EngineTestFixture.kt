@@ -45,11 +45,25 @@ class EngineTestFixture(private val name: String) {
         )
     }
 
+    /**
+     * A project written from [template], or from the default for [language].
+     *
+     * [template] exists so `ProjectTemplateBuildTest` can put each entry of the
+     * catalog through a real build. Passing a template whose language disagrees
+     * with [language] is possible and is not guarded against here: the two are
+     * separate fields on a `Project` and the test that wants them to agree is
+     * the one that should say so.
+     *
+     * [directory] lets a caller build several projects from one fixture; the
+     * default keeps the single-project behaviour every existing test relies on.
+     */
     fun project(
         applicationId: String = "com.example.demo",
         language: SourceLanguage = SourceLanguage.JAVA,
+        template: ProjectTemplate = ProjectTemplate.defaultFor(language),
+        directory: String = "project",
     ): Project {
-        val root = File(workDir, "project").apply { mkdirs() }
+        val root = File(workDir, directory).apply { mkdirs() }
         val project = Project(
             name = "Demo",
             rootDir = root,
@@ -57,8 +71,9 @@ class EngineTestFixture(private val name: String) {
             language = language,
             engine = BuildEngine.FAST,
             lastOpenedAt = 0L,
+            dependencies = template.dependencies,
         )
-        ProjectTemplate.write(project)
+        template.write(project)
         return project
     }
 

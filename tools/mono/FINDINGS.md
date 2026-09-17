@@ -156,7 +156,38 @@ removed — so the trim list is short on purpose, and this is why.
 The trim is in `fetch-mono.sh` rather than left to whoever builds the component,
 because a size reduction nobody can reproduce is a number in a document.
 
-## 6. What this does not answer
+## 6. `mcs` is not a modern C# compiler, and the boundary is not intuitive
+
+`bin/mono-sgen` reports **Mono C# compiler version 6.14.1.0**, and the instinct
+from that is "C# 7". That shorthand is what produced a project template which
+could not build: its first draft used a `record` and a switch expression, and
+`lib/mono/4.5/mcs.exe` rejected both with `CS1525: Unexpected symbol`.
+
+`-langversion:` accepts `ISO-1`, `ISO-2`, `Default`, `Latest` or a value in
+1..7.2, and **none of them changes the answer** -- `Default` and `Latest`
+behave identically, and the features below fail under every one of them.
+
+Measured on device, one feature per compile:
+
+| Accepted | Rejected |
+|---|---|
+| named tuples, `(double Low, double High)` returns | `when` clauses in a `switch` |
+| `out var` | local functions |
+| interpolation with alignment and format specifiers, `$"{x,-8:F1}"` | `record` |
+| expression-bodied members, `nameof`, get-only auto-properties | switch expressions |
+
+**Tuples and `out var` shipped in C# 7.0. So did `when` clauses and local
+functions.** The accepted set is not a language version and cannot be predicted
+from one, so anything written for this compiler has to be compiled by it before
+it is written down.
+
+`MonoTemplateBuildTest` in `:engine:mono` compiles and runs every C# template
+in the catalog for exactly this reason, and it is driven by the catalog so a new
+template is covered without editing it. A structural check cannot substitute:
+`ProjectTemplateCatalogTest` asserts what a template *writes*, and only the
+compiler has an opinion about whether the C# is C# it knows.
+
+## 7. What this does not answer
 
 - ~~**x86_64 on the emulator only.**~~ **Answered 2026-09-07**: the aarch64
   archive runs on real hardware. `:spike:mono` 7/7 and `:engine:mono` 6/6 on an

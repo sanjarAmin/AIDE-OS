@@ -88,6 +88,7 @@ dependencies {
     implementation(project(":engine:gradle"))
     implementation(project(":engine:node"))
     implementation(project(":engine:mono"))
+    implementation(project(":engine:python"))
     implementation(project(":lsp:java"))
     implementation(project(":lsp:native"))
     implementation(project(":lsp:node"))

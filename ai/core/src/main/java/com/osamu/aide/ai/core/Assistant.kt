@@ -11,20 +11,22 @@ import java.io.File
  * Supports Gemini as the default provider with Google Sign-In or API Key,
  * as well as OpenAI, Anthropic, and Custom/Compatible endpoints.
  */
-class Assistant(
-    private val keys: ApiKeyStore,
-    private val dispatchers: DispatcherProvider,
+open class Assistant(
+    private val keys: ApiKeyStore? = null,
+    private val dispatchers: DispatcherProvider? = null,
     private val clientFactory: (String, String?) -> AnthropicClient = ::defaultClient,
 ) {
 
     /**
      * Null when the user has not supplied credentials for the active provider.
      */
-    fun session(
+    open fun session(
         projectDir: File,
         approver: Approver,
         extraTools: List<AideTool> = emptyList(),
     ): AiSession? {
+        val keys = keys ?: return null
+        val dispatchers = dispatchers ?: return null
         val toolset = ProjectToolset(ProjectFiles(projectDir), extraTools)
         val provider = keys.activeProvider()
 
@@ -77,7 +79,9 @@ class Assistant(
     /**
      * A completer for the active provider, if credentials exist.
      */
-    fun completer(): InlineCompleter? {
+    open fun completer(): InlineCompleter? {
+        val keys = keys ?: return null
+        val dispatchers = dispatchers ?: return null
         val provider = keys.activeProvider()
         return when (provider) {
             AiProviderType.GEMINI -> {

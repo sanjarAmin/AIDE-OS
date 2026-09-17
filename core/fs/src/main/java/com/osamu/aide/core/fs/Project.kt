@@ -13,6 +13,7 @@ enum class SourceLanguage(val displayName: String) {
     CPP("C++"),
     JAVASCRIPT("JavaScript"),
     CSHARP("C#"),
+    PYTHON("Python"),
 }
 
 /**

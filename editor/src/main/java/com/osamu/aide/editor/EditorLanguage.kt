@@ -5,6 +5,7 @@ import com.itsaky.androidide.treesitter.TSLanguage
 import com.itsaky.androidide.treesitter.java.TSLanguageJava
 import com.itsaky.androidide.treesitter.json.TSLanguageJson
 import com.itsaky.androidide.treesitter.kotlin.TSLanguageKotlin
+import com.itsaky.androidide.treesitter.python.TSLanguagePython
 import com.itsaky.androidide.treesitter.xml.TSLanguageXml
 import com.osamu.aide.editor.treesitter.JavaScriptGrammar
 import io.github.rosemoe.sora.editor.ts.TsLanguageSpec
@@ -31,6 +32,16 @@ enum class EditorLanguage(
     KOTLIN("Kotlin", setOf("kt", "kts"), "kotlin", { TSLanguageKotlin.getInstance() }),
     XML("XML", setOf("xml"), "xml", { TSLanguageXml.getInstance() }),
     JSON("JSON", setOf("json"), "json", { TSLanguageJson.getInstance() }),
+
+    /**
+     * Python, from the same publisher as Java and Kotlin.
+     *
+     * `.pyw` as well as `.py` because Windows uses it for a script with no
+     * console, and a repository cloned onto the phone carries whatever the
+     * author wrote. `.pyi` is a stub file and parses with this grammar too --
+     * it is Python syntax with the bodies elided.
+     */
+    PYTHON("Python", setOf("py", "pyw", "pyi"), "python", { TSLanguagePython.getInstance() }),
 
     /**
      * The one grammar this project builds itself; see [JavaScriptGrammar].

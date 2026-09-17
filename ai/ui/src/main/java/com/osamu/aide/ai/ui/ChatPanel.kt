@@ -23,15 +23,24 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AccountTree
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
@@ -55,12 +64,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.osamu.aide.ai.core.AiProviderType
 import com.osamu.aide.ai.core.ApprovalRequest
 import com.osamu.aide.ai.core.ChatEntry
@@ -85,6 +97,10 @@ fun ChatPanel(
     onSwitchProvider: (AiProviderType) -> Unit = {},
     onSwitchModel: (String) -> Unit = {},
     onToggleShareContext: (Boolean) -> Unit = {},
+    onCancelSend: () -> Unit = {},
+    onNewChat: () -> Unit = {},
+    onInsertCode: ((String) -> Unit)? = null,
+    activeFileName: String? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier.fillMaxWidth()) {
@@ -93,6 +109,7 @@ fun ChatPanel(
             onSwitchProvider = onSwitchProvider,
             onSwitchModel = onSwitchModel,
             onToggleShareContext = onToggleShareContext,
+            onNewChat = onNewChat,
         )
         HorizontalDivider()
 
@@ -101,6 +118,7 @@ fun ChatPanel(
             onSend = onSend,
             onSignInGoogle = onSignInGoogle,
             onAddKey = onAddKey,
+            onInsertCode = onInsertCode,
             modifier = Modifier.weight(1f),
         )
 
@@ -126,7 +144,10 @@ fun ChatPanel(
         Composer(
             enabled = !state.sending && state.pendingApproval == null,
             sending = state.sending,
+            activeStatus = state.activeStatus,
+            activeFileName = activeFileName,
             onSend = onSend,
+            onCancelSend = onCancelSend,
         )
     }
 }
@@ -152,6 +173,7 @@ private fun AgentHeader(
     onSwitchProvider: (AiProviderType) -> Unit,
     onSwitchModel: (String) -> Unit,
     onToggleShareContext: (Boolean) -> Unit,
+    onNewChat: () -> Unit,
 ) {
     var showProviderMenu by remember { mutableStateOf(false) }
     var showModelMenu by remember { mutableStateOf(false) }
@@ -234,7 +256,22 @@ private fun AgentHeader(
                 }
             }
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                IconButton(
+                    onClick = onNewChat,
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        Icons.Default.Add,
+                        contentDescription = "New chat",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+
                 Box {
                     AssistChip(
                         onClick = { showModelMenu = true },
@@ -294,6 +331,7 @@ private fun Transcript(
     onSend: (String) -> Unit,
     onSignInGoogle: () -> Unit,
     onAddKey: () -> Unit,
+    onInsertCode: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     if (state.entries.isEmpty()) {
@@ -317,13 +355,13 @@ private fun Transcript(
         state = listState,
         modifier = modifier.fillMaxWidth(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         items(state.entries) { entry ->
             when (entry) {
                 is ChatEntry.FromUser -> Bubble(entry.text, fromUser = true)
-                is ChatEntry.FromAssistant -> Bubble(entry.text, fromUser = false)
-                is ChatEntry.Tool -> ToolChip(entry)
+                is ChatEntry.FromAssistant -> Bubble(entry.text, fromUser = false, onInsertCode = onInsertCode)
+                is ChatEntry.Tool -> ToolCard(entry)
             }
         }
     }
@@ -368,9 +406,6 @@ private fun EmptyTranscript(
                 textAlign = TextAlign.Center,
             )
 
-            // Every provider that needs a key says so here, not just Gemini.
-            // The other three left this space empty and the composer disabled,
-            // which reads as a broken panel rather than an unfinished setup.
             if (state.needsKey) {
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -456,49 +491,145 @@ private fun QuickActionsBar(onSend: (String) -> Unit) {
 }
 
 @Composable
-private fun Bubble(text: String, fromUser: Boolean) {
+private fun Bubble(
+    text: String,
+    fromUser: Boolean,
+    onInsertCode: ((String) -> Unit)? = null,
+) {
     val colors = MaterialTheme.colorScheme
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = if (fromUser) Arrangement.End else Arrangement.Start,
     ) {
-        Surface(
-            color = if (fromUser) colors.primaryContainer else colors.surfaceVariant,
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.widthIn(max = 320.dp),
-        ) {
-            Text(
-                text = text,
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (fromUser) colors.onPrimaryContainer else colors.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            )
+        if (fromUser) {
+            Surface(
+                color = colors.primaryContainer,
+                shape = RoundedCornerShape(topStart = 16.dp, topEnd = 4.dp, bottomStart = 16.dp, bottomEnd = 16.dp),
+                modifier = Modifier.fillMaxWidth(0.85f),
+            ) {
+                Text(
+                    text = text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.onPrimaryContainer,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                )
+            }
+        } else {
+            Surface(
+                color = colors.surfaceContainerLow,
+                shape = RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Box(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                    MarkdownText(
+                        markdown = text,
+                        onInsertCode = onInsertCode,
+                        textColor = colors.onSurface,
+                    )
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun ToolChip(entry: ChatEntry.Tool) {
+private fun ToolCard(entry: ChatEntry.Tool) {
     val colors = MaterialTheme.colorScheme
+    var expanded by remember { mutableStateOf(false) }
+
     val (icon, tint) = when {
         entry.declined -> Icons.Default.Block to colors.outline
         entry.failed -> Icons.Default.ErrorOutline to colors.error
         else -> entry.name.icon() to colors.primary
     }
 
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        modifier = Modifier.padding(start = 4.dp),
+    Surface(
+        color = colors.surfaceContainerHigh.copy(alpha = 0.65f),
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        onClick = { expanded = !expanded },
     ) {
-        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(14.dp))
-        Text(
-            text = entry.summary(),
-            style = MaterialTheme.typography.labelMedium,
-            color = if (entry.failed) colors.error else colors.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(16.dp))
+                    Text(
+                        text = entry.summary(),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (entry.failed) colors.error else colors.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Icon(
+                    if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = if (expanded) "Collapse" else "Expand",
+                    tint = colors.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+
+            if (expanded) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    if (entry.input.isNotEmpty()) {
+                        Text(
+                            text = "ARGUMENTS",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.primary,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        entry.input.forEach { (k, v) ->
+                            Text(
+                                text = "$k: $v",
+                                style = CodeTextStyle.copy(fontSize = 11.5.sp),
+                                color = colors.onSurfaceVariant,
+                            )
+                        }
+                    }
+
+                    val toolResult = entry.result
+                    if (!toolResult.isNullOrBlank()) {
+                        Text(
+                            text = "RESULT",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.primary,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 140.dp)
+                                .background(colors.surface, RoundedCornerShape(6.dp))
+                                .verticalScroll(rememberScrollState())
+                                .horizontalScroll(rememberScrollState())
+                                .padding(8.dp),
+                        ) {
+                            Text(
+                                text = toolResult,
+                                style = CodeTextStyle.copy(fontSize = 11.5.sp),
+                                color = if (entry.failed) colors.error else colors.onSurface,
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -515,6 +646,11 @@ private fun String.icon(): ImageVector = when (this) {
     "list_files" -> Icons.Default.FolderOpen
     "read_file" -> Icons.Default.Description
     "grep" -> Icons.Default.Search
+    "git_status", "git_diff", "git_log" -> Icons.Default.AccountTree
+    "run_shell" -> Icons.Default.Terminal
+    "search_definitions" -> Icons.Default.Code
+    "run_build", "read_build_errors" -> Icons.Default.Build
+    "check_kotlin", "explain_kotlin_symbol" -> Icons.Default.Code
     else -> Icons.Default.Edit
 }
 
@@ -527,48 +663,119 @@ private fun ApprovalPrompt(request: ApprovalRequest, onApproval: (Boolean) -> Un
 
     Surface(
         color = colors.secondaryContainer,
-        shape = RoundedCornerShape(8.dp),
-        modifier = Modifier.padding(8.dp),
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(8.dp),
     ) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Icon(
-                    Icons.Default.Edit,
+                    if (request.toolName == "run_shell") Icons.Default.Terminal else Icons.Default.Edit,
                     contentDescription = null,
                     tint = colors.onSecondaryContainer,
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier.size(18.dp),
                 )
                 Text(
-                    text = "Write ${request.path.ifBlank { "a file" }}?",
+                    text = if (request.toolName == "run_shell") {
+                        "Run shell command?"
+                    } else {
+                        "Write ${request.path.ifBlank { "a file" }}?"
+                    },
                     style = MaterialTheme.typography.titleSmall,
                     color = colors.onSecondaryContainer,
+                    fontWeight = FontWeight.Bold,
                 )
             }
             Text(
-                text = "This replaces the file's contents. Nothing is written until you allow it.",
+                text = if (request.toolName == "run_shell") {
+                    "This executes in the project environment. Shell commands can alter files."
+                } else {
+                    "This replaces or updates file contents. Review the proposed changes below:"
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = colors.onSecondaryContainer,
             )
 
             if (request.preview.isNotBlank()) {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 180.dp)
-                        .background(colors.surface, RoundedCornerShape(8.dp))
-                        .verticalScroll(rememberScrollState())
-                        .padding(8.dp),
-                ) {
-                    Text(request.preview, style = CodeTextStyle, color = colors.onSurface)
+                if (request.toolName == "run_shell") {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(colors.surface, RoundedCornerShape(6.dp))
+                            .padding(10.dp),
+                    ) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                text = "$",
+                                style = CodeTextStyle.copy(fontWeight = FontWeight.Bold),
+                                color = colors.primary,
+                            )
+                            Text(request.preview, style = CodeTextStyle, color = colors.onSurface)
+                        }
+                    }
+                } else {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 240.dp)
+                            .background(colors.surface, RoundedCornerShape(6.dp))
+                            .verticalScroll(rememberScrollState())
+                            .horizontalScroll(rememberScrollState())
+                            .padding(6.dp),
+                    ) {
+                        DiffViewer(request.preview)
+                    }
                 }
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(top = 4.dp),
+            ) {
                 Button(onClick = { onApproval(true) }) { Text("Allow") }
-                TextButton(onClick = { onApproval(false) }) { Text("Don't") }
+                OutlinedButton(onClick = { onApproval(false) }) { Text("Decline") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiffViewer(preview: String) {
+    val lines = remember(preview) { preview.lines() }
+    val additionColor = Color(0xFF2E7D32)
+    val additionBg = Color(0x224CAF50)
+    val deletionColor = Color(0xFFC62828)
+    val deletionBg = Color(0x22F44336)
+
+    Column {
+        lines.forEachIndexed { index, line ->
+            val (bgColor, textColor) = when {
+                line.startsWith("+") -> additionBg to additionColor
+                line.startsWith("-") -> deletionBg to deletionColor
+                else -> Color.Transparent to MaterialTheme.colorScheme.onSurface
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(bgColor)
+                    .padding(vertical = 1.dp, horizontal = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = "${index + 1}".padStart(3),
+                    style = CodeTextStyle.copy(fontSize = 11.sp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                )
+                Text(
+                    text = line,
+                    style = CodeTextStyle.copy(fontSize = 11.5.sp),
+                    color = textColor,
+                )
             }
         }
     }
@@ -616,14 +823,7 @@ private fun KeyPrompt(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                // Gemini used to be offered "sign-in or an API key" here. The
-                // sign-in completes and then every request fails, because
-                // generateContent accepts no OAuth scope -- so the sentence
-                // named a route that does not arrive anywhere.
                 text = if (activeProvider == AiProviderType.CUSTOM) {
-                    // An address, not a key: Custom's key is optional, and
-                    // asking for one sent a user to paste a key into a
-                    // provider that then had nowhere to send it.
                     "Custom needs the address of an OpenAI-compatible server."
                 } else {
                     "${activeProvider.displayName} needs an API key. It stays on this device."
@@ -659,51 +859,145 @@ private fun KeyPrompt(
 }
 
 @Composable
-private fun Composer(enabled: Boolean, sending: Boolean, onSend: (String) -> Unit) {
+private fun Composer(
+    enabled: Boolean,
+    sending: Boolean,
+    activeStatus: String?,
+    activeFileName: String?,
+    onSend: (String) -> Unit,
+    onCancelSend: () -> Unit,
+) {
     var draft by remember { mutableStateOf("") }
+    var attachActiveFile by remember { mutableStateOf(activeFileName != null) }
 
     fun submit() {
         if (!enabled || draft.isBlank()) return
-        onSend(draft)
+        val finalPrompt = if (attachActiveFile && activeFileName != null) {
+            "[@${activeFileName}]\n$draft"
+        } else {
+            draft
+        }
+        onSend(finalPrompt)
         draft = ""
     }
 
-    Row(
+    Column(
         Modifier
             .fillMaxWidth()
-            .padding(8.dp),
-        verticalAlignment = Alignment.Bottom,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        OutlinedTextField(
-            value = draft,
-            onValueChange = { draft = it },
-            modifier = Modifier.weight(1f),
-            placeholder = { Text("Ask about this project") },
-            maxLines = 5,
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-            keyboardActions = KeyboardActions(onSend = { submit() }),
-        )
-
+        // In-flight status indicator
         if (sending) {
-            CircularProgressIndicator(
-                Modifier
-                    .size(24.dp)
-                    .padding(bottom = 12.dp),
-                strokeWidth = 2.dp,
-            )
-        } else {
-            val canSend = enabled && draft.isNotBlank()
-            IconButton(onClick = ::submit, enabled = canSend) {
-                Icon(
-                    Icons.AutoMirrored.Filled.Send,
-                    contentDescription = "Send",
-                    tint = if (canSend) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                    },
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(14.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.primary,
                 )
+                Text(
+                    text = activeStatus ?: "Thinking...",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+
+        // Active File context chip
+        if (activeFileName != null && attachActiveFile) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                AssistChip(
+                    onClick = { attachActiveFile = false },
+                    label = {
+                        Text(
+                            text = "Context: $activeFileName",
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.Description,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                        )
+                    },
+                    trailingIcon = {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Remove context",
+                            modifier = Modifier.size(14.dp),
+                        )
+                    },
+                    colors = AssistChipDefaults.assistChipColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f),
+                    ),
+                )
+            }
+        }
+
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.Bottom,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedTextField(
+                value = draft,
+                onValueChange = { draft = it },
+                modifier = Modifier.weight(1f),
+                placeholder = { Text("Ask about this project...") },
+                maxLines = 6,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
+            )
+
+            if (sending) {
+                IconButton(
+                    onClick = onCancelSend,
+                    modifier = Modifier
+                        .padding(bottom = 6.dp)
+                        .background(
+                            MaterialTheme.colorScheme.errorContainer,
+                            RoundedCornerShape(12.dp),
+                        ),
+                ) {
+                    Icon(
+                        Icons.Default.Stop,
+                        contentDescription = "Stop generation",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            } else {
+                val canSend = enabled && draft.isNotBlank()
+                IconButton(
+                    onClick = ::submit,
+                    enabled = canSend,
+                    modifier = Modifier
+                        .padding(bottom = 6.dp)
+                        .background(
+                            if (canSend) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                            RoundedCornerShape(12.dp),
+                        ),
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.Send,
+                        contentDescription = "Send",
+                        tint = if (canSend) {
+                            MaterialTheme.colorScheme.onPrimary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                        },
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
             }
         }
     }

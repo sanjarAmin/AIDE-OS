@@ -259,6 +259,10 @@ Ordered by (value × feasibility), matching your stated priority:
 
 **Phase E — broaden.** Dart/Flutter, Rust (`cargo-ndk`), Python (Chaquopy-style or Kivy), Lua. Each is a `:toolchain` plugin + a `:lsp` module against interfaces already established.
 
+> **Amended — Python is delivered, and by neither route this names.** Not Chaquopy and not Kivy: both embed a Python *into an APK*, which answers a question nobody here was asking. Termux publishes CPython 3.14 built against Bionic, so it runs through the same `linker64` route as node and mono and a Python project is a third kind of *run* rather than a third way to build an APK — `:engine:python`, 13 MB down and 40 MB installed, the smallest of the three runtimes. It also turned out to be the best-behaved: CPython derives `sys.prefix` from `argv[0]` rather than `/proc/self/exe`, so unlike node it is not misled about its own location and needs no workaround at all. `tools/python/FINDINGS.md`, spike R17.
+>
+> **Dart/Flutter is still ahead, and is a milestone rather than a module.** It needs a Bionic Dart SDK (Termux's main repo publishes none), `gen_snapshot` for a host/target pair the SDK ships no binary for, and a `flutter` tool that spawns children on a platform where `execve` out of app storage is refused. `tools/flutter/FINDINGS.md` states the three questions a spike would have to settle and is explicit that none of them has been measured. The editor-only piece — a Dart grammar for a project synced from a desktop — is much smaller and is not the same thing.
+
 ---
 
 ## AI Layer (`:ai:core`)

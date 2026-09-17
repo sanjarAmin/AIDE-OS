@@ -71,6 +71,8 @@ val stageDeviceArchives by tasks.registering {
                 "$home/aide-os-spikes/analysisapi",
                 "$home/aide-os-spikes/node-x86_64",
                 "$home/aide-os-spikes/mono-x86_64",
+                // M12: CPython, the third of the run-only runtimes.
+                "$home/aide-os-spikes/python-x86_64",
                 // Spike R16: llama.cpp, and the models it serves.
                 "$home/aide-os-spikes/localai-x86_64",
                 "$home/aide-os-spikes/localai-models",

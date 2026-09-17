@@ -94,6 +94,23 @@ class ToolchainManager(
         if (monoRoot() != null) null else ToolchainComponent.mono(Build.SUPPORTED_ABIS.first())
 
     /**
+     * Where CPython is installed, or null when it is not.
+     *
+     * The marker is the **versioned** binary and not `bin/python3`, which is a
+     * symlink to it: an unpack that stopped between the two leaves a link
+     * pointing at nothing. Mono's `bin/mono-sgen` is checked for the same
+     * reason. The name comes from the component so that the two cannot
+     * disagree about which version was published.
+     */
+    fun pythonRoot(): File? = ToolchainComponent.python(Build.SUPPORTED_ABIS.first())
+        ?.let { storage.directoryFor(it) }
+        ?.takeIf { File(it, ToolchainComponent.PYTHON_RUNTIME).isFile }
+
+    /** The Python component this device needs, or null when it is installed. */
+    fun missingPythonComponent(): ToolchainComponent? =
+        if (pythonRoot() != null) null else ToolchainComponent.python(Build.SUPPORTED_ABIS.first())
+
+    /**
      * The archives Kotlin intelligence needs, or null if either is missing.
      *
      * Two components, not one: the Analysis API is built against the Kotlin

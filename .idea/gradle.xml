@@ -41,6 +41,7 @@
             <option value="$PROJECT_DIR$/spike/jdwp" />
             <option value="$PROJECT_DIR$/spike/jdwpdebuggee" />
             <option value="$PROJECT_DIR$/spike/kotlinls" />
+            <option value="$PROJECT_DIR$/spike/localai" />
             <option value="$PROJECT_DIR$/spike/mono" />
             <option value="$PROJECT_DIR$/spike/nativeexec" />
             <option value="$PROJECT_DIR$/spike/nodejs" />

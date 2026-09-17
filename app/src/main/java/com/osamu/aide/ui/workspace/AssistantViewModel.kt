@@ -11,6 +11,7 @@ import com.osamu.aide.core.fs.Project
 import com.osamu.aide.core.fs.ProjectRepository
 import com.osamu.aide.ai.core.ChatController
 import com.osamu.aide.ai.core.ChatUiState
+import com.osamu.aide.vcs.git.GitWorkspace
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -42,6 +43,8 @@ class AssistantViewModel(
      */
     private val languages: LanguageServices,
     private val keys: ApiKeyStore? = null,
+    private val git: GitWorkspace? = null,
+    private val workspaceRoot: File? = null,
 ) : ViewModel() {
 
     private val lastBuild = LastBuild()
@@ -77,6 +80,14 @@ class AssistantViewModel(
                 // decided that once at open would never notice them arriving.
                 serviceFor = { file -> languages.serviceFor(file, projectDir) },
                 project = { openProject },
+            ) + gitTools(
+                project = { openProject },
+                git = git,
+                workspaceRoot = workspaceRoot,
+            ) + shellTools(
+                project = { openProject },
+            ) + codeSearchTools(
+                project = { openProject },
             ),
             keys = keys,
         )
@@ -98,6 +109,10 @@ class AssistantViewModel(
 
     fun switchModel(model: String) =
         controller.value?.switchModel(model) ?: Unit
+
+    fun cancelSend() = controller.value?.cancelSend() ?: Unit
+
+    fun newChat() = controller.value?.newChat() ?: Unit
 
     fun toggleShareContext(share: Boolean) =
         controller.value?.toggleShareContext(share) ?: Unit

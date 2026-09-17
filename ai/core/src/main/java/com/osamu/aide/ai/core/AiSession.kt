@@ -100,11 +100,12 @@ class AiSession(
         projectContext: String,
         userText: String,
         effort: OutputConfig.Effort = OutputConfig.Effort.HIGH,
+        onStatus: ((String) -> Unit)? = null,
     ): Reply {
         return if (client != null && assembler != null) {
-            sendAnthropic(projectContext, userText, effort)
+            sendAnthropic(projectContext, userText, effort, onStatus)
         } else if (aiClient != null) {
-            sendGeneric(projectContext, userText, effort)
+            sendGeneric(projectContext, userText, effort, onStatus)
         } else {
             Reply("No AI client configured.", emptyList())
         }
@@ -114,6 +115,7 @@ class AiSession(
         projectContext: String,
         userText: String,
         effort: OutputConfig.Effort,
+        onStatus: ((String) -> Unit)? = null,
     ): Reply {
         anthropicMessages += userTurn(userText)
         val runs = mutableListOf<ToolRun>()
@@ -129,10 +131,14 @@ class AiSession(
             if (calls.isEmpty()) return Reply(response.textOnly(), runs)
 
             val results = calls.map { call ->
+                val target = call.inputAsStrings()["path"] ?: call.inputAsStrings()["command"] ?: call.inputAsStrings()["query"]
+                val statusMsg = if (target != null) "Running ${call.name()} ($target)..." else "Running ${call.name()}..."
+                onStatus?.invoke(statusMsg)
                 val run = executeTool(call.name(), call.inputAsStrings())
                 runs += run
                 result(call.id(), run.outcome)
             }
+            onStatus?.invoke("Analyzing results...")
 
             anthropicMessages += MessageParam.builder()
                 .role(MessageParam.Role.USER)
@@ -152,6 +158,7 @@ class AiSession(
         projectContext: String,
         userText: String,
         effort: OutputConfig.Effort,
+        onStatus: ((String) -> Unit)? = null,
     ): Reply {
         genericMessages += AiMessage(AiRole.USER, userText)
         val runs = mutableListOf<ToolRun>()
@@ -187,6 +194,9 @@ class AiSession(
 
             val results = mutableListOf<AiPart.FunctionResponse>()
             for (call in calls) {
+                val target = call.args["path"] ?: call.args["command"] ?: call.args["query"]
+                val statusMsg = if (target != null) "Running ${call.name} ($target)..." else "Running ${call.name}..."
+                onStatus?.invoke(statusMsg)
                 val run = executeTool(call.name, call.args)
                 runs += run
 
@@ -201,6 +211,7 @@ class AiSession(
                     isError = run.outcome is ProjectFiles.Outcome.Refused,
                 )
             }
+            onStatus?.invoke("Analyzing results...")
 
             genericMessages += AiMessage(
                 role = AiRole.USER,

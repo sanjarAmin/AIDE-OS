@@ -7,7 +7,7 @@ import com.osamu.aide.core.fs.Project
 import com.osamu.aide.core.fs.ProjectAdoption
 import com.osamu.aide.core.fs.ProjectImporter
 import com.osamu.aide.core.fs.ProjectRepository
-import com.osamu.aide.core.fs.SourceLanguage
+import com.osamu.aide.core.fs.ProjectTemplate
 import com.osamu.aide.core.common.AppResult
 import android.net.Uri
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -81,15 +81,25 @@ class ProjectsViewModel(
         }
     }
 
-    fun createProject(name: String, language: SourceLanguage) {
+    /**
+     * Creates a project from [template].
+     *
+     * The language comes from the template rather than being chosen beside it:
+     * the picker offers templates now, and a template knows what it writes. A
+     * screen that carried both could pass a pair that disagree, and the symptom
+     * would be a Kotlin file in a project the build never runs kotlinc for.
+     */
+    fun createProject(name: String, template: ProjectTemplate) {
         viewModelScope.launch {
-            val applicationId = "com.example." + name.lowercase().filter { it.isLetterOrDigit() }
-                .ifEmpty { "app" }
+            // The rule lives in :core:fs so the dialog's preview derives the
+            // same package directory this project will actually have.
+            val applicationId = ProjectDescriptor.applicationIdFor(name)
             val result = repository.createProject(
                 name = name,
                 applicationId = applicationId,
-                language = language,
+                language = template.language,
                 engine = BuildEngine.FAST,
+                template = template,
             )
             when (result) {
                 is AppResult.Success -> refresh()

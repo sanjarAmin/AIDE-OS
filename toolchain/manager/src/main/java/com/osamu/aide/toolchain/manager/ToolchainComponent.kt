@@ -425,6 +425,79 @@ data class ToolchainComponent(
         )
 
         /**
+         * CPython, for Python projects.
+         *
+         * Termux's build, for the reason node's and mono's are: python.org
+         * publishes no Android build at all, and every manylinux wheel the rest
+         * of the ecosystem is made of is glibc. `tools/python/fetch-python.sh`
+         * assembles it from the package repo, walking the closure from two
+         * roots -- `python` and `python-pip`, which are separate packages, the
+         * same trap `nodejs-lts` and `npm` set.
+         *
+         * **The smallest of the three runtimes by a wide margin**: 13 MB down
+         * and 40 MB installed, against node's 38/110 and mono's 45/120. The
+         * trim is what makes that true and it is listed in the fetch script --
+         * CPython's own test suite is 25 MB of the untrimmed tree.
+         *
+         * **The pin is reproducible, which no other component's is.**
+         * `fetch-python.sh` sorts the tar, zeroes uid/gid and mtimes and gzips
+         * with `-n`, so two people running it produce identical bytes --
+         * verified by running it twice. That makes this checksum something
+         * anyone can re-derive rather than a number only its author can
+         * confirm, and it is the shape the other fetch scripts should take.
+         *
+         * The marker is the versioned binary rather than `bin/python3`, which
+         * is a **symlink** to it: an unpack that stopped between the two leaves
+         * a link pointing at nothing, and a link that resolves nowhere is
+         * `isFile == false` anyway -- so checking the real file is both the
+         * earlier and the honest test. The same reasoning as mono's
+         * `bin/mono-sgen`, and `ToolchainManager.pythonRoot` states the version
+         * once so this and it cannot disagree.
+         *
+         * PSF licence: no SDK licence to accept.
+         */
+        fun python(abi: String): ToolchainComponent? = when (abi) {
+            "arm64-v8a" -> python(
+                architecture = "aarch64",
+                sha1 = "b962ba23cc4f1003470758e7a7c17fe08d9b7993",
+                archiveBytes = 13_397_153L,
+            )
+            "x86_64" -> python(
+                architecture = "x86_64",
+                sha1 = "3d87abc1ac4f689b84630498afbeb5abb7c7ae33",
+                archiveBytes = 13_219_055L,
+            )
+            // Not built for the 32-bit ABIs, for the reason the JDK is not.
+            else -> null
+        }
+
+        private fun python(
+            architecture: String,
+            sha1: String,
+            archiveBytes: Long,
+        ) = ToolchainComponent(
+            id = "python-3.14",
+            displayName = "Python 3.14.6",
+            archiveUrl = "https://github.com/sanjarAmin/AIDE-OS/releases/download/" +
+                "python-3.14.6/python-3.14.6-$architecture.tar.gz",
+            archiveSha1 = sha1,
+            archiveBytes = archiveBytes,
+            archive = ComponentArchive.GzippedTar(PYTHON_RUNTIME),
+            installedBytes = 40_000_000L,
+            requiresSdkLicense = false,
+        )
+
+        /**
+         * The interpreter inside the archive, spelled once.
+         *
+         * The version is in the binary's own name, so a Termux bump to 3.15
+         * changes this line and `PythonToolchain` finds whatever is there by
+         * pattern. Two places spelling it differently is an install that
+         * verifies and a toolchain that reports itself missing.
+         */
+        const val PYTHON_RUNTIME = "bin/python3.14"
+
+        /**
          * Every component this app can install.
          *
          * Exists so something can iterate them: `PinnedReleaseTest` checks each
@@ -528,7 +601,7 @@ data class ToolchainComponent(
             // missing, so the JDK's and clang's pins went unchecked by the very
             // test written after a wrong pin shipped -- and they are the
             // components most likely to drift, being ours and rebuilt by hand.
-            *ABIS.flatMap { listOfNotNull(openJdk(it), nativeToolchain(it), node(it), mono(it), llamaCpp(it)) }
+            *ABIS.flatMap { listOfNotNull(openJdk(it), nativeToolchain(it), node(it), mono(it), python(it), llamaCpp(it)) }
                 .toTypedArray(),
             *LOCAL_MODELS.toTypedArray(),
         )

@@ -75,7 +75,7 @@ class OpenAiClient(
                     "${provider.displayName} request failed (${response.code}): $responseBody",
                 )
             }
-            parseResponse(responseBody)
+            parseResponse(responseBody, offered = request.tools)
         }
     }
 
@@ -196,7 +196,16 @@ class OpenAiClient(
         return array
     }
 
-    private fun parseResponse(body: String): AiClientResponse {
+    /**
+     * @param offered the tools this request declared, or empty when it declared
+     *   none. Only a name in this list can be recovered from the reply text --
+     *   see [recoverWrittenCall] -- so the inline-completion path, which offers
+     *   no tools, cannot have code it returns mistaken for a call.
+     */
+    private fun parseResponse(
+        body: String,
+        offered: List<AideTool> = emptyList(),
+    ): AiClientResponse {
         val json = JSONObject(body)
         val choices = json.optJSONArray("choices") ?: return AiClientResponse(emptyList())
         if (choices.length() == 0) return AiClientResponse(emptyList())
@@ -232,7 +241,84 @@ class OpenAiClient(
             }
         }
 
+        // **A call the model wrote out instead of making.** Small local models
+        // choose the right tool and then print it as JSON in the reply, because
+        // the server's parser never recognised the markup their chat template
+        // emitted. Measured twice: Qwen2.5-Coder 1.5B did it 5/5, and the 7B
+        // 3/3 with `--jinja` already on, so it is not something a bigger model
+        // grows out of. `tools/localai/FINDINGS.md` §4.
+        //
+        // Without this the assistant looks like it is working and never reads a
+        // file -- the shape `ai/core/FINDINGS.md` warns about, where the bug
+        // returns a plausible answer.
+        if (parts.none { it is AiPart.FunctionCall }) {
+            recoverWrittenCall(content, offered)?.let { (call, remaining) ->
+                return AiClientResponse(
+                    // The prose without the JSON. Keeping the object as text
+                    // too would show the user the mechanics of a call the app
+                    // is about to make for them.
+                    parts = listOfNotNull(remaining?.let(AiPart::Text), call),
+                    finishReason = finishReason,
+                )
+            }
+        }
+
         return AiClientResponse(parts = parts, finishReason = finishReason)
+    }
+
+    /**
+     * A tool call the model wrote into its reply, or null.
+     *
+     * **The name is the guard, and it is what makes this safe.** An IDE
+     * assistant is asked for JSON all the time -- show me a `package.json`,
+     * what does this config mean -- so recovering "a reply containing an
+     * object" would execute tools the user only asked to look at. The object
+     * must name a tool *this request offered* and carry `arguments`, which
+     * together is a shape nothing but a call has.
+     *
+     * Deliberately not anchored to the whole reply. The models observed wrap
+     * the object in a ```json fence and sometimes a sentence, and rejecting
+     * those would recover none of the cases that actually occur -- the name
+     * check is doing the work, not the position.
+     *
+     * Returns the call and whatever prose surrounded it, so the caller can show
+     * one and act on the other.
+     */
+    private fun recoverWrittenCall(
+        content: String,
+        offered: List<AideTool>,
+    ): Pair<AiPart.FunctionCall, String?>? {
+        if (offered.isEmpty() || content.isBlank()) return null
+        val names = offered.mapTo(mutableSetOf()) { it.name }
+
+        // Greedy from the first brace to the last: a call's arguments are
+        // nested objects, and a lazy match stops at the first inner `}`.
+        val match = Regex("""\{[\s\S]*\}""").find(content) ?: return null
+        val parsed = runCatching { JSONObject(match.value) }.getOrNull() ?: return null
+
+        val name = parsed.optString("name").takeIf { it in names } ?: return null
+        // Either shape: an object, or the string OpenAI's own wire format uses.
+        val arguments = parsed.optJSONObject("arguments")
+            ?: runCatching { JSONObject(parsed.optString("arguments")) }.getOrNull()
+            ?: return null
+
+        val args = mutableMapOf<String, String>()
+        val keys = arguments.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            args[key] = arguments.optString(key)
+        }
+
+        // No id: this call was never registered with the server, so there is
+        // nothing for a `tool_call_id` to refer back to. The generic loop
+        // matches results by name, which is the path Gemini already needs.
+        val call = AiPart.FunctionCall(id = "", name = name, args = args)
+        val prose = (content.take(match.range.first) + content.drop(match.range.last + 1))
+            .replace("```json", "")
+            .replace("```", "")
+            .trim()
+            .takeIf { it.isNotBlank() }
+        return call to prose
     }
 
     companion object {

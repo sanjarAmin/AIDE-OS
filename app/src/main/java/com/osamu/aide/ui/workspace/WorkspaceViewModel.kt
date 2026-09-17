@@ -23,9 +23,11 @@ import com.osamu.aide.engine.api.RunRequest
 import com.osamu.aide.engine.api.RunResult
 import com.osamu.aide.engine.mono.MonoRunSystem
 import com.osamu.aide.engine.node.NodeRunSystem
+import com.osamu.aide.engine.python.PythonRunSystem
 import com.osamu.aide.toolchain.nativetools.LinkerLaunch
 import com.osamu.aide.toolchain.nativetools.MonoToolchain
 import com.osamu.aide.toolchain.nativetools.NodeToolchain
+import com.osamu.aide.toolchain.nativetools.PythonToolchain
 import com.osamu.aide.engine.api.BuildResult
 import com.osamu.aide.engine.api.DebuggerRequest
 import com.osamu.aide.engine.api.BuildStage
@@ -920,6 +922,10 @@ class WorkspaceViewModel(
                 runCSharpProject(project)
                 return@launch
             }
+            if (project.language == SourceLanguage.PYTHON) {
+                runPythonProject(project)
+                return@launch
+            }
             // What to do once a download lands: carry on with what was asked
             // for. The native offer below used to take the default and turn a
             // Debug tap into a plain build.
@@ -1027,8 +1033,8 @@ class WorkspaceViewModel(
         val engine = NodeRunSystem(
             node = NodeToolchain(root, launch),
             dispatchers = dispatchers,
-            home = layout.nodeHome,
-            cache = layout.nodeCache,
+            home = layout.runHome,
+            cache = layout.runCache,
         )
 
         try {
@@ -1064,6 +1070,12 @@ class WorkspaceViewModel(
         buildJob = viewModelScope.launch {
             descriptorJob?.join()
             val project = project ?: return@launch
+            // Python's package manager is a different program with different
+            // arguments, so it gets its own function rather than a parameter.
+            if (project.language == SourceLanguage.PYTHON) {
+                installPythonDependencies(project)
+                return@launch
+            }
             if (project.language != SourceLanguage.JAVASCRIPT) return@launch
 
             val root = toolchain.nodeRoot() ?: run {
@@ -1081,8 +1093,8 @@ class WorkspaceViewModel(
             val engine = NodeRunSystem(
                 node = NodeToolchain(root, LinkerLaunch.forThisProcess()),
                 dispatchers = dispatchers,
-                home = layout.nodeHome,
-                cache = layout.nodeCache,
+                home = layout.runHome,
+                cache = layout.runCache,
             )
 
             try {
@@ -1109,6 +1121,78 @@ class WorkspaceViewModel(
                 // should: it is thousands of files nobody browses.
                 rebuildTree()
             }
+        }
+    }
+
+    /**
+     * Installs a Python project's dependencies with pip, where a run reports.
+     *
+     * `-r requirements.txt` and not a bare `install`: pip with no arguments
+     * installs nothing and prints its usage, which in the run panel reads as
+     * the button having done something. The file is the one the template
+     * writes, and the engine adds `--target` so the packages land in the
+     * project rather than in the shared toolchain -- see `PythonRunSystem.pip`.
+     *
+     * A project with no `requirements.txt` is told so rather than being handed
+     * to pip, which would report `Could not open requirements file` against a
+     * path the user never wrote.
+     */
+    private suspend fun installPythonDependencies(project: Project) {
+        val requirements = File(project.rootDir, "requirements.txt")
+        if (!requirements.isFile) {
+            _events.send(
+                WorkspaceEvent.Notice(
+                    "This project has no requirements.txt, so there is nothing to install.",
+                ),
+            )
+            return
+        }
+
+        val root = toolchain.pythonRoot() ?: run {
+            toolchain.missingPythonComponent()?.let { component ->
+                offerComponentInstall(
+                    component = component,
+                    rationale = "Installing dependencies needs CPython, which is about " +
+                        "${component.archiveBytes / (1024 * 1024)} MB to download.",
+                    then = AfterInstall.INSTALL_DEPENDENCIES,
+                )
+            }
+            return
+        }
+        val layout = ProjectLayout.of(project)
+        val engine = PythonRunSystem(
+            python = PythonToolchain(root, LinkerLaunch.forThisProcess()),
+            dispatchers = dispatchers,
+            home = layout.runHome,
+            cache = layout.runCache,
+            packages = layout.pythonPackages,
+        )
+
+        try {
+            _state.update {
+                it.copy(
+                    isBuildPanelOpen = true,
+                    build = BuildUiState(isRunning = true, isRun = true),
+                )
+            }
+            engine.pip(
+                arguments = listOf("install", "-r", requirements.absolutePath),
+                projectDir = project.rootDir,
+            ).collect(::onRunEvent)
+        } finally {
+            _state.update {
+                it.copy(
+                    build = it.build.copy(
+                        isRunning = false,
+                        stage = null,
+                        outcome = it.build.outcome ?: "Install stopped.",
+                    ),
+                )
+            }
+            // An install writes into the project, and the tree is stale until
+            // it is read again. Not `.aide-packages` itself, which is a
+            // dot-directory the file tree hides and should.
+            rebuildTree()
         }
     }
 
@@ -1162,6 +1246,71 @@ class WorkspaceViewModel(
                     projectDir = project.rootDir,
                     entryPoint = File(project.rootDir, "Program.cs"),
                 ),
+            ).collect(::onRunEvent)
+        } finally {
+            _state.update {
+                it.copy(
+                    build = it.build.copy(
+                        isRunning = false,
+                        stage = null,
+                        outcome = it.build.outcome ?: "Run stopped.",
+                    ),
+                )
+            }
+        }
+    }
+
+    /**
+     * Runs a Python project, into the same panel as everything else.
+     *
+     * Structurally the third of [runNodeProject] and [runCSharpProject], and
+     * deliberately not folded together with either: the three differ in the
+     * component they offer, the toolchain they build, and the directories they
+     * hand it, which is most of what any of them does. A shared helper would
+     * take all three as parameters and be longer than the three it replaced.
+     *
+     * A missing entry point is reported by the engine, which names the path it
+     * looked for -- `main.py` at the project root. That is better than anything
+     * this could say: Python has no manifest naming an entry point, so the
+     * convention is the whole answer and the user needs to see which file it
+     * expected rather than a sentence about conventions.
+     */
+    private suspend fun runPythonProject(project: Project) {
+        val root = toolchain.pythonRoot() ?: run {
+            toolchain.missingPythonComponent()?.let { component ->
+                val megabytes = component.archiveBytes / (1024 * 1024)
+                offerComponentInstall(
+                    component = component,
+                    rationale = "Running Python needs CPython, which is about " +
+                        "$megabytes MB to download and roughly " +
+                        "${component.installedBytes / (1024 * 1024)} MB once installed.",
+                )
+            } ?: _events.send(
+                WorkspaceEvent.Notice("Python is not available for this device's ABI."),
+            )
+            return
+        }
+
+        val launch = LinkerLaunch.forThisProcess()
+        if (!launch.isAvailable) {
+            _events.send(WorkspaceEvent.Notice("This device has no linker Python can start through."))
+            return
+        }
+        val layout = ProjectLayout.of(project)
+        val engine = PythonRunSystem(
+            python = PythonToolchain(root, launch),
+            dispatchers = dispatchers,
+            home = layout.runHome,
+            cache = layout.runCache,
+            packages = layout.pythonPackages,
+        )
+
+        try {
+            _state.update {
+                it.copy(isBuildPanelOpen = true, build = BuildUiState(isRunning = true, isRun = true))
+            }
+            engine.run(
+                RunRequest(projectDir = project.rootDir, entryPoint = layout.pythonEntryPoint),
             ).collect(::onRunEvent)
         } finally {
             _state.update {

@@ -41,6 +41,23 @@ object ProjectDescriptor {
     fun directoryNameFor(name: String): String =
         name.trim().replace(Regex("[^A-Za-z0-9._-]+"), "-").trim('-').ifEmpty { "project" }
 
+    /**
+     * The application id a new project gets from its name.
+     *
+     * Here rather than in the screen that used to hold it, because the template
+     * **preview** has to derive the same one: the package directory a template
+     * writes into comes from this, so a preview computing it differently would
+     * show the user a path their project will not have. Two rules that agree
+     * today is not a design, it is a coincidence with a deadline.
+     *
+     * Letters and digits only, and lowercased -- unlike [directoryNameFor],
+     * which keeps `.`, `_` and `-`. None of those three is legal in a Java
+     * package segment, so the two cannot share an implementation however
+     * similar they look.
+     */
+    fun applicationIdFor(name: String): String =
+        "com.example." + name.lowercase().filter { it.isLetterOrDigit() }.ifEmpty { "app" }
+
     private const val KEY_NAME = "name"
     private const val KEY_APPLICATION_ID = "applicationId"
     private const val KEY_LANGUAGE = "language"

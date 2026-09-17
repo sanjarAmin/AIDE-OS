@@ -26,11 +26,22 @@ interface ProjectRepository {
      */
     suspend fun openProject(dir: File): AppResult<Project>
 
+    /**
+     * Creates a project and writes [template]'s files into it.
+     *
+     * [language] is still a parameter rather than being read off the template,
+     * because it is what the *project* is -- the descriptor, the run dispatch
+     * and the editor all ask the project and never the template, which is gone
+     * the moment creation finishes. Passing both means a caller can create a
+     * Java project from a template that writes Kotlin, which is wrong; the
+     * default argument makes the honest case the easy one.
+     */
     suspend fun createProject(
         name: String,
         applicationId: String,
         language: SourceLanguage,
         engine: BuildEngine,
+        template: ProjectTemplate = ProjectTemplate.defaultFor(language),
     ): AppResult<Project>
     suspend fun touch(project: Project): AppResult<Unit>
 
@@ -100,6 +111,7 @@ class FileProjectRepository(
         applicationId: String,
         language: SourceLanguage,
         engine: BuildEngine,
+        template: ProjectTemplate,
     ): AppResult<Project> = withContext(dispatchers.io) {
         runCatchingResult {
             val dir = File(workspaceRoot, name.toDirectoryName())
@@ -113,12 +125,17 @@ class FileProjectRepository(
                 language = language,
                 engine = engine,
                 lastOpenedAt = System.currentTimeMillis(),
+                // The template's, not the caller's: a Compose starter is not
+                // buildable without them, and asking the screen to know which
+                // coordinates each template needs would put the catalog in two
+                // places. Every other template declares none.
+                dependencies = template.dependencies,
             )
             writeDescriptor(project)
             // A project with a descriptor and no sources is not something the
             // user can do anything with, and not something the build engine can
             // act on. Creating one means creating something that builds.
-            ProjectTemplate.write(project)
+            template.write(project)
             project
         }
     }

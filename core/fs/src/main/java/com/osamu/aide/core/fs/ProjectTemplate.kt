@@ -3,206 +3,251 @@ package com.osamu.aide.core.fs
 import java.io.File
 
 /**
- * Writes the starting contents of a new project.
+ * The starting contents of a new project, and the reason for writing them.
  *
- * The generated app deliberately reads a string resource from Java. That single
- * line is what makes the template a real test of the build engine rather than a
- * placeholder: it only compiles if aapt2 linked the resources, generated R.java,
- * and the Java compiler was handed it. A template with no resource reference
- * would still build if half the pipeline were broken.
+ * **A template is a claim about what the device can do.** Every one here builds
+ * or runs on a device today with the toolchain that language already ships --
+ * that is the bar for being in [ALL], and it is why there is no Flutter entry
+ * (`tools/flutter/FINDINGS.md`). A picker offering a starter nothing on the
+ * phone can execute teaches the user that the ▶ button is unreliable, which is
+ * a much more expensive lesson than a shorter list.
  *
- * It also uses only framework classes -- no AndroidX -- so that creating and
- * building a project needs no dependency resolution and works offline.
+ * Each carries an [objective] rather than a description, and the difference is
+ * the point: with one starter per language the name said everything, but with
+ * several the user is choosing between things that all "work", so what they
+ * need to read is *what this one is for*. The text is written to finish the
+ * sentence "pick this one to ...".
+ *
+ * Subclasses live beside this file rather than in a `template` package because
+ * `sealed` admits subclasses only from the same package, and the exhaustive
+ * list is worth more than the tidier directory: adding a template without
+ * adding it to [ALL] is then a compile-time omission the catalog test catches
+ * rather than a starter nobody can select.
+ *
+ * @param dependencies Maven coordinates the generated sources need, which the
+ *   repository copies onto the project. Only [ComposeApp] has any: every other
+ *   template is deliberately resolvable-free so that creating a project works
+ *   with no network, which is the state a phone is in more often than a laptop.
  */
-object ProjectTemplate {
+sealed class ProjectTemplate(
+    val id: String,
+    val displayName: String,
+    val objective: String,
+    val language: SourceLanguage,
+    val dependencies: List<String> = emptyList(),
+) {
 
-    fun write(project: Project) {
-        // **A JavaScript project is not an Android app**, and writing one as if
-        // it were is worse than refusing. It has no manifest, no resources and
-        // no `applicationId` that means anything; it has an entry point and a
-        // `package.json`. Handled before the Android layout is touched, because
-        // every line below assumes an APK.
-        //
-        // It reached `else ->` until 2026-09-07 and got a Java Activity --
-        // harmless only because the picker offers Java and Kotlin alone, which
-        // is exactly the kind of trap that survives until someone adds a chip.
-        if (project.language == SourceLanguage.JAVASCRIPT) {
-            writeNodeProject(project)
-            return
-        }
-        // The same reasoning, for the same reason: a C# console app is not an
-        // Android app either.
-        if (project.language == SourceLanguage.CSHARP) {
-            writeCSharpProject(project)
-            return
-        }
+    /** Writes this template's files under [project]'s root. */
+    abstract fun write(project: Project)
 
+    companion object {
+
+        /**
+         * Every template the picker offers, in the order it offers them.
+         *
+         * **Held by [Catalog] and not by this field, and that is load-bearing.**
+         * A `val` here would be a static field of `ProjectTemplate`, so it is
+         * built by that class's initialiser -- which runs *before* any
+         * subclass's. Touching a template object first therefore initialised
+         * the superclass, which built this list out of objects that did not
+         * exist yet, and left **nulls** in it:
+         *
+         * ```
+         * NullPointerException: Attempt to invoke virtual method
+         *   ProjectTemplate.getLanguage() on a null object reference
+         * ```
+         *
+         * It depends entirely on which class something touches first, so it is
+         * invisible until it is not: the same two tests passed in one order and
+         * crashed in the other when JUnit happened to reorder them, and a
+         * screen reading `ALL` first would never have shown it.
+         * `ProjectTemplateCatalogTest` asserts the list has no holes.
+         */
+        val ALL: List<ProjectTemplate> get() = Catalog.ALL
+
+        fun byId(id: String?): ProjectTemplate? = ALL.firstOrNull { it.id == id }
+
+        fun forLanguage(language: SourceLanguage): List<ProjectTemplate> =
+            ALL.filter { it.language == language }
+
+        /**
+         * What a caller gets when it names a language and not a template.
+         *
+         * Every language has one, including the two the picker does not offer
+         * on their own -- [SourceLanguage.C] and [SourceLanguage.CPP] reach
+         * this through an imported project, and answering with the first
+         * template of that language is better than the alternative, which was
+         * `else ->` handing a JNI project a bare Java Activity.
+         */
+        fun defaultFor(language: SourceLanguage): ProjectTemplate =
+            forLanguage(language).firstOrNull() ?: BasicJavaApp
+
+        /**
+         * The default template for [project]'s language.
+         *
+         * Kept because importing and adopting a project both want "make this
+         * buildable" without having an opinion about which starter, and
+         * because every call site that predates the catalog means exactly
+         * this.
+         */
+        fun write(project: Project) = defaultFor(project.language).write(project)
+    }
+}
+
+/**
+ * The catalog, kept outside [ProjectTemplate] so it cannot initialise too early.
+ *
+ * This object is not a `ProjectTemplate`, so nothing initialises it as a side
+ * effect of constructing one. Its list is built the first time somebody asks
+ * for it, by which point every template object exists. See
+ * [ProjectTemplate.Companion.ALL] for the crash that made this necessary.
+ *
+ * **Grouped by language, and the grouping is the order.** The picker heads each
+ * run of one language, so a list that interleaves them -- which this did, as
+ * Java, Kotlin, Java, Kotlin -- prints "JAVA" twice and "KOTLIN" twice and
+ * reads as a rendering fault. Every test passed through it: they assert one row
+ * per template and that each objective is reachable, and neither looks at a
+ * heading. Opening the dialog is what showed it.
+ *
+ * Within a language, ordered by how far the user is from a running program
+ * rather than alphabetically: the starter that needs nothing downloaded comes
+ * first, and the one that needs a resolve or an install comes last.
+ */
+private object Catalog {
+    val ALL: List<ProjectTemplate> = listOf(
+        BasicJavaApp,
+        TwoScreenJavaApp,
+        BasicKotlinApp,
+        ComposeApp,
+        CppNativeLibraryApp,
+        CNativeLibraryApp,
+        NodeScript,
+        NodeHttpServer,
+        NodeCommandLineTool,
+        NodeDependencyDemo,
+        PythonScript,
+        PythonCommandLineTool,
+        PythonDependencyDemo,
+        MonoConsoleApp,
+        MonoCollectionsApp,
+    )
+}
+
+/**
+ * The files every Android template needs, and nothing more.
+ *
+ * Shared rather than repeated because the manifest is the file a template is
+ * most likely to get subtly wrong -- a missing `android:exported` is a install
+ * failure on API 31+, and it would be wrong in six places instead of one.
+ */
+internal object AndroidScaffold {
+
+    /**
+     * One entry in the manifest's `<application>`.
+     *
+     * [launcher] is false for every activity but the first: two launcher
+     * entries put two icons in the phone's app drawer, which looks like a
+     * packaging bug and is one.
+     */
+    data class ActivityEntry(val className: String, val launcher: Boolean = false)
+
+    /**
+     * Creates `src/main`, the manifest and `strings.xml`, and returns the
+     * directory the sources go in.
+     *
+     * The string resource is not decoration. The generated app reads one from
+     * code, and that single line is what makes a template a real test of the
+     * build engine rather than a placeholder: it only compiles if aapt2 linked
+     * the resources, generated `R.java`, and the compiler was handed it. A
+     * template with no resource reference would still build with half the
+     * pipeline broken.
+     */
+    fun scaffold(
+        project: Project,
+        activities: List<ActivityEntry>,
+        strings: Map<String, String>,
+    ): File {
         val layout = ProjectLayout.of(project)
         val packageDir = File(layout.javaDir, project.applicationId.replace('.', '/'))
         packageDir.mkdirs()
         layout.resourceDir.resolve("values").mkdirs()
 
-        layout.manifestFile.writeText(manifest(project.applicationId))
-        File(layout.resourceDir, "values/strings.xml").writeText(strings(project.name))
-
-        when (project.language) {
-            SourceLanguage.KOTLIN -> File(packageDir, "MainActivity.kt")
-                .writeText(kotlinActivity(project.applicationId))
-            // C and C++ land here on purpose: a JNI project is a Java app with
-            // native sources beside it, so the Activity is exactly right.
-            else -> File(packageDir, "MainActivity.java")
-                .writeText(javaActivity(project.applicationId))
-        }
+        layout.manifestFile.writeText(manifest(project.applicationId, activities))
+        File(layout.resourceDir, "values/strings.xml")
+            .writeText(strings(mapOf("app_name" to project.name) + strings))
+        return packageDir
     }
 
-    /**
-     * A Node project: an entry point, and the manifest npm actually reads.
-     *
-     * `package.json` names `index.js` as `main` rather than relying on the
-     * default, because that field is what a runner should consult -- guessing
-     * `index.js` works until someone renames it, and then the failure is
-     * "cannot find module" naming a file the user never wrote.
-     *
-     * `private: true` so a stray `npm publish` cannot upload somebody's phone
-     * project, and no dependencies so that creating one works offline, for the
-     * same reason the Android template uses no AndroidX.
-     */
-    private fun writeNodeProject(project: Project) {
-        project.rootDir.mkdirs()
-        File(project.rootDir, "package.json").writeText(
+    private fun manifest(applicationId: String, activities: List<ActivityEntry>): String {
+        val entries = activities.joinToString("\n\n") { activity ->
+            val filter = if (!activity.launcher) {
+                ""
+            } else {
+                """
+                |
+                |            <intent-filter>
+                |                <action android:name="android.intent.action.MAIN" />
+                |                <category android:name="android.intent.category.LAUNCHER" />
+                |            </intent-filter>
+                """.trimMargin()
+            }
             """
-            {
-              "name": "${project.name.lowercase().replace(Regex("[^a-z0-9-]"), "-")}",
-              "version": "1.0.0",
-              "private": true,
-              "main": "index.js",
-              "scripts": {
-                "start": "node index.js"
-              }
-            }
-            """.trimIndent() + "\n",
-        )
-        File(project.rootDir, "index.js").writeText(
-            """
-            console.log('Hello from ' + process.platform + ' on ' + process.arch);
-            """.trimIndent() + "\n",
-        )
-        writeRunIgnores(project, extra = listOf("node_modules/"))
-    }
-
-    /**
-     * A C# console app: one source file, and nothing else.
-     *
-     * **No `.csproj`.** The MSBuild project format is what `dotnet` reads, and
-     * there is no `dotnet` here -- mono's `mcs` takes a list of source files
-     * and an output path, which is what `MonoRunSystem` gives it. Writing a
-     * project file this app cannot read would be writing a file that lies
-     * about how the project is built. `tools/mono/FINDINGS.md`, spike R14.
-     */
-    private fun writeCSharpProject(project: Project) {
-        project.rootDir.mkdirs()
-        File(project.rootDir, "Program.cs").writeText(
-            """
-            using System;
-
-            class Program
-            {
-                static void Main(string[] args)
-                {
-                    Console.WriteLine("Hello from " + Environment.OSVersion.Platform);
-                }
-            }
-            """.trimIndent() + "\n",
-        )
-        writeRunIgnores(project, extra = emptyList())
-    }
-
-    /**
-     * What a run leaves behind, and must not be committed.
-     *
-     * Shared by the two languages that run rather than build, because both put
-     * their working directories inside the project -- see [ProjectLayout.nodeHome].
-     * The file tree hides them; the Git panel would not.
-     */
-    private fun writeRunIgnores(project: Project, extra: List<String>) {
-        File(project.rootDir, ".gitignore").writeText(
-            (
-                extra + listOf(
-                    "${ProjectLayout.NODE_HOME}/",
-                    "${ProjectLayout.NODE_CACHE}/",
-                    "${ProjectLayout.BUILD}/",
-                )
-                ).joinToString(separator = "\n", postfix = "\n"),
-        )
-    }
-
-    private fun manifest(applicationId: String): String = """
-        <?xml version="1.0" encoding="utf-8"?>
-        <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-            package="$applicationId"
-            android:versionCode="1"
-            android:versionName="1.0">
-
-            <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34" />
-
-            <application
-                android:label="@string/app_name"
-                android:theme="@android:style/Theme.Material.Light">
-                <activity
-                    android:name=".MainActivity"
-                    android:exported="true">
-                    <intent-filter>
-                        <action android:name="android.intent.action.MAIN" />
-                        <category android:name="android.intent.category.LAUNCHER" />
-                    </intent-filter>
-                </activity>
-            </application>
-        </manifest>
-    """.trimIndent() + "\n"
-
-    private fun strings(name: String): String = """
-        <?xml version="1.0" encoding="utf-8"?>
-        <resources>
-            <string name="app_name">${name.xmlEscaped()}</string>
-            <string name="greeting">Hello from AIDE-OS</string>
-        </resources>
-    """.trimIndent() + "\n"
-
-    private fun javaActivity(applicationId: String): String = """
-        package $applicationId;
-
-        import android.app.Activity;
-        import android.os.Bundle;
-        import android.widget.TextView;
-
-        public class MainActivity extends Activity {
-
-            @Override
-            protected void onCreate(Bundle savedInstanceState) {
-                super.onCreate(savedInstanceState);
-                TextView text = new TextView(this);
-                text.setText(R.string.greeting);
-                setContentView(text);
-            }
+            |        <activity
+            |            android:name=".${activity.className}"
+            |            android:exported="${activity.launcher}">$filter
+            |        </activity>
+            """.trimMargin()
         }
-    """.trimIndent() + "\n"
 
-    private fun kotlinActivity(applicationId: String): String = """
-        package $applicationId
+        return """
+            |<?xml version="1.0" encoding="utf-8"?>
+            |<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+            |    package="$applicationId"
+            |    android:versionCode="1"
+            |    android:versionName="1.0">
+            |
+            |    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34" />
+            |
+            |    <application
+            |        android:label="@string/app_name"
+            |        android:theme="@android:style/Theme.Material.Light">
+            |$entries
+            |    </application>
+            |</manifest>
+        """.trimMargin() + "\n"
+    }
 
-        import android.app.Activity
-        import android.os.Bundle
-        import android.widget.TextView
-
-        class MainActivity : Activity() {
-
-            override fun onCreate(savedInstanceState: Bundle?) {
-                super.onCreate(savedInstanceState)
-                setContentView(TextView(this).apply { setText(R.string.greeting) })
-            }
+    private fun strings(values: Map<String, String>): String {
+        val entries = values.entries.joinToString("\n") { (name, value) ->
+            "    <string name=\"$name\">${value.xmlEscaped()}</string>"
         }
-    """.trimIndent() + "\n"
+        return """
+            |<?xml version="1.0" encoding="utf-8"?>
+            |<resources>
+            |$entries
+            |</resources>
+        """.trimMargin() + "\n"
+    }
 
     private fun String.xmlEscaped(): String =
         replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+}
+
+/**
+ * What a run leaves behind, and must not be committed.
+ *
+ * Shared by the languages that run rather than build, because they all put
+ * their working directories inside the project -- see [ProjectLayout.runHome].
+ * The file tree hides them; the Git panel would not.
+ */
+internal fun writeRunIgnores(project: Project, extra: List<String> = emptyList()) {
+    File(project.rootDir, ".gitignore").writeText(
+        (
+            extra + listOf(
+                "${ProjectLayout.RUN_HOME}/",
+                "${ProjectLayout.RUN_CACHE}/",
+                "${ProjectLayout.BUILD}/",
+            )
+            ).joinToString(separator = "\n", postfix = "\n"),
+    )
 }

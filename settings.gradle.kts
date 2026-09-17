@@ -45,6 +45,7 @@ include(":engine:fast")
 include(":engine:gradle")
 include(":engine:node")
 include(":engine:mono")
+include(":engine:python")
 
 // Maven resolution and AAR extraction. Spike R4 (tools/deps/FINDINGS.md) is
 // the design input; the resolver needs four workarounds to run on ART.

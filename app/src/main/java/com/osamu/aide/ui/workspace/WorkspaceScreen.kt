@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -37,6 +38,7 @@ import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.AutoFixHigh
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PlayArrow
@@ -92,6 +94,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -100,6 +103,8 @@ import com.osamu.aide.core.fs.BuildEngine
 import com.osamu.aide.debug.DebugHandshakeProvider
 import com.osamu.aide.core.fs.FileNode
 import com.osamu.aide.core.fs.SourceLanguage
+import com.osamu.aide.ai.core.AiProviderType
+import com.osamu.aide.ai.core.ChatUiState
 import com.osamu.aide.ai.ui.ChatPanel
 import com.osamu.aide.core.ui.layout.AdaptiveWorkspace
 import com.osamu.aide.core.ui.layout.PaneBreakpoints
@@ -122,6 +127,7 @@ import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import java.io.File
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -173,25 +179,9 @@ fun WorkspaceScreen(
         onPauseOrDispose { }
     }
     var isChatOpen by remember { mutableStateOf(false) }
+    var sideToolFocus by remember { mutableStateOf<SideTool?>(null) }
 
-    // One tap: open the panel and ask, rather than opening it and leaving the
-    // user to retype an error they are looking at. The message is built where
-    // the project root is known -- see fixRequest, and why the path it puts in
-    // must be relative.
-    // **Saved before asked.** The diagnostic describes the *buffer*; the
-    // assistant's `read_file` reads the *file*. With an unsaved edit the two
-    // disagree, and the assistant is asked to explain an error that is not in
-    // what it can see. Driving this found exactly that: it read the file, found
-    // one line and no `{` anywhere, and correctly refused to guess -- which is
-    // the right answer to the wrong question.
     val fixScope = rememberCoroutineScope()
-    val askToFix: (Diagnostic) -> Unit = { diagnostic ->
-        isChatOpen = true
-        fixScope.launch {
-            viewModel.saveAllNow()
-            assistant.send(fixRequest(diagnostic, projectDir))
-        }
-    }
 
     val gitActions = remember(git) {
         GitActions(
@@ -351,6 +341,22 @@ fun WorkspaceScreen(
         val drawerState = rememberDrawerState(DrawerValue.Closed)
         val scope = rememberCoroutineScope()
 
+        val openAssistant: () -> Unit = {
+            if (mode == PaneMode.TRIPLE) {
+                sideToolFocus = SideTool.ASSISTANT
+            } else {
+                isChatOpen = true
+            }
+        }
+
+        val askToFix: (Diagnostic) -> Unit = { diagnostic ->
+            openAssistant()
+            fixScope.launch {
+                viewModel.saveAllNow()
+                assistant.send(fixRequest(diagnostic, projectDir))
+            }
+        }
+
         val body: @Composable () -> Unit = {
             Scaffold(
                 topBar = {
@@ -485,7 +491,7 @@ fun WorkspaceScreen(
                                                 ),
                                         )
                                     }
-                                    IconButton(onClick = { isChatOpen = true }) {
+                                    IconButton(onClick = openAssistant) {
                                         Icon(
                                             Icons.AutoMirrored.Filled.Chat,
                                             contentDescription = "Ask the assistant",
@@ -547,7 +553,7 @@ fun WorkspaceScreen(
                                         DropdownMenuItem(
                                             text = { Text("Ask the assistant") },
                                             leadingIcon = { Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null) },
-                                            onClick = { menuOpen = false; isChatOpen = true },
+                                            onClick = { menuOpen = false; openAssistant() },
                                         )
                                         if (ToolbarAction.FIND in secondary) {
                                             DropdownMenuItem(
@@ -648,6 +654,9 @@ fun WorkspaceScreen(
                             dirtyPaths = state.dirtyPaths,
                             onNodeClick = viewModel::toggle,
                             onCollapseAll = viewModel::collapseAll,
+                            onLocateActiveFile = state.selectedFile?.let { file ->
+                                { viewModel.revealInTree(if (file.isDirectory) file else file.parentFile ?: file) }
+                            },
                         )
                     },
                     toolPane = {
@@ -687,6 +696,20 @@ fun WorkspaceScreen(
                                     debugUnavailable = debugUnavailable,
                                     debugBuildStatus = debugBuildStatus(state.build),
                                     debugFocus = debugFocus,
+                                    chatState = chat,
+                                    onSendChat = assistant::send,
+                                    onApprovalChat = assistant::resolveApproval,
+                                    onDismissErrorChat = assistant::dismissError,
+                                    onAddKeyChat = { onOpenSettings("ai") },
+                                    onSignInGoogleChat = { onOpenSettings("ai") },
+                                    onSwitchProviderChat = assistant::switchProvider,
+                                    onSwitchModelChat = assistant::switchModel,
+                                    onToggleShareContextChat = assistant::toggleShareContext,
+                                    onCancelSendChat = assistant::cancelSend,
+                                    onNewChat = assistant::newChat,
+                                    onInsertCode = editorController::insert,
+                                    activeFileName = state.selectedFile?.name,
+                                    sideToolFocus = sideToolFocus,
                                     projectRoot = state.projectRoot,
                                     applicationId = state.projectApplicationId,
                                     onDiagnosticClick = viewModel::openDiagnostic,
@@ -744,6 +767,13 @@ fun WorkspaceScreen(
                             debugUnavailable = debugUnavailable,
                             debugFocus = debugFocus,
                             onLineNumberTap = debug::toggleBreakpoint,
+                            // Phones only: the wide layout shows the tree as a
+                            // permanent pane, so there is nothing to open.
+                            onOpenTree = if (mode == PaneMode.SINGLE) {
+                                { scope.launch { drawerState.open() } }
+                            } else {
+                                null
+                            },
                         )
                     },
                 )
@@ -753,6 +783,20 @@ fun WorkspaceScreen(
         if (mode == PaneMode.SINGLE) {
             ModalNavigationDrawer(
                 drawerState = drawerState,
+                // **No edge swipe, and that is the point of this line.** A
+                // modal drawer opens on a drag from the left edge, and the
+                // thing directly under that edge is a code editor that scrolls
+                // horizontally -- so reaching the start of a long line by
+                // dragging opened the file tree instead. The gesture and the
+                // content want the same pixels and the drawer wins, which
+                // makes the editor feel broken rather than the drawer feel
+                // helpful.
+                //
+                // Nothing is lost: the tree has an explicit button, and a
+                // gesture with no discoverable affordance was never how anyone
+                // found it. Closing it by swiping still works -- that gesture
+                // starts on the sheet, not on the editor.
+                gesturesEnabled = false,
                 drawerContent = {
                     ModalDrawerSheet {
                         FileTreePane(
@@ -768,6 +812,9 @@ fun WorkspaceScreen(
                                 if (!node.isDirectory) scope.launch { drawerState.close() }
                             },
                             onCollapseAll = viewModel::collapseAll,
+                            onLocateActiveFile = state.selectedFile?.let { file ->
+                                { viewModel.revealInTree(if (file.isDirectory) file else file.parentFile ?: file) }
+                            },
                         )
                     }
                 },
@@ -804,6 +851,10 @@ fun WorkspaceScreen(
                 onSwitchProvider = assistant::switchProvider,
                 onSwitchModel = assistant::switchModel,
                 onToggleShareContext = assistant::toggleShareContext,
+                onCancelSend = assistant::cancelSend,
+                onNewChat = assistant::newChat,
+                onInsertCode = editorController::insert,
+                activeFileName = state.selectedFile?.name,
                 modifier = Modifier.fillMaxSize(),
             )
         }
@@ -861,6 +912,13 @@ private fun EditorArea(
     debugUnavailable: String?,
     debugFocus: Int,
     onLineNumberTap: (File, Int) -> Unit,
+    /**
+     * Opens the file tree, or null where it is already on screen.
+     *
+     * Null on a tablet: the tree is a permanent pane there, so a control to
+     * reveal it would reveal something that never went away. Phones only.
+     */
+    onOpenTree: (() -> Unit)?,
 ) {
     Column(Modifier.fillMaxSize()) {
         if (state.openFiles.isNotEmpty()) {
@@ -937,6 +995,22 @@ private fun EditorArea(
 
             // Over the editor rather than above it: the hint is transient and
             // should not reflow the code every time the caret enters a call.
+            // **Only with no file open, which is when the bottom is empty.**
+            // The row below carries the compact control while editing; a
+            // floating one then would sit on top of Go to definition, which is
+            // fixed there precisely so it never moves. With nothing open there
+            // is no row, nothing to cover, and opening the tree is the only
+            // thing the screen is asking for -- the empty state says so in
+            // words directly above this.
+            if (state.active == null && onOpenTree != null) {
+                ProjectTreeTab(
+                    onClick = onOpenTree,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(bottom = 24.dp),
+                )
+            }
+
             state.analysis.signature?.let { signature ->
                 SignatureHintOverlay(
                     signature = signature,
@@ -991,6 +1065,19 @@ private fun EditorArea(
         if (state.active != null) {
             HorizontalDivider()
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // **The file tree, within reach of a thumb.** It is also in the
+                // top bar, which on a tall phone is a stretch -- and it used to
+                // be reachable by swiping from the left edge, which had to go
+                // because that gesture and a horizontally scrolling editor want
+                // the same pixels. This row is where the hands already are.
+                //
+                // Same icon as the toolbar button, deliberately: one symbol for
+                // one thing beats a second, cleverer glyph meaning the same.
+                onOpenTree?.let { open ->
+                    IconButton(onClick = open) {
+                        Icon(Icons.Default.Folder, contentDescription = "Show project files")
+                    }
+                }
                 // Fixed, not part of the scrolling row: undo is the one action
                 // that must never have scrolled out of reach.
                 IconButton(
@@ -1022,6 +1109,75 @@ private fun EditorArea(
                 }
                 SymbolRow(controller = controller, modifier = Modifier.weight(1f))
             }
+        }
+    }
+}
+
+/**
+ * A pull-tab for the file tree, at the bottom-left edge.
+ *
+ * Flush to the left edge rather than inset, because that is where the drawer
+ * used to come from: the tab stands in for the edge swipe that was removed, and
+ * looking like a sliver of the sheet itself is the clearest way to say so.
+ *
+ * **The glyph is a chevron and not a triangle.** A solid right-pointing
+ * triangle is `PlayArrow` to anyone who has used this app, and in an IDE that
+ * means Run -- a button next to an editor that looks like Run and opens a file
+ * tree is a worse surprise than a less striking icon.
+ *
+ * The animation is a slow nudge outward rather than a pulse or a glow. It says
+ * "this slides out from here", which is the one thing a new user needs to know
+ * about it; a pulse would only say "look at me".
+ */
+@Composable
+internal fun ProjectTreeTab(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val transition = rememberInfiniteTransition(label = "projectTreeTab")
+    val nudge by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 7f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1400),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "projectTreeTabNudge",
+    )
+
+    Surface(
+        onClick = onClick,
+        // Square against the screen edge, rounded where it leaves it.
+        shape = RoundedCornerShape(
+            topStart = 0.dp,
+            bottomStart = 0.dp,
+            topEnd = 22.dp,
+            bottomEnd = 22.dp,
+        ),
+        color = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        shadowElevation = 6.dp,
+        // `offset` and not `padding`: this animates every frame, and offset is
+        // applied at layout without re-measuring the tab or anything near it.
+        modifier = modifier.offset { IntOffset(nudge.roundToInt(), 0) },
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 14.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Default.Folder,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            // Labelled, because this is the empty state and discoverability is
+            // the entire job. Two fixed-width children, so no `weight` is owed
+            // here -- there is no variable-length label to squeeze the icon.
+            Text("Project files", style = MaterialTheme.typography.labelLarge)
+            Spacer(Modifier.width(4.dp))
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = "Show project files",
+                modifier = Modifier.size(18.dp),
+            )
         }
     }
 }
@@ -1396,6 +1552,20 @@ private fun SideToolTabs(
     debugUnavailable: String?,
     debugBuildStatus: String?,
     debugFocus: Int,
+    chatState: ChatUiState,
+    onSendChat: (String) -> Unit,
+    onApprovalChat: (Boolean) -> Unit,
+    onDismissErrorChat: () -> Unit,
+    onAddKeyChat: () -> Unit,
+    onSignInGoogleChat: () -> Unit,
+    onSwitchProviderChat: (AiProviderType) -> Unit,
+    onSwitchModelChat: (String) -> Unit,
+    onToggleShareContextChat: (Boolean) -> Unit,
+    onCancelSendChat: () -> Unit,
+    onNewChat: () -> Unit,
+    onInsertCode: (String) -> Unit,
+    activeFileName: String?,
+    sideToolFocus: SideTool?,
     projectRoot: File?,
     applicationId: String?,
     onDiagnosticClick: (Diagnostic) -> Unit,
@@ -1404,6 +1574,9 @@ private fun SideToolTabs(
     var selected by remember { mutableStateOf(SideTool.GIT) }
     LaunchedEffect(debugFocus) {
         if (debugFocus > 0) selected = SideTool.DEBUG
+    }
+    LaunchedEffect(sideToolFocus) {
+        sideToolFocus?.let { selected = it }
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -1436,6 +1609,22 @@ private fun SideToolTabs(
                     actions = logcatActions,
                     applicationId = applicationId,
                 )
+                SideTool.ASSISTANT -> ChatPanel(
+                    state = chatState,
+                    onSend = onSendChat,
+                    onApproval = onApprovalChat,
+                    onDismissError = onDismissErrorChat,
+                    onAddKey = onAddKeyChat,
+                    onSignInGoogle = onSignInGoogleChat,
+                    onSwitchProvider = onSwitchProviderChat,
+                    onSwitchModel = onSwitchModelChat,
+                    onToggleShareContext = onToggleShareContextChat,
+                    onCancelSend = onCancelSendChat,
+                    onNewChat = onNewChat,
+                    onInsertCode = onInsertCode,
+                    activeFileName = activeFileName,
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
         }
     }
@@ -1457,6 +1646,7 @@ private enum class SideTool(val title: String) {
     PROBLEMS("Problems"),
     TERMINAL("Terminal"),
     LOGCAT("Logcat"),
+    ASSISTANT("AI"),
 }
 
 /** The toolbar buttons that may fold into More; see [ToolbarLayout]. */

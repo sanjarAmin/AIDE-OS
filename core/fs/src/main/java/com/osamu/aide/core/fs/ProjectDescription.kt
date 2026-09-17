@@ -44,8 +44,10 @@ object ProjectDescription {
             rootDir = rootDir,
             applicationId = (if (gradle) gradleApplicationId(rootDir) else null)
                 ?: packageOf(ProjectLayout(rootDir).manifestFile)
-                ?: "com.example." + ProjectDescriptor.directoryNameFor(name)
-                    .lowercase().filter { it.isLetterOrDigit() }.ifEmpty { "app" },
+                // The same rule a *created* project gets. It was spelled out
+                // again here and happened to agree; two copies of a rule that
+                // agree are a coincidence, not a design.
+                ?: ProjectDescriptor.applicationIdFor(name),
             // Any Kotlin in it makes it a Kotlin project, so the engine says so
             // plainly rather than compiling half of it. In a Gradle root the
             // Kotlin can be in any module.

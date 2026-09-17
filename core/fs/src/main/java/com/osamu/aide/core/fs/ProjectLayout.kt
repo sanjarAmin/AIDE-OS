@@ -85,7 +85,7 @@ class ProjectLayout(val root: File) {
     /**
      * Where a compiled assembly and mono's rewritten config go.
      *
-     * Inside the project for the reason [nodeHome] is, and hidden for the same
+     * Inside the project for the reason [runHome] is, and hidden for the same
      * one: the file tree does not show it and [ProjectTemplate] tells git to
      * ignore it. A `.exe` in the file tree beside `Program.cs` would invite
      * someone to open it.
@@ -96,18 +96,64 @@ class ProjectLayout(val root: File) {
     val csharpAssembly: File get() = File(buildDir, "${root.name}.exe")
 
     /**
-     * Where a run puts npm's home and its cache.
+     * A directory a running program may treat as `$HOME`, and its scratch
+     * space.
      *
-     * Inside the project rather than in app storage, so that deleting a
-     * project takes its downloaded packages with it and two projects cannot
-     * disagree about a dependency's version. Dot-prefixed because the file
-     * tree hides those, and named in [ProjectTemplate]'s `.gitignore` -- the
-     * two must stay in step, which is why they are spelled once, here.
+     * Inside the project rather than in app storage, so that deleting a project
+     * takes its downloaded packages with it and two projects cannot disagree
+     * about a dependency's version. Dot-prefixed because the file tree hides
+     * those, and named in [writeRunIgnores] -- the two must stay in step, which
+     * is why they are spelled once, here.
+     *
+     * **Named for the job and not for node**, which is what they were called
+     * when node was the only language that ran. Python uses the same two, and a
+     * project is one language, so there is nothing to collide -- but
+     * `pythonRun.home = layout.nodeHome` read like a copy-paste error every
+     * time, which is a reason to rename and not a reason to add a third pair.
      */
-    val nodeHome: File get() = File(root, NODE_HOME)
+    val runHome: File get() = File(root, RUN_HOME)
 
-    /** @see nodeHome */
-    val nodeCache: File get() = File(root, NODE_CACHE)
+    /** @see runHome */
+    val runCache: File get() = File(root, RUN_CACHE)
+
+    /**
+     * A Python project's entry point.
+     *
+     * `main.py` by convention and not by configuration, which is the honest
+     * answer for this language: Python has no `package.json` naming an entry
+     * point, and the file that would come closest -- `pyproject.toml` -- names
+     * a *console script* built by an installer this app does not run. Inventing
+     * a field for it would mean inventing a file format, and reading the wrong
+     * one would mean claiming to support packaging that does not work here.
+     *
+     * A project whose entry point is elsewhere still edits, and the run reports
+     * the path it looked for rather than a missing module.
+     */
+    val pythonEntryPoint: File get() = File(root, "main.py")
+
+    /**
+     * Every `.py` in the project, in a stable order.
+     *
+     * [PYTHON_PACKAGES] is skipped along with [BUILD] and hidden directories:
+     * installed dependencies are thousands of files that are not this project's
+     * source, exactly as `node_modules` is not.
+     */
+    fun pythonSources(): List<File> = root
+        .walkTopDown()
+        .onEnter { it.name != BUILD && it.name != PYTHON_PACKAGES && !it.name.startsWith(".") }
+        .filter { it.isFile && it.extension == "py" }
+        .sortedBy { it.invariantSeparatorsPath }
+        .toList()
+
+    /**
+     * Where `pip install --target` puts this project's dependencies.
+     *
+     * Inside the project for the reason [runHome] is: deleting a project takes
+     * its downloaded packages with it, and two projects cannot disagree about a
+     * version. **Not a virtualenv** -- see `PythonRunSystem.pip` for why one
+     * cannot be created here. A run puts this on `PYTHONPATH`.
+     */
+    val pythonPackages: File get() = File(root, PYTHON_PACKAGES)
 
     /**
      * True when there is enough here to attempt a build.
@@ -120,9 +166,10 @@ class ProjectLayout(val root: File) {
     fun isBuildable(): Boolean = manifestFile.isFile
 
     companion object {
-        const val NODE_HOME = ".aide-home"
-        const val NODE_CACHE = ".aide-cache"
+        const val RUN_HOME = ".aide-home"
+        const val RUN_CACHE = ".aide-cache"
         const val BUILD = ".aide-build"
+        const val PYTHON_PACKAGES = ".aide-packages"
 
         private val NATIVE_EXTENSIONS = setOf("c", "cc", "cpp", "cxx")
 

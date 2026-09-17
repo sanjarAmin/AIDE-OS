@@ -71,6 +71,9 @@ dependencies {
     implementation(libs.tree.sitter.kotlin)
     implementation(libs.tree.sitter.xml)
     implementation(libs.tree.sitter.json)
+    // Python's grammar is published; JavaScript's is not, which is why one of
+    // these is a dependency and the other is tools/treesitter/build-grammars.sh.
+    implementation(libs.tree.sitter.python)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

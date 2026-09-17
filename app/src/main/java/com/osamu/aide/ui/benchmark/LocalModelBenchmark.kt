@@ -69,6 +69,7 @@ class LocalModelBenchmark(
             val startMs = startServer()
             lines += "Startup" to "ready in ${"%.1f".format(startMs / 1000.0)} s"
             threadsLine()?.let { lines += "Threads" to it }
+            cpuBackendLine()?.let { lines += "CPU backend" to it }
 
             onStep("Writing a short answer…")
             val short = chat(
@@ -138,6 +139,9 @@ class LocalModelBenchmark(
     /** The thread count the server chose, from its `system_info` line: `n_threads = 4 (n_threads_batch = 4)`. */
     private fun threadsLine(): String? =
         Regex("""n_threads\s*=\s*(\d+)""").find(serverLog)?.groupValues?.get(1)
+
+    /** @see describeCpuBackend */
+    private fun cpuBackendLine(): String? = describeCpuBackend(serverLog.toString())
 
     /**
      * Starts `llama-server` through the dynamic linker and waits for `/health`.
@@ -280,6 +284,68 @@ class LocalModelBenchmark(
          * emulator was slow.
          */
         private val INTERESTING_FEATURES = setOf("asimd", "asimddp", "i8mm", "sve", "sve2", "bf16", "avx", "avx2", "fma", "f16c")
+
+        /**
+         * `system_info` fields that are counts rather than feature flags.
+         *
+         * `n_threads = 8` matches the same `name = digit` shape, and reporting
+         * the thread count as a CPU feature would be nonsense on any machine
+         * with one core.
+         */
+        /**
+         * Which CPU fast paths the engine can actually use, from `system_info`.
+         *
+         * **Reported because its absence is invisible otherwise, and it was.** The
+         * phone run in `tools/localai/FINDINGS.md` §8 read a prompt barely faster
+         * than it wrote one, which took a disassembly of the shipped
+         * `libggml-cpu.so` to explain: Termux's build has no i8mm, dotprod or bf16
+         * instruction in it, on a phone that advertises all three. The server says
+         * so on its first line and nothing surfaced it.
+         *
+         * The enabled flags *and* the interesting disabled ones, because "NEON = 1"
+         * alone reads as everything being fine. `MATMUL_INT8 = 0` is the line that
+         * would have saved an afternoon.
+         *
+         * Null rather than a wrong answer when the line is not in the log: the
+         * format is llama.cpp's and it changes between releases.
+         */
+        internal fun describeCpuBackend(log: String): String? {
+            val info = log.lines().firstOrNull { "n_threads" in it && " = " in it } ?: return null
+            val flags = Regex("""(\w+)\s*=\s*([01])\b""").findAll(info)
+                .filter { it.groupValues[1] !in NON_FEATURE_FIELDS }
+                .toList()
+            if (flags.isEmpty()) return null
+
+            val on = flags.filter { it.groupValues[2] == "1" }.map { it.groupValues[1] }
+            val offButInteresting = flags
+                .filter { it.groupValues[2] == "0" && it.groupValues[1] in ACCELERATIONS }
+                .map { it.groupValues[1] }
+
+            return buildString {
+                append(if (on.isEmpty()) "none" else on.joinToString(" "))
+                if (offButInteresting.isNotEmpty()) {
+                    // Named as missing, not merely omitted: the whole point is that
+                    // a fast path the device supports is not compiled in.
+                    append("  —  missing: ").append(offButInteresting.joinToString(" "))
+                }
+            }
+        }
+
+        private val NON_FEATURE_FIELDS = setOf("n_threads", "n_threads_batch")
+
+        /**
+         * The flags whose *absence* is worth printing.
+         *
+         * These are the batched-matmul paths that make reading a prompt faster
+         * than writing one. Everything else off is ordinary -- an ARM chip is
+         * not missing AVX2, it never had it -- but an ARM build with
+         * `MATMUL_INT8 = 0` on a phone that has i8mm is a packaging mistake,
+         * and `tools/localai/FINDINGS.md` §8 is what it costs.
+         */
+        private val ACCELERATIONS = setOf(
+            "MATMUL_INT8", "DOTPROD", "SVE", "BF16",
+            "AVX2", "AVX512", "FMA",
+        )
 
         /**
          * About the prompt the assistant sends: a project listing and a file.

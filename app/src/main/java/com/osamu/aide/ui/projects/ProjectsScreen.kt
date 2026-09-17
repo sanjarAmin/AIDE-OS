@@ -16,21 +16,23 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
@@ -44,7 +46,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -53,6 +54,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -63,23 +65,35 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.osamu.aide.core.fs.Project
+import com.osamu.aide.core.fs.ProjectTemplate
 import com.osamu.aide.core.fs.SourceLanguage
+import com.osamu.aide.core.fs.TemplateFile
+import com.osamu.aide.core.fs.preview
 import com.osamu.aide.ui.util.FileIcons
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.koin.androidx.compose.koinViewModel
 import java.io.File
 
@@ -229,8 +243,8 @@ fun ProjectsScreen(
     if (showCreateDialog) {
         CreateProjectDialog(
             onDismiss = { showCreateDialog = false },
-            onCreate = { name, language ->
-                viewModel.createProject(name, language)
+            onCreate = { name, template ->
+                viewModel.createProject(name, template)
                 showCreateDialog = false
             },
         )
@@ -244,6 +258,7 @@ private fun ProjectRow(project: Project, index: Int, onClick: () -> Unit) {
             SourceLanguage.KOTLIN -> "kt"
             SourceLanguage.JAVASCRIPT -> "js"
             SourceLanguage.CSHARP -> "cs"
+            SourceLanguage.PYTHON -> "py"
             SourceLanguage.C -> "c"
             SourceLanguage.CPP -> "cpp"
             SourceLanguage.JAVA -> "java"
@@ -337,7 +352,11 @@ private fun ProjectRow(project: Project, index: Int, onClick: () -> Unit) {
 
                     Text(
                         text = if (project.language in RUN_ONLY) {
-                            val runtime = if (project.language == SourceLanguage.JAVASCRIPT) "Node" else "Mono"
+                            val runtime = when (project.language) {
+                                SourceLanguage.JAVASCRIPT -> "Node"
+                                SourceLanguage.PYTHON -> "Python"
+                                else -> "Mono"
+                            }
                             "Runs on $runtime"
                         } else {
                             project.applicationId
@@ -458,14 +477,34 @@ private fun EmptyProjects(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun CreateProjectDialog(
     onDismiss: () -> Unit,
-    onCreate: (String, SourceLanguage) -> Unit,
+    onCreate: (String, ProjectTemplate) -> Unit,
 ) {
     var name by remember { mutableStateOf("") }
-    var language by remember { mutableStateOf(SourceLanguage.JAVA) }
+    var template by remember { mutableStateOf(ProjectTemplate.ALL.first()) }
+
+    // **What the selected template will actually write.** Produced by running
+    // the template into a scratch directory, so it cannot describe something
+    // Create does not do -- see `ProjectTemplate.preview`.
+    //
+    // Keyed on the template *and the name*, because the name decides the
+    // package directory a template writes into, and a preview showing a path
+    // the project will not have is the one way this feature can mislead.
+    //
+    // On the IO dispatcher: it is small, but it is disk, and `produceState`
+    // would otherwise run it on the frame that handled the tap. Failure is an
+    // empty list rather than a crash -- a dialog that cannot create a scratch
+    // file should still let the user create a project.
+    val context = LocalContext.current
+    val preview by produceState(initialValue = emptyList<TemplateFile>(), template, name) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                template.preview(name, File(context.cacheDir, "template-preview"))
+            }.getOrDefault(emptyList())
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -479,51 +518,178 @@ internal fun CreateProjectDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                // FlowRow, not Row. Four chips do not fit the width of a
-                // dialog on a phone, and a Row does not wrap -- it clips. The
-                // C# chip shipped hanging off the right edge, half a pixel of
-                // it visible and unreachable, and every test passed because a
-                // test asks the ViewModel for the language rather than tapping
-                // the chip. Driving the app is what found it.
-                // FlowRow, not Row. Four chips do not fit the width of a
-                // dialog on a phone, and a Row does not overflow -- it
-                // *squeezes*: C# shipped 19 dp wide against JavaScript's 99,
-                // its label wrapped inside it, and it was unreadable. Every
-                // test passed, because a test that wants a C# project asks the
-                // repository for one rather than tapping a chip.
-                FlowRow(
-                    modifier = Modifier.padding(top = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+
+                Spacer(Modifier.height(16.dp))
+
+                // **Says how many there are, because the list does not.**
+                // Four chips used to show every choice at once; fifteen rows
+                // cannot, and the first screenful ends tidily after the last
+                // Kotlin template with clear space beneath it -- so it reads as
+                // a complete list of four rather than the top of a list of
+                // fifteen. There is no scrollbar in a dialog to say otherwise.
+                // Counting from the catalog, so it cannot drift from it.
+                Text(
+                    text = "${ProjectTemplate.ALL.size} templates — scroll for the rest",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                // **A scrolling Column, not a LazyColumn.** An AlertDialog
+                // measures its body with unbounded height, and a lazy list
+                // given no height at all composes one item and reports itself
+                // as tall as that -- which looks like a picker that lost every
+                // template but the first. `heightIn` is what gives it a bound;
+                // the list is eleven items, so nothing is saved by laziness.
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(rememberScrollState()),
                 ) {
-                    // Java and Kotlin build an APK; JavaScript does not build
-                    // at all, it runs. The picker does not say so, because the
-                    // ▶ button does the right thing for each and explaining the
-                    // difference here would explain it to everyone who did not
-                    // need to know.
-                    listOf(
-                        SourceLanguage.JAVA,
-                        SourceLanguage.KOTLIN,
-                        SourceLanguage.JAVASCRIPT,
-                        SourceLanguage.CSHARP,
-                    ).forEach { option ->
-                        FilterChip(
-                            selected = language == option,
-                            onClick = { language = option },
-                            label = { Text(option.displayName) },
+                    // **`groupBy`, not "a heading when the language changes".**
+                    // The latter is the same thing only while the catalog is
+                    // grouped, and when it was not it printed JAVA, KOTLIN,
+                    // JAVA, KOTLIN -- four headings for two languages, which
+                    // reads as a rendering fault. Every test passed: they count
+                    // rows and check each objective is reachable, and a heading
+                    // is neither. `groupBy` keeps first-encounter order, so the
+                    // languages still appear in the catalog's order and a
+                    // template added in the wrong place cannot split a group.
+                    ProjectTemplate.ALL.groupBy { it.language }.forEach { (language, options) ->
+                        Text(
+                            text = language.displayName.uppercase(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
                         )
+                        options.forEach { option ->
+                            TemplateRow(
+                                template = option,
+                                selected = template == option,
+                                onSelect = { template = option },
+                                // Only the selected row has a preview, so only
+                                // one is computed: previewing all fifteen on
+                                // every keystroke would be fifteen times the
+                                // disk work to show fourteen things nobody is
+                                // looking at.
+                                files = if (template == option) preview else emptyList(),
+                            )
+                        }
                     }
                 }
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { onCreate(name.trim(), language) },
+                onClick = { onCreate(name.trim(), template) },
                 enabled = name.isNotBlank(),
             ) { Text("Create") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+/**
+ * One template, and what it is for.
+ *
+ * **`Modifier.weight(1f)` on the text, every time.** This is the shape that has
+ * produced nine defects in this codebase: a `Row` holding a variable-width
+ * label beside a control squeezes rather than overflowing, so the label takes
+ * whatever width it wants and the control is measured in what is left -- which
+ * is often nothing. The objective lines here are long and of different lengths,
+ * which is exactly the input that breaks it. `CreateProjectDialogTest` asserts
+ * the radio buttons all ended up the same size.
+ *
+ * `selectable` on the row rather than `clickable` so the whole row is one
+ * accessibility node with a selected state, and the radio button is not a
+ * separate target a user has to hit.
+ */
+@Composable
+private fun TemplateRow(
+    template: ProjectTemplate,
+    selected: Boolean,
+    onSelect: () -> Unit,
+    files: List<TemplateFile>,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect)
+            .padding(vertical = 6.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+            Text(
+                text = template.displayName,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            )
+            Text(
+                text = template.objective,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            // Said here and nowhere else, because it is the one thing about a
+            // template that can make it fail for a reason the user did not
+            // cause. Every other template writes files and stops.
+            if (template.dependencies.isNotEmpty()) {
+                Text(
+                    text = "Needs a download the first time it builds",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
+            }
+        }
+
+        // Tagged so a test can measure it. It is the control half of the row
+        // -- the half a squeezed label eats -- and without a tag it merges into
+        // the row's semantics and cannot be measured at all.
+        RadioButton(
+            selected = selected,
+            onClick = null,
+            modifier = Modifier.testTag(TEMPLATE_RADIO_TAG),
+        )
+    }
+
+    // **Below the row, not inside it.** These are full paths and the longest
+    // is wider than the column the objective sits in; putting them beside the
+    // radio button would either squeeze the control or wrap every path. The
+    // list only appears under the selected template, so at most one is open.
+    if (selected && files.isNotEmpty()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 4.dp, end = 4.dp, bottom = 8.dp),
+        ) {
+            Text(
+                text = "Creates ${files.size} ${if (files.size == 1) "file" else "files"}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 2.dp),
+            )
+            files.forEach { file ->
+                Text(
+                    text = file.path,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    // **Wraps rather than ellipsises**, and that is not a
+                    // style preference. The package directory comes from the
+                    // typed name, so it is the one part of the path that
+                    // changes as the user types -- and it sits in the middle,
+                    // which is exactly what `MiddleEllipsis` ate:
+                    // `src/main/java/com/…/MainActivity.java` looked identical
+                    // whatever the project was called, so the preview appeared
+                    // frozen while it was in fact correct. Two lines is the
+                    // most any template's longest path needs.
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    lineHeight = 14.sp,
+                    modifier = Modifier.testTag(TEMPLATE_FILE_TAG),
+                )
+            }
+        }
+    }
 }
 
 /**
@@ -615,4 +781,14 @@ private fun CloneProgressDialog(status: String, onCancel: () -> Unit) {
  * to show. Kept here rather than on [SourceLanguage] because it is a fact about
  * what this app can do with a project, not about the language.
  */
-private val RUN_ONLY = setOf(SourceLanguage.JAVASCRIPT, SourceLanguage.CSHARP)
+private val RUN_ONLY = setOf(
+    SourceLanguage.JAVASCRIPT,
+    SourceLanguage.CSHARP,
+    SourceLanguage.PYTHON,
+)
+
+/** @see CreateProjectDialog */
+internal const val TEMPLATE_RADIO_TAG = "template-radio"
+
+/** @see CreateProjectDialog */
+internal const val TEMPLATE_FILE_TAG = "template-file"

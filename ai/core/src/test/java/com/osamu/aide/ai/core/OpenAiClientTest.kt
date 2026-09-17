@@ -163,4 +163,137 @@ class OpenAiClientTest {
         }.exceptionOrNull()
         assertTrue("wrong provider named: ${failure?.message}", failure!!.message!!.startsWith("Custom request failed (404)"))
     }
+
+    // ---- Calls a local model wrote out instead of making ----
+
+    private fun readFileTool() = AideTool(
+        name = "read_file",
+        description = "Read one file in the project.",
+        risk = ToolRisk.READ_ONLY,
+        parameters = mapOf("path" to AideTool.Parameter("string", "Path to read.")),
+        required = listOf("path"),
+        handler = { ProjectFiles.Outcome.Ok("never executed in this test") },
+    )
+
+    private fun replyWith(content: String) = """
+        {"choices":[{"message":{"role":"assistant","content":${JSONObject.quote(content)}},
+         "finish_reason":"stop"}]}
+    """.trimIndent()
+
+    private suspend fun sendWithTool(content: String, tools: List<AideTool>) : AiClientResponse {
+        server.enqueue(MockResponse().setResponseCode(200).setBody(replyWith(content)))
+        return OpenAiClient(
+            apiKey = "sk-test",
+            customBaseUrl = server.url("/").toString(),
+            model = "local",
+        ).send(
+            AiClientRequest(
+                systemInstruction = "s",
+                messages = listOf(AiMessage(AiRole.USER, "Read src/main/Main.kt")),
+                tools = tools,
+            ),
+        )
+    }
+
+    /**
+     * **The case this exists for.** A local model picks the right tool and then
+     * prints it as JSON, because the server's parser never recognised the
+     * markup its chat template emitted -- Qwen2.5-Coder 1.5B did it 5/5 and the
+     * 7B 3/3 with `--jinja` already on. `tools/localai/FINDINGS.md` §4.
+     */
+    @Test
+    fun a_call_written_as_json_in_the_reply_is_recovered() = runTest {
+        val response = sendWithTool(
+            "I'll read it.\n```json\n{\"name\": \"read_file\", " +
+                "\"arguments\": {\"path\": \"src/main/Main.kt\"}}\n```",
+            listOf(readFileTool()),
+        )
+
+        val call = response.parts.filterIsInstance<AiPart.FunctionCall>().single()
+        assertEquals("read_file", call.name)
+        assertEquals("src/main/Main.kt", call.args["path"])
+        // The prose survives; the mechanics of the call do not.
+        val text = response.parts.filterIsInstance<AiPart.Text>().joinToString("") { it.text }
+        assertEquals("I'll read it.", text)
+        assertTrue("the raw JSON was shown to the user: $text", "read_file" !in text)
+    }
+
+    /** OpenAI's own shape, where `arguments` is a string rather than an object. */
+    @Test
+    fun a_written_call_whose_arguments_are_a_string_is_recovered() = runTest {
+        val response = sendWithTool(
+            "{\"name\": \"read_file\", \"arguments\": \"{\\\"path\\\": \\\"a/b.kt\\\"}\"}",
+            listOf(readFileTool()),
+        )
+
+        val call = response.parts.filterIsInstance<AiPart.FunctionCall>().single()
+        assertEquals("a/b.kt", call.args["path"])
+    }
+
+    /**
+     * **The dangerous direction, and the one worth most.**
+     *
+     * An IDE assistant is asked to *show* JSON constantly. Recovering "a reply
+     * containing an object" would run tools the user only asked to look at, and
+     * the damage is done before anything is displayed. The guard is that the
+     * object must name a tool this request offered.
+     */
+    @Test
+    fun an_ordinary_json_answer_is_not_mistaken_for_a_call() = runTest {
+        val answer = "Here is a package.json:\n```json\n" +
+            "{\"name\": \"my-app\", \"version\": \"1.0.0\", \"arguments\": {\"path\": \"x\"}}\n```"
+
+        val response = sendWithTool(answer, listOf(readFileTool()))
+
+        assertTrue(
+            "a JSON answer was executed as a tool call",
+            response.parts.none { it is AiPart.FunctionCall },
+        )
+        assertTrue("the answer was not shown", response.text.contains("my-app"))
+    }
+
+    /** A request that offered no tools can never recover one. */
+    @Test
+    fun a_reply_is_never_a_call_when_no_tools_were_offered() = runTest {
+        val response = sendWithTool(
+            "{\"name\": \"read_file\", \"arguments\": {\"path\": \"a.kt\"}}",
+            emptyList(),
+        )
+
+        assertTrue(
+            "a call was recovered although the request declared no tools",
+            response.parts.none { it is AiPart.FunctionCall },
+        )
+    }
+
+    /** A structured call wins; the text is not searched at all. */
+    @Test
+    fun a_structured_call_is_not_joined_by_a_recovered_one() = runTest {
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """
+                {"choices":[{"message":{"role":"assistant",
+                 "content":"{\"name\": \"read_file\", \"arguments\": {\"path\": \"text.kt\"}}",
+                 "tool_calls":[{"id":"call_1","type":"function","function":
+                   {"name":"read_file","arguments":"{\"path\": \"structured.kt\"}"}}]},
+                 "finish_reason":"tool_calls"}]}
+                """.trimIndent(),
+            ),
+        )
+        val response = OpenAiClient(
+            apiKey = "sk-test",
+            customBaseUrl = server.url("/").toString(),
+            model = "local",
+        ).send(
+            AiClientRequest(
+                systemInstruction = "s",
+                messages = listOf(AiMessage(AiRole.USER, "read it")),
+                tools = listOf(readFileTool()),
+            ),
+        )
+
+        val calls = response.parts.filterIsInstance<AiPart.FunctionCall>()
+        assertEquals("the written copy was recovered as a second call", 1, calls.size)
+        assertEquals("structured.kt", calls.single().args["path"])
+    }
 }

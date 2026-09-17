@@ -1,6 +1,12 @@
 package com.osamu.aide.ui.workspace
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,8 +23,15 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.FilterListOff
+import androidx.compose.material.icons.filled.FolderSpecial
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material.icons.filled.UnfoldLess
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -28,12 +41,16 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
@@ -43,30 +60,18 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.osamu.aide.core.fs.FileNode
 import com.osamu.aide.core.fs.SourceLanguage
 import com.osamu.aide.ui.util.FileIcons
 import java.io.File
 
 /**
- * The project's files, as a tree.
+ * The project's files, as a modern, polished tree.
  *
- * **It has to read as a tree.** A flat list of indented names is what this was,
- * and on a phone-width drawer the indentation alone does not say which folder a
- * file belongs to -- the eye has nothing to follow back up. The guides are the
- * one structural device here, and they are information rather than decoration:
- * one hairline per level of ancestry, running the full height of the row so
- * consecutive rows join into a rail.
- *
- * The rest is deliberately quiet, because the file-type icons already carry
- * colour and a second coloured thing per row would compete with them. Selection
- * is the one place colour is spent: a rounded fill in `primaryContainer`, inset
- * from the edges so the shape belongs to the row rather than to the pane.
- *
- * What a row says beyond its name, all of it real state the workspace already
- * holds: a chevron that turns when the folder is open, a name in medium weight
- * when the file is open in a tab, and a dot when that tab has unsaved work.
- * Nothing else, because a row is 34 dp and everything in it competes.
+ * **It has to read as a tree.** Visual guide lines connect parent to child, while
+ * active items are highlighted with an electric accent bar and high-contrast styling.
+ * The header provides fast in-tree filtering, active-file location, and folder collapse.
  */
 @Composable
 internal fun FileTreePane(
@@ -81,97 +86,278 @@ internal fun FileTreePane(
     dirtyPaths: Set<String>,
     onNodeClick: (FileNode) -> Unit,
     onCollapseAll: () -> Unit,
+    onLocateActiveFile: (() -> Unit)? = null,
 ) {
+    var searchQuery by remember { mutableStateOf("") }
+    var isFilterVisible by remember { mutableStateOf(false) }
+
+    val allRows = nodes.drop(1)
+    val filteredNodes = remember(allRows, searchQuery) {
+        if (searchQuery.isBlank()) {
+            allRows
+        } else {
+            allRows.filter {
+                it.name.contains(searchQuery, ignoreCase = true) ||
+                    it.file.name.contains(searchQuery, ignoreCase = true)
+            }
+        }
+    }
+
     Surface(color = MaterialTheme.colorScheme.surface) {
         Column(Modifier.fillMaxSize()) {
             FileTreeHeader(
                 projectName = projectName,
                 language = language,
-                // Offered only when there is something to collapse; a button
-                // that cannot change anything is worse than no button.
+                itemCount = allRows.size,
+                isFilterActive = isFilterVisible || searchQuery.isNotEmpty(),
+                onToggleFilter = {
+                    isFilterVisible = !isFilterVisible
+                    if (!isFilterVisible) searchQuery = ""
+                },
+                onLocateActiveFile = onLocateActiveFile,
                 onCollapseAll = onCollapseAll.takeIf { expandedPaths.isNotEmpty() },
             )
-            LazyColumn(Modifier.fillMaxSize()) {
-                // **The project's own folder is not a row.** The header above
-                // already names it, and a tree whose first line repeats the
-                // title it sits under wastes the one line a drawer can least
-                // afford. It stays in the model, where expanding and
-                // collapsing still hang off it.
-                items(nodes.drop(1), key = { it.file.absolutePath }) { node ->
-                    val path = node.file.absolutePath
-                    FileTreeRow(
-                        node = node,
-                        isExpanded = path in expandedPaths,
-                        isSelected = selected == node.file,
-                        isOpen = path in openPaths,
-                        isDirty = path in dirtyPaths,
-                        onClick = { onNodeClick(node) },
-                    )
+
+            AnimatedVisibility(
+                visible = isFilterVisible,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut(),
+            ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Default.Search,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        BasicTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodySmall.copy(
+                                color = MaterialTheme.colorScheme.onSurface,
+                            ),
+                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                            decorationBox = { innerTextField ->
+                                if (searchQuery.isEmpty()) {
+                                    Text(
+                                        "Filter files...",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                    )
+                                }
+                                innerTextField()
+                            },
+                        )
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(
+                                onClick = { searchQuery = "" },
+                                modifier = Modifier.size(20.dp),
+                            ) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "Clear search",
+                                    modifier = Modifier.size(14.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
                 }
             }
+
+            if (filteredNodes.isEmpty() && searchQuery.isNotBlank()) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            Icons.Default.SearchOff,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                            modifier = Modifier.size(32.dp),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "No files matching",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = "\"$searchQuery\"",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
+            } else {
+                LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+                    items(filteredNodes, key = { it.file.absolutePath }) { node ->
+                        val path = node.file.absolutePath
+                        FileTreeRow(
+                            node = node,
+                            isExpanded = path in expandedPaths,
+                            isSelected = selected == node.file,
+                            isOpen = path in openPaths,
+                            isDirty = path in dirtyPaths,
+                            onClick = { onNodeClick(node) },
+                        )
+                    }
+                }
+            }
+
+            FileTreeFooter(
+                totalFiles = allRows.size,
+                openCount = openPaths.size,
+            )
         }
     }
 }
 
 /**
- * Names the project the tree belongs to.
- *
- * The drawer covers the app bar that carries this on a phone, so without it
- * the pane opens on a list of folders with nothing saying whose they are. The
- * badge repeats the app bar's, deliberately: it is the same fact in the same
- * shape, and the drawer is where someone looks when they have lost their place.
+ * Names the project and provides explorer actions.
  */
 @Composable
 private fun FileTreeHeader(
     projectName: String,
     language: SourceLanguage?,
+    itemCount: Int,
+    isFilterActive: Boolean,
+    onToggleFilter: () -> Unit,
+    onLocateActiveFile: (() -> Unit)?,
     onCollapseAll: (() -> Unit)?,
 ) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            // Weighted, for the reason the app bar's own title is: the badge
-            // and the button are fixed, the name is what gives way.
-            Text(
-                text = projectName,
-                style = MaterialTheme.typography.titleSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            language?.let { lang ->
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                ) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 14.dp, end = 12.dp, top = 6.dp, bottom = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = "EXPLORER",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.2.sp,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                if (itemCount > 0) {
                     Text(
-                        text = lang.displayName.uppercase(),
+                        text = "$itemCount items",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        maxLines = 1,
-                        softWrap = false,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                     )
                 }
             }
-            if (onCollapseAll != null) {
-                IconButton(onClick = onCollapseAll, modifier = Modifier.size(36.dp)) {
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 10.dp, end = 4.dp, top = 2.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.FolderSpecial,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp),
+                )
+                Text(
+                    text = projectName,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                language?.let { lang ->
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+                    ) {
+                        Text(
+                            text = lang.displayName.uppercase(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+                IconButton(
+                    onClick = onToggleFilter,
+                    modifier = Modifier.size(36.dp),
+                ) {
                     Icon(
-                        Icons.Default.UnfoldLess,
-                        contentDescription = "Collapse all folders",
+                        if (isFilterActive) Icons.Default.FilterListOff else Icons.Default.Search,
+                        contentDescription = "Filter files",
                         modifier = Modifier.size(18.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        tint = if (isFilterActive) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
                     )
+                }
+                if (onLocateActiveFile != null) {
+                    IconButton(
+                        onClick = onLocateActiveFile,
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.CenterFocusStrong,
+                            contentDescription = "Locate active file",
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                if (onCollapseAll != null) {
+                    IconButton(
+                        onClick = onCollapseAll,
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.UnfoldLess,
+                            contentDescription = "Collapse all folders",
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
     }
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 }
 
 @Composable
@@ -184,14 +370,7 @@ private fun FileTreeRow(
     onClick: () -> Unit,
 ) {
     val iconInfo = FileIcons.infoFor(node.file, node.isDirectory, isExpanded)
-    // **Not `outlineVariant`.** That token is a border against a card edge and
-    // is nearly the surface itself in the dark scheme -- #1E2838 on #111722 --
-    // so the rail disappeared in the theme this app is designed for. Muted text
-    // at low alpha lands at the same weight against either ground.
-    val guide = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
-    // Capped, so a deep package tree stays readable in a 260 dp pane instead of
-    // pushing names off the side.
-    // Depth 1 is the outermost row drawn, since the root is not one.
+    val guide = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.18f)
     val level = (node.depth - 1).coerceIn(0, MAX_GUIDE_DEPTH)
     val turn by animateFloatAsState(if (isExpanded) 90f else 0f, label = "chevron")
 
@@ -199,7 +378,6 @@ private fun FileTreeRow(
         Modifier
             .fillMaxWidth()
             .drawBehind {
-                // One line per ancestor, full height, so the rows join up.
                 repeat(level) { depth ->
                     val x = (GUTTER_DP + depth * INDENT_DP + CHEVRON_CENTRE_DP).dp.toPx()
                     drawLine(
@@ -215,15 +393,19 @@ private fun FileTreeRow(
         Surface(
             onClick = onClick,
             shape = RoundedCornerShape(8.dp),
-            color = if (isSelected) {
-                MaterialTheme.colorScheme.primaryContainer
-            } else {
-                Color.Transparent
+            color = when {
+                isSelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f)
+                isOpen -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                else -> Color.Transparent
             },
-            // **Indented rather than full-bleed**, so the guides to its left
-            // stay visible: a selected row used to cover the rail with a solid
-            // block, and the tree came apart at exactly the row being looked at.
-            modifier = Modifier.fillMaxWidth().padding(start = (level * INDENT_DP).dp),
+            border = if (isSelected) {
+                BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
+            } else {
+                null
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = (level * INDENT_DP).dp),
         ) {
             Row(
                 modifier = Modifier
@@ -232,42 +414,49 @@ private fun FileTreeRow(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
+                if (isSelected) {
+                    Box(
+                        Modifier
+                            .width(3.dp)
+                            .height(18.dp)
+                            .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(2.dp)),
+                    )
+                }
                 if (node.isDirectory) {
                     Icon(
                         Icons.Default.ChevronRight,
                         contentDescription = null,
                         modifier = Modifier.size(16.dp).rotate(turn),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        tint = if (isExpanded) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
                     )
                 } else {
-                    // Files line up with their siblings' folder icons rather
-                    // than with the chevrons.
                     Spacer(Modifier.width(16.dp))
                 }
                 Icon(
                     imageVector = iconInfo.icon,
                     contentDescription = null,
-                    modifier = Modifier.size(17.dp),
+                    modifier = Modifier.size(18.dp),
                     tint = iconInfo.tint,
                 )
                 Text(
-                    text = foldedName(node.name, MaterialTheme.colorScheme.onSurfaceVariant),
+                    text = foldedName(node.name, MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)),
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = when {
-                        node.isDirectory -> FontWeight.Medium
+                        node.isDirectory -> FontWeight.SemiBold
                         isOpen -> FontWeight.Medium
                         else -> FontWeight.Normal
                     },
-                    color = if (isSelected) {
-                        MaterialTheme.colorScheme.onPrimaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
+                    color = when {
+                        isSelected -> MaterialTheme.colorScheme.onPrimaryContainer
+                        isOpen -> MaterialTheme.colorScheme.primary
+                        else -> MaterialTheme.colorScheme.onSurface
                     },
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    // **The name gives way; the dot does not.** A `Row` squeezes
-                    // rather than overflows, and an unweighted name would leave
-                    // the marker nothing to be laid out in. CLAUDE.md.
                     modifier = Modifier.weight(1f),
                 )
                 if (isDirty) {
@@ -284,29 +473,75 @@ private fun FileTreeRow(
 }
 
 /**
- * A folded run of directories, with its separators set back.
- *
- * `java/com/example/large` is one row -- see [FileNode.name] -- and reading it
- * is easier when the last segment, which is the one that names the package the
- * files are in, is not competing with three slashes for attention.
+ * A folded run of directories, with its intermediate path segments muted
+ * and the target directory highlighted.
  */
 private fun foldedName(name: String, separator: Color): AnnotatedString {
     if ('/' !in name) return AnnotatedString(name)
+    val segments = name.split('/')
     return buildAnnotatedString {
-        name.split('/').forEachIndexed { index, segment ->
+        segments.forEachIndexed { index, segment ->
             if (index > 0) withStyle(SpanStyle(color = separator)) { append("/") }
-            append(segment)
+            if (index == segments.lastIndex) {
+                append(segment)
+            } else {
+                withStyle(SpanStyle(color = separator)) {
+                    append(segment)
+                }
+            }
         }
     }
 }
 
-/** Left margin before the first guide, matching the row's own start padding. */
+/**
+ * Footer providing subtle project statistics at the bottom of the sidebar.
+ */
+@Composable
+private fun FileTreeFooter(
+    totalFiles: Int,
+    openCount: Int,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Box(
+                        Modifier
+                            .size(6.dp)
+                            .background(MaterialTheme.colorScheme.primary, CircleShape),
+                    )
+                    Text(
+                        text = "$totalFiles items",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (openCount > 0) {
+                    Text(
+                        text = "$openCount open",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    )
+                }
+            }
+        }
+    }
+}
+
 private const val GUTTER_DP = 4
-
-/** One level of nesting. Tighter than a desktop tree, because the pane is 260 dp. */
 private const val INDENT_DP = 14
-
-/** Where a chevron's centre falls inside a row, so a guide points at it. */
 private const val CHEVRON_CENTRE_DP = 12
-
 private const val MAX_GUIDE_DEPTH = 6

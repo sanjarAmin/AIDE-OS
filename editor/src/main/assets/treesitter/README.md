@@ -10,6 +10,7 @@ vendored unmodified:
 | `kotlin/` | [fwcd/tree-sitter-kotlin](https://github.com/fwcd/tree-sitter-kotlin) | MIT |
 | `xml/` | [tree-sitter-grammars/tree-sitter-xml](https://github.com/tree-sitter-grammars/tree-sitter-xml) | MIT |
 | `json/` | [tree-sitter/tree-sitter-json](https://github.com/tree-sitter/tree-sitter-json) | MIT |
+| `python/` | [tree-sitter/tree-sitter-python](https://github.com/tree-sitter/tree-sitter-python) v0.23.6 | MIT |
 | `javascript/` | [tree-sitter/tree-sitter-javascript](https://github.com/tree-sitter/tree-sitter-javascript) v0.23.1 | MIT |
 | `javascriptx/` | the same, `highlights.scm` + `highlights-jsx.scm` concatenated | MIT |
 
