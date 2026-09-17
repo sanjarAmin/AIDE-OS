@@ -1,6 +1,7 @@
 package com.osamu.aide.ai.core
 
 import com.anthropic.client.AnthropicClient
+import com.anthropic.helpers.MessageAccumulator
 import com.anthropic.models.messages.ContentBlockParam
 import com.anthropic.models.messages.Message
 import com.anthropic.models.messages.MessageParam
@@ -21,6 +22,47 @@ fun interface Approver {
     suspend fun approve(toolName: String, input: Map<String, String>): Boolean
 }
 
+/**
+ * Live progress for one turn, for a UI that shows work as it happens.
+ *
+ * **Why an interface and not three more lambda parameters.** A turn produces
+ * three kinds of event and a caller almost always wants all of them or none:
+ * prose as it is generated, tools as they finish, and a short status for the
+ * spinner. Passing them separately meant the one caller that needed live tool
+ * cards had to thread four nullable lambdas through two loops.
+ *
+ * **Order is part of the contract.** Deltas and tool runs interleave in the
+ * order the model produced them, so a caller can render a transcript by
+ * appending: prose, then the tool it decided to call, then the prose that
+ * followed the result. Getting this wrong puts the answer above the work that
+ * produced it.
+ *
+ * Every method has a default, so a caller overrides only what it renders.
+ */
+interface TurnListener {
+    /** A short imperative line for a spinner: "Running read_file (a.kt)...". */
+    fun onStatus(status: String) {}
+
+    /**
+     * Prose as it arrives.
+     *
+     * Not the whole reply and not a prefix of it -- one fragment, to append.
+     * [Reply.text] remains authoritative at the end of the turn: a local model
+     * that wrote a tool call into its prose has that object stripped from the
+     * final text, so a UI that trusted only the deltas would leave the JSON on
+     * screen. `tools/localai/FINDINGS.md` §4.
+     */
+    fun onTextDelta(delta: String) {}
+
+    /**
+     * A tool that has finished, approved or refused.
+     *
+     * Fires before any prose that follows it, which is what lets a transcript
+     * close the current assistant bubble and open a new one after the card.
+     */
+    fun onToolRun(run: ToolRun) {}
+}
+
 /** What one tool call did, for the UI to show alongside the answer. */
 data class ToolRun(
     val name: String,
@@ -29,6 +71,17 @@ data class ToolRun(
     val risk: ToolRisk,
     val approved: Boolean,
     val outcome: ProjectFiles.Outcome,
+    /**
+     * Wall-clock cost of the call.
+     *
+     * Measured here because this is the only place that knows both ends, and
+     * shown on the card so a turn that felt slow can be attributed: a grep over
+     * a large project and a model thinking for a minute are the same spinner
+     * from the outside. Includes time spent waiting for the user to approve,
+     * which is the honest number for "how long did this take" even though it is
+     * not the tool's own cost.
+     */
+    val durationMs: Long = 0,
 )
 
 /** The end of one user turn. */
@@ -100,12 +153,12 @@ class AiSession(
         projectContext: String,
         userText: String,
         effort: OutputConfig.Effort = OutputConfig.Effort.HIGH,
-        onStatus: ((String) -> Unit)? = null,
+        listener: TurnListener? = null,
     ): Reply {
         return if (client != null && assembler != null) {
-            sendAnthropic(projectContext, userText, effort, onStatus)
+            sendAnthropic(projectContext, userText, effort, listener)
         } else if (aiClient != null) {
-            sendGeneric(projectContext, userText, effort, onStatus)
+            sendGeneric(projectContext, userText, effort, listener)
         } else {
             Reply("No AI client configured.", emptyList())
         }
@@ -115,14 +168,37 @@ class AiSession(
         projectContext: String,
         userText: String,
         effort: OutputConfig.Effort,
-        onStatus: ((String) -> Unit)? = null,
+        listener: TurnListener? = null,
     ): Reply {
         anthropicMessages += userTurn(userText)
         val runs = mutableListOf<ToolRun>()
 
         repeat(maxToolRounds) {
+            val request = assembler!!.request(projectContext, anthropicMessages, effort)
             val response = withContext(dispatchers.io) {
-                client!!.messages().create(assembler!!.request(projectContext, anthropicMessages, effort))
+                if (listener == null) {
+                    client!!.messages().create(request)
+                } else {
+                    // **Accumulated by the SDK, for the reason
+                    // `AnthropicAiClient` gives**: thinking blocks have to go
+                    // back verbatim with their signature or the next turn is
+                    // rejected, and reassembling them by hand is how that
+                    // breaks. Only text deltas are forwarded -- streaming
+                    // thinking into the bubble shows reasoning as the answer.
+                    val accumulator = MessageAccumulator.create()
+                    client!!.messages().createStreaming(request).use { stream ->
+                        stream.stream().forEach { event ->
+                            accumulator.accumulate(event)
+                            event.contentBlockDelta().ifPresent { block ->
+                                block.delta().text().ifPresent { delta ->
+                                    delta.text().takeIf { it.isNotEmpty() }
+                                        ?.let(listener::onTextDelta)
+                                }
+                            }
+                        }
+                    }
+                    accumulator.message()
+                }
             }
 
             anthropicMessages += response.toParam()
@@ -133,12 +209,16 @@ class AiSession(
             val results = calls.map { call ->
                 val target = call.inputAsStrings()["path"] ?: call.inputAsStrings()["command"] ?: call.inputAsStrings()["query"]
                 val statusMsg = if (target != null) "Running ${call.name()} ($target)..." else "Running ${call.name()}..."
-                onStatus?.invoke(statusMsg)
+                listener?.onStatus(statusMsg)
                 val run = executeTool(call.name(), call.inputAsStrings())
                 runs += run
+                // Announced the moment it finishes, not at the end of the turn.
+                // A read that takes ten seconds used to leave the panel showing
+                // nothing but a spinner.
+                listener?.onToolRun(run)
                 result(call.id(), run.outcome)
             }
-            onStatus?.invoke("Analyzing results...")
+            listener?.onStatus("Analyzing results...")
 
             anthropicMessages += MessageParam.builder()
                 .role(MessageParam.Role.USER)
@@ -158,7 +238,7 @@ class AiSession(
         projectContext: String,
         userText: String,
         effort: OutputConfig.Effort,
-        onStatus: ((String) -> Unit)? = null,
+        listener: TurnListener? = null,
     ): Reply {
         genericMessages += AiMessage(AiRole.USER, userText)
         val runs = mutableListOf<ToolRun>()
@@ -235,7 +315,11 @@ class AiSession(
                 effort = effort,
             )
 
-            val response = aiClient.send(request)
+            val response = if (listener == null) {
+                aiClient.send(request)
+            } else {
+                aiClient.send(request) { delta -> listener.onTextDelta(delta) }
+            }
 
             val modelMessage = AiMessage(
                 role = AiRole.ASSISTANT,
@@ -274,9 +358,13 @@ class AiSession(
                 ranSomethingNew = true
                 val target = call.args["path"] ?: call.args["command"] ?: call.args["query"]
                 val statusMsg = if (target != null) "Running ${call.name} ($target)..." else "Running ${call.name}..."
-                onStatus?.invoke(statusMsg)
+                listener?.onStatus(statusMsg)
                 val run = executeTool(call.name, call.args)
                 runs += run
+                // Announced the moment it finishes, not at the end of the turn.
+                // A read that takes ten seconds used to leave the panel showing
+                // nothing but a spinner.
+                listener?.onToolRun(run)
 
                 val content = when (val outcome = run.outcome) {
                     is ProjectFiles.Outcome.Ok -> outcome.content
@@ -309,7 +397,7 @@ class AiSession(
                     )
                 }
             }
-            onStatus?.invoke("Analyzing results...")
+            listener?.onStatus("Analyzing results...")
 
             genericMessages += AiMessage(
                 role = AiRole.USER,
@@ -327,6 +415,7 @@ class AiSession(
 
     private suspend fun executeTool(name: String, input: Map<String, String>): ToolRun {
         val risk = toolset.find(name)?.risk ?: ToolRisk.READ_ONLY
+        val started = System.currentTimeMillis()
         val approved = risk == ToolRisk.MUTATING && approver.approve(name, input)
 
         return ToolRun(
@@ -335,6 +424,7 @@ class AiSession(
             risk = risk,
             approved = approved,
             outcome = toolset.execute(name, input, approved),
+            durationMs = System.currentTimeMillis() - started,
         )
     }
 

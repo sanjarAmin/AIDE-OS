@@ -73,4 +73,27 @@ interface AiClient {
 
     suspend fun send(request: AiClientRequest): AiClientResponse
     suspend fun complete(context: CompletionContext): String?
+
+    /**
+     * The same request, with prose handed to [onTextDelta] as it arrives.
+     *
+     * **Defaults to the one-shot path**, so a provider that has not learnt to
+     * stream stays correct: the caller gets the whole reply in one delta and
+     * the UI's streaming code runs unchanged against it. That matters more than
+     * it sounds -- it means the chat panel has exactly one rendering path, and
+     * a provider added later cannot present a second one.
+     *
+     * The returned [AiClientResponse] is authoritative and must equal what
+     * [send] would have returned. Deltas are for the eye; the session loop
+     * reads the response. A client that streamed text but forgot to assemble
+     * the tool calls would look perfect and quietly stop using tools.
+     */
+    suspend fun send(
+        request: AiClientRequest,
+        onTextDelta: (String) -> Unit,
+    ): AiClientResponse {
+        val response = send(request)
+        response.text.takeIf { it.isNotBlank() }?.let(onTextDelta)
+        return response
+    }
 }

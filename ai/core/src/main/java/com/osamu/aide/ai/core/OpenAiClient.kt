@@ -44,30 +44,7 @@ class OpenAiClient(
         }
 
     override suspend fun send(request: AiClientRequest): AiClientResponse = withContext(Dispatchers.IO) {
-        val payload = JSONObject().apply {
-            put("model", model)
-            put("messages", encodeMessages(request.systemInstruction, request.messages))
-            if (request.tools.isNotEmpty()) {
-                put("tools", encodeTools(request.tools))
-            }
-            put("max_tokens", request.maxTokens)
-            put("temperature", 0.2)
-        }
-
-        val url = endpointUrl ?: throw IllegalStateException(
-            "${provider.displayName} has no address to send requests to. Set one in Settings.",
-        )
-        val httpRequest = Request.Builder()
-            .url(url)
-            .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
-            .apply {
-                if (!apiKey.isNullOrBlank()) {
-                    header("Authorization", "Bearer $apiKey")
-                }
-            }
-            .build()
-
-        httpClient.newCall(httpRequest).execute().use { response ->
+        httpClient.newCall(httpRequest(request, streaming = false)).execute().use { response ->
             val responseBody = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
                 // The provider the user chose, not the protocol it speaks: a
@@ -79,6 +56,84 @@ class OpenAiClient(
             }
             parseResponse(responseBody, offered = request.tools)
         }
+    }
+
+    /**
+     * The streamed form of [send].
+     *
+     * **The response is assembled here, not inferred from the deltas.** The
+     * accumulator holds both the prose and the tool calls, and the calls are
+     * the reason this cannot be a thin wrapper that concatenates text: they
+     * arrive as JSON fragments keyed by index. [OpenAiStreamAccumulator] owns
+     * that reassembly and is unit-tested against the orderings servers
+     * actually produce.
+     *
+     * **Written-call recovery still applies.** A local model that prints its
+     * call into the reply instead of emitting it (`tools/localai/FINDINGS.md`
+     * §4, measured 5/5 on the 1.5B and 3/3 on the 7B) must be recovered on
+     * this path too, or turning streaming on would silently take tools away
+     * from exactly the models that need the most help. The prose reaches the
+     * user as it streams and the recovered object is stripped from the final
+     * text, so the only visible trace is a brief flash of JSON -- a real cost,
+     * and much smaller than an assistant that stops reading files.
+     */
+    override suspend fun send(
+        request: AiClientRequest,
+        onTextDelta: (String) -> Unit,
+    ): AiClientResponse = withContext(Dispatchers.IO) {
+        httpClient.newCall(httpRequest(request, streaming = true)).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw IllegalStateException(
+                    "${provider.displayName} request failed (${response.code}): " +
+                        response.body?.string().orEmpty(),
+                )
+            }
+            val body = response.body ?: throw IllegalStateException(
+                "${provider.displayName} returned no body to stream.",
+            )
+
+            val accumulator = OpenAiStreamAccumulator()
+            body.charStream().buffered().use { reader ->
+                forEachSseData(reader) { data ->
+                    accumulator.accept(data)?.let(onTextDelta)
+                }
+            }
+            finalize(
+                parts = accumulator.parts(),
+                content = accumulator.content,
+                finishReason = accumulator.finishReason(),
+                offered = request.tools,
+            )
+        }
+    }
+
+    private fun httpRequest(request: AiClientRequest, streaming: Boolean): Request {
+        val payload = JSONObject().apply {
+            put("model", model)
+            put("messages", encodeMessages(request.systemInstruction, request.messages))
+            if (request.tools.isNotEmpty()) {
+                put("tools", encodeTools(request.tools))
+            }
+            put("max_tokens", request.maxTokens)
+            put("temperature", 0.2)
+            if (streaming) put("stream", true)
+        }
+
+        val url = endpointUrl ?: throw IllegalStateException(
+            "${provider.displayName} has no address to send requests to. Set one in Settings.",
+        )
+        return Request.Builder()
+            .url(url)
+            .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .apply {
+                if (!apiKey.isNullOrBlank()) {
+                    header("Authorization", "Bearer $apiKey")
+                }
+                // Asked for explicitly. Some gateways decide between a JSON
+                // body and a stream on this header rather than on `stream`.
+                if (streaming) header("Accept", "text/event-stream")
+            }
+            .build()
     }
 
     override suspend fun complete(context: CompletionContext): String? = withContext(Dispatchers.IO) {
@@ -243,6 +298,22 @@ class OpenAiClient(
             }
         }
 
+        return finalize(parts, content, finishReason, offered)
+    }
+
+    /**
+     * The last step both paths share: recover a written call, or return as is.
+     *
+     * **Shared on purpose.** When this lived inside the one-shot parser, adding
+     * streaming meant either duplicating it or losing it, and losing it is
+     * invisible -- the assistant keeps answering, just never with a tool.
+     */
+    private fun finalize(
+        parts: List<AiPart>,
+        content: String,
+        finishReason: String?,
+        offered: List<AideTool>,
+    ): AiClientResponse {
         // **A call the model wrote out instead of making.** Small local models
         // choose the right tool and then print it as JSON in the reply, because
         // the server's parser never recognised the markup their chat template

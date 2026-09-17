@@ -11,6 +11,8 @@ import com.osamu.aide.core.fs.Project
 import com.osamu.aide.core.fs.ProjectRepository
 import com.osamu.aide.ai.core.ChatController
 import com.osamu.aide.ai.core.ChatUiState
+import com.osamu.aide.ai.core.ApprovalScope
+import com.osamu.aide.ai.core.ConversationStore
 import com.osamu.aide.vcs.git.GitWorkspace
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
@@ -45,6 +47,14 @@ class AssistantViewModel(
     private val keys: ApiKeyStore? = null,
     private val git: GitWorkspace? = null,
     private val workspaceRoot: File? = null,
+    /**
+     * Where conversations are stored: the app's private files directory.
+     *
+     * **Not the project directory**, for the reason [ConversationStore]
+     * documents -- a `connectedAndroidTest` run deletes external app storage
+     * and would take the history with it.
+     */
+    private val chatHistoryRoot: File? = null,
 ) : ViewModel() {
 
     private val lastBuild = LastBuild()
@@ -90,7 +100,9 @@ class AssistantViewModel(
                 project = { openProject },
             ),
             keys = keys,
+            store = chatHistoryRoot?.let { ConversationStore(it, projectDir) },
         )
+        controller.value?.refreshConversations()
 
         viewModelScope.launch {
             openProject = (projects.openProject(projectDir) as? AppResult.Success)?.value
@@ -99,8 +111,20 @@ class AssistantViewModel(
 
     fun send(text: String) = controller.value?.send(text) ?: Unit
 
-    fun resolveApproval(approved: Boolean) =
-        controller.value?.resolveApproval(approved) ?: Unit
+    fun resolveApproval(approved: Boolean, scope: ApprovalScope = ApprovalScope.ONCE) =
+        controller.value?.resolveApproval(approved, scope) ?: Unit
+
+    fun regenerate() = controller.value?.regenerate() ?: Unit
+
+    fun editAndResend(entryId: Long, text: String) =
+        controller.value?.editAndResend(entryId, text) ?: Unit
+
+    fun openConversation(id: String) = controller.value?.openConversation(id) ?: Unit
+
+    fun deleteConversation(id: String) = controller.value?.deleteConversation(id) ?: Unit
+
+    fun renameConversation(id: String, title: String) =
+        controller.value?.renameConversation(id, title) ?: Unit
 
     fun dismissError() = controller.value?.dismissError() ?: Unit
 

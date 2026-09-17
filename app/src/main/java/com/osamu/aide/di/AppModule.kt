@@ -52,6 +52,16 @@ import java.io.File
  */
 private const val BUILD_OUTPUT_ROOT = "buildOutputRoot"
 
+/**
+ * Where chat history lives: `filesDir`, not `cacheDir` and not the project.
+ *
+ * `cacheDir` can be cleared by the system whenever it likes, and a
+ * conversation vanishing between two sessions is not a cache miss anyone
+ * forgives. The project directory is worse -- it is external app storage, which
+ * an instrumentation run deletes wholesale.
+ */
+private const val CHAT_HISTORY_ROOT = "chatHistoryRoot"
+
 val appModule = module {
 
     single<DispatcherProvider> { DefaultDispatcherProvider() }
@@ -62,6 +72,7 @@ val appModule = module {
     // it and language intelligence reads it back, so the two must agree; a
     // second literal here is how they would quietly stop agreeing.
     single(named(BUILD_OUTPUT_ROOT)) { File(get<Context>().cacheDir, "builds") }
+    single(named(CHAT_HISTORY_ROOT)) { get<Context>().filesDir }
 
     // The assistant's credential and the seam that builds sessions from it.
     // ApiKeyStore is a singleton because it holds a handle to a Keystore entry,
@@ -163,7 +174,18 @@ val appModule = module {
         )
     }
 
-    viewModel { AssistantViewModel(get(), get(), get(), get(), get(), getOrNull(), getOrNull()) }
+    viewModel {
+        AssistantViewModel(
+            assistant = get(),
+            builder = get(),
+            projects = get(),
+            languages = get(),
+            keys = getOrNull(),
+            git = getOrNull(),
+            workspaceRoot = getOrNull(),
+            chatHistoryRoot = get(named(CHAT_HISTORY_ROOT)),
+        )
+    }
     viewModel { ProjectsViewModel(get(), get(), get(), get(), get()) }
     viewModel { GitViewModel(get(), get(), get()) }
     viewModel { TerminalViewModel(get()) }

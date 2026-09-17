@@ -30,6 +30,54 @@ class GeminiAiClient(
     override suspend fun send(request: AiClientRequest): AiClientResponse = withContext(Dispatchers.IO) {
         val url = customEndpoint ?: "$BASE_URL/models/$model:generateContent"
 
+        httpClient.newCall(turnRequest(request, url)).execute().use { response ->
+            val responseBody = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                throw IllegalStateException("Gemini request failed (${response.code}): $responseBody")
+            }
+            parseResponse(responseBody)
+        }
+    }
+
+    /**
+     * The streamed form of [send].
+     *
+     * **The verb carries the difference, not a flag.** Gemini streams from a
+     * different route -- `:streamGenerateContent?alt=sse` -- so the URL is
+     * rewritten rather than the body. Rewriting by substring means a custom
+     * endpoint (which is how the tests reach a local server, and how a proxy
+     * would be configured) streams through exactly the same transformation as
+     * the default one, instead of only the default route being exercised.
+     *
+     * Without `alt=sse` this route returns a **JSON array of chunks** rather
+     * than an event stream: a valid response that an SSE reader sees as one
+     * unparseable blob, so the reply would arrive empty with no error anywhere.
+     */
+    override suspend fun send(
+        request: AiClientRequest,
+        onTextDelta: (String) -> Unit,
+    ): AiClientResponse = withContext(Dispatchers.IO) {
+        val base = customEndpoint ?: "$BASE_URL/models/$model:generateContent"
+        val url = base.replace(":generateContent", ":streamGenerateContent") +
+            if ("alt=sse" in base) "" else (if ('?' in base) "&" else "?") + "alt=sse"
+
+        httpClient.newCall(turnRequest(request, url)).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw IllegalStateException(
+                    "Gemini request failed (${response.code}): ${response.body?.string().orEmpty()}",
+                )
+            }
+            val body = response.body ?: throw IllegalStateException("Gemini returned no body to stream.")
+
+            val accumulator = GeminiStreamAccumulator()
+            body.charStream().buffered().use { reader ->
+                forEachSseData(reader) { data -> accumulator.accept(data)?.let(onTextDelta) }
+            }
+            AiClientResponse(parts = accumulator.parts(), finishReason = accumulator.finishReason())
+        }
+    }
+
+    private fun turnRequest(request: AiClientRequest, url: String): Request {
         val payload = JSONObject().apply {
             if (request.systemInstruction.isNotBlank()) {
                 put("system_instruction", JSONObject().apply {
@@ -55,7 +103,7 @@ class GeminiAiClient(
             })
         }
 
-        val httpRequest = Request.Builder()
+        return Request.Builder()
             .url(url)
             .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
             .apply {
@@ -65,14 +113,6 @@ class GeminiAiClient(
                 }
             }
             .build()
-
-        httpClient.newCall(httpRequest).execute().use { response ->
-            val responseBody = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                throw IllegalStateException("Gemini request failed (${response.code}): $responseBody")
-            }
-            parseResponse(responseBody)
-        }
     }
 
     override suspend fun complete(context: CompletionContext): String? = withContext(Dispatchers.IO) {
