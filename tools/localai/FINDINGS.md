@@ -417,39 +417,143 @@ A chat template that the server parses natively would still be better: a
 recovered call has no id, so it relies on the generic loop matching results by
 name, which is the path Gemini needs anyway.
 
-## 9. The whole path works, and the 1.5B cannot stop
+## 9. The 1.5B could not stop, and now does. Measured.
 
 Driven on the NX809J, 2026-09-17: `llama-server` started from Settings, the
 address published, a message sent from the chat panel, tool calls parsed and
-executed against the project. **Every piece this app owns works.** What does
-not work is the model.
+executed against the project. **Every piece this app owns works.** What did not
+work was the model.
 
 Asked a bare `hello`, Qwen2.5-Coder 1.5B called `list_files` **twelve times in
 succession** and never produced an answer. `AiSession`'s loop guard ended it:
 *"I stopped after 12 rounds of tool calls without finishing."* Eighteen and a
 half minutes of CPU time for no reply.
 
-**This revises §4.** That section measured the 1.5B choosing `read_file`
+**This revised §4.** That section measured the 1.5B choosing `read_file`
 correctly 5/5 and called it "recoverable", meaning the written-JSON calls could
-be parsed. They can, and they were — the tool cards in the panel are real
-executions. But *choosing* the right tool is not the same as *deciding to
-stop*, and a model that cannot terminate is not an agent however well it picks.
-A one-shot question needs no tools at all, and this one reached for them twelve
-times.
+be parsed. They can, and they were -- the tool cards in the panel are real
+executions. But *choosing* the right tool is not the same as *deciding to stop*,
+and a model that cannot terminate is not an agent however well it picks.
 
-Two things follow for anyone continuing this:
+### The fix is two parts, and one part alone made it worse
 
-- **Test termination, not just selection.** §4's five trials all asked a
-  question whose answer was one tool call. None asked whether the model would
-  stop, and that is the property that decides whether the assistant is usable.
-- **The loop guard is doing real work.** Without it the session would have run
-  until the read timeout, which for this provider is ten minutes (§8's model
-  sizes need it). A guard measured in *rounds* rather than seconds is the right
-  shape, and twelve is generous.
+**The prompt.** `sendGeneric` now says, in this order: call a tool when the user
+asks you to look at, search or change a file; you *can* read any file, so never
+claim otherwise; and answer directly, with no tool calls, for a greeting, a
+general question, or anything already in the prompt. `LOCAL` gets a blunter
+block after it with worked examples, because the 1.5B follows an example better
+than a rule.
 
-Untested: whether the 3B terminates, and whether a system prompt that tells the
-model it may answer without tools changes the 1.5B's behaviour. The second is
-cheap and worth trying before concluding the small models are unusable.
+**Order matters, and getting it wrong is worse than the loop.** The first
+version listed only the prohibitions. The 1.5B then *refused*: "the code is not
+provided ... so I cannot read the file", while holding a `read_file` tool. A
+loop wastes a user's time; a refusal is wrong, fast, and sounds certain. The
+positive rule goes first.
+
+**The guard.** A structural backstop that does not depend on the model reading
+anything: every executed call is recorded by a signature over its name and its
+arguments sorted by key, a repeat is answered with an error telling the model it
+already ran that call and should answer now, and two consecutive rounds that
+run nothing new end the session. Sorting the arguments is what makes
+`{path, mode}` and `{mode, path}` the same call, which is how a model actually
+re-issues one.
+
+### The numbers
+
+`LocalModelTerminationTest`, three cases against the live server through
+`AiSession`, Qwen2.5-Coder 1.5B q4_k_m, server started by the app, phone idle
+and not thermally limited, an 859-token prompt (a two-file Java project plus the
+tool schemas):
+
+| question | latency | tool calls | terminated |
+| --- | --- | --- | --- |
+| `hello` | 0.9 s | none | yes |
+| `what does this project do?` | 2.2 s | none | yes |
+| `read MainActivity.java and tell me what it displays` | 10.4 s | one, `read_file` | yes |
+
+Tool selection was right in all three, in both directions: nothing for the two
+that needed nothing, exactly one `read_file` for the one that needed it, and
+prose after it in every case. Before the fix the first row was twelve rounds and
+no answer.
+
+**Three rows is a small sample, and it is the sample that matters.** §4 ran five
+trials of the same *kind* of question and missed the defect entirely, because
+selection and termination are different properties. One case per direction,
+asserted strictly, found both of my bad intermediate states -- the loop and the
+refusal.
+
+### Read the latency with its conditions
+
+The same three questions driven through the chat panel, on the real project and
+as the first requests after the server started, took **56 s, 25 s and 84 s** --
+25x the table above, with identical tool decisions. Three candidates: a cold
+model, a much longer project listing, and the app's own work competing. **Not
+isolated**, and the attempt to isolate it failed in a way worth recording (§10).
+So: the table is warm-server, small-context, and the first question a user asks
+after pressing Start costs tens of seconds. Both are true; neither is the
+headline alone.
+
+**The guard is still doing real work.** Without it a runaway session runs until
+the read timeout, which for this provider is ten minutes because §8's model
+sizes need it. A guard measured in *rounds* rather than seconds is the right
+shape.
+
+Untested: the 3B, which is not on the phone or this machine and is 2.1 GB of
+someone's connection.
+
+## 10. Two things the device said that no test had asked
+
+Both found while collecting §9's numbers, which is the argument for collecting
+them on hardware.
+
+### A dead server kept its address
+
+After the termination run the app was still up, `llama-server` was gone, and
+`local.baseUrl` still named port 46819 -- so `ApiKeyStore.isReady(LOCAL)` was
+true and the next message would have gone to a closed socket. There was no
+tombstone newer than two days, which rules out a native abort and says nothing
+about a SIGKILL; `logcat` returns nothing for app processes on this phone, so
+lmkd's own line is not available either.
+
+`adoptOrForgetExistingServer` did not cover it: that probes at launch, and the
+app had not relaunched. **Nothing in the class ever learned the child had
+died.** The fix hangs the death watch on the output drain, which is the one
+thread already waiting on the process -- `forEachLine` returns when the child
+closes its stream -- and withdraws the address there, guarded on process
+identity so a stopped server's drain cannot clear a newer server's port.
+`LocalServerDeathWatchTest` asserts both, with `sleep` standing in for the
+server so it needs no model and is nobody's skip. It fails against the previous
+build, which is the only reason to believe it.
+
+**A child dying mid-session is the ordinary case here.** See below for why.
+
+### Memory pressure, not CPU, is what breaks a local model on this phone
+
+To separate "cold model" from "long prompt" in §9's latency gap, the server was
+started again outside the app, through `run-as`, and the same three questions
+re-run. The result was unusable and instructive: **prompt eval 11.92 tok/s and
+generation 0.15 tok/s** -- 6.8 seconds per token, against roughly 18 tok/s
+implied by the table above on the same phone an hour earlier.
+
+The cause was not scheduling, which is what this looks like: `cpuset` was `/`,
+`Cpus_allowed_list` was `0-7`, nice was 0. It was memory. The server's `VmRSS`
+was 1.75 GB with **234 MB of it swapped out**, `MemFree` was 157 MB and about
+3.9 GB of zram was in use. Killing it returned `MemFree` to 1.2 GB and
+`MemAvailable` to 5.1 GB.
+
+Three things follow:
+
+- **A 1.5B on an 11 GB phone is not comfortably resident**, and §8's conclusion
+  that 11 GB is the floor for the 7B understates the problem: what decides
+  usability is what else the phone is holding. A 1.5B under swap is slower than
+  the 7B was without it.
+- **This is the likely reason the child died**, and it makes the death watch a
+  routine requirement rather than a defence against force-stop.
+- **`run-as` is not the app, in a third way.** `tools/clang/FINDINGS.md` §7 says
+  it differs on exec and SELinux. It also differs in what else is running when
+  you use it, so a performance number taken through it is not comparable to one
+  the app produced. The latency gap in §9 stays open; measuring it needs the
+  app's own launch path and a phone with memory to spare.
 
 ## What this makes a local model
 
@@ -485,12 +589,25 @@ worth building only once a phone's numbers are in:
    cannot meet; and a force-stop left the published address behind, so the
    provider reported itself ready with nothing listening. Both fixed.
 
-   **What remains is the model, not the plumbing** (§9): the 1.5B loops on tool
-   calls and never finishes. Try a system prompt that permits answering without
-   tools, and measure the 3B, before offering this as a feature.
+   ~~**What remains is the model, not the plumbing**~~ — the 1.5B terminates
+   now, on a rebalanced prompt plus a guard that refuses to re-run a call it
+   has already run, measured at 0.9–10.4 s and 0–1 tool calls across three
+   cases on the phone (§9). **The feature is usable.** What it is not yet is
+   fast on the first question after Start, and that number has conditions worth
+   reading before quoting it.
 
-Still unasked: whether Android freezes or kills a `llama-server` child process
-when the IDE is in the background (the debugger's §9 problem), whether the
-Vulkan backend works on a phone's GPU, and memory pressure on a 6–8 GB phone —
-§8 suggests an 11 GB phone is already the floor for the 7B, so a 6 GB one is a
-question about the 1.5B rather than about the range.
+Still open, and reordered by what the device actually did:
+
+- **Memory, which turns out to be the binding constraint** (§10). A 1.5B under
+  swap generates at 0.15 tok/s on this phone. The open question is not whether
+  a 6–8 GB phone can *hold* the 1.5B but what it is holding already, and the
+  honest answer may be that this feature needs a free-memory check before it
+  offers to start anything.
+- **What the first question after Start really costs** (§9): 25x the warm
+  number, cause not isolated, and not measurable through `run-as`.
+- **Whether Android freezes or kills the child when the IDE is
+  backgrounded** — the debugger's §9 problem. Partly answered from the wrong
+  direction: a child *did* die unasked, and the app now notices. Whether the
+  freezer or lmkd did it is still unmeasured.
+- **The 3B**, unmeasured and not on any disk here.
+- **The Vulkan backend on a phone's GPU**, untried.

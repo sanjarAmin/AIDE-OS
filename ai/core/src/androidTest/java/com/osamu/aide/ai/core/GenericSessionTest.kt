@@ -101,7 +101,7 @@ abstract class GenericSessionTest {
         )
     }
 
-    private fun read(path: String, id: String = "call_1") =
+    protected fun read(path: String, id: String = "call_1") =
         ScriptedProviderApi.Call(id, "read_file", mapOf("path" to path))
 
     // -- the cases -----------------------------------------------------------
@@ -261,19 +261,33 @@ abstract class GenericSessionTest {
      * The runaway guard, which matters more here than on the Anthropic path:
      * these providers are billed per call too, and a loop that never terminates
      * looks like progress from the outside for as long as it runs.
+     *
+     * **Distinct calls, deliberately.** This scripted the *same* call every
+     * round and asserted the tool ran three times -- which is the behaviour the
+     * repeated-call guard now prevents, so written that way it asserted a bug.
+     * A model repeating itself is stopped sooner and by a different mechanism
+     * (`a_model_that_only_repeats_is_stopped_early`); what `maxToolRounds`
+     * backstops is a model that keeps finding *new* things to do and never
+     * concludes, and nothing else covers that.
      */
     @Test
     fun a_model_that_never_stops_calling_tools_is_cut_off() = runTest {
         val reply = session(
             responses = listOf(
-                toolCall(ScriptedProviderApi.Call("call_1", "list_files", emptyMap())),
+                toolCall(ScriptedProviderApi.Call("c1", "list_files", mapOf("path" to ""))),
+                toolCall(ScriptedProviderApi.Call("c2", "list_files", mapOf("path" to "src"))),
+                toolCall(ScriptedProviderApi.Call("c3", "grep", mapOf("query" to "main"))),
             ),
             maxToolRounds = 3,
         ).send("ctx", "go")
 
         assertTrue("the loop should have reported being cut short", reply.truncated)
         assertEquals(3, api!!.requestCount)
-        assertEquals(3, reply.toolRuns.size)
+        assertEquals(
+            "every round did something new, so every round should have run its tool",
+            3,
+            reply.toolRuns.size,
+        )
     }
 
     /** History survives across turns, which is what makes it a conversation. */
@@ -322,5 +336,118 @@ abstract class GenericSessionTest {
         for (tool in listOf("list_files", "read_file", "grep", "edit_file")) {
             assertTrue("$tool was not declared to the model:\n$first", tool in first)
         }
+    }
+
+    // -- the repeated-call guard ---------------------------------------------
+
+    /**
+     * **The defect this guard exists for.** Asked a bare "hello", Qwen
+     * 2.5-Coder 1.5B called `list_files` twelve times on a phone and never
+     * answered -- eighteen minutes of CPU for no reply.
+     * `tools/localai/FINDINGS.md` §9.
+     *
+     * A small model will not be talked out of that by an instruction, so the
+     * loop answers the second identical call itself instead of running it. The
+     * assertion is on `toolRuns`: the tool executed **once**, however many
+     * times it was asked for.
+     */
+    @Test
+    fun an_identical_call_is_answered_without_running_the_tool_again() = runTest {
+        val reply = session(
+            listOf(
+                toolCall(read("src/Main.kt")),
+                toolCall(read("src/Main.kt", id = "call_2")),
+                text("It prints hi."),
+            ),
+        ).send("ctx", "what does Main.kt do?")
+
+        assertEquals("It prints hi.", reply.text)
+        assertEquals(
+            "the same read ran twice; the second should have been answered from the guard",
+            listOf("read_file"),
+            reply.toolRuns.map { it.name },
+        )
+        assertFalse(reply.truncated)
+    }
+
+    /**
+     * Argument order does not make a call different.
+     *
+     * A model that emits the same arguments with its keys transposed is making
+     * the same call, and a signature built from the raw map would miss it.
+     */
+    @Test
+    fun a_repeat_is_recognised_regardless_of_argument_order() = runTest {
+        val first = ScriptedProviderApi.Call(
+            "call_1",
+            "search_files",
+            linkedMapOf("query" to "main", "path" to "src"),
+        )
+        val transposed = ScriptedProviderApi.Call(
+            "call_2",
+            "search_files",
+            linkedMapOf("path" to "src", "query" to "main"),
+        )
+
+        val reply = session(
+            listOf(toolCall(first), toolCall(transposed), text("Found it.")),
+        ).send("ctx", "where is main?")
+
+        assertEquals(
+            "the transposed call was treated as new",
+            1,
+            reply.toolRuns.size,
+        )
+        assertEquals("Found it.", reply.text)
+    }
+
+    /**
+     * A model that only ever repeats is stopped long before the round limit.
+     *
+     * It gets one round to take the correction -- that is what the feedback is
+     * for -- and is cut off on the second. Twelve rounds of this cost eighteen
+     * minutes on a phone; two cost a few seconds.
+     */
+    @Test
+    fun a_model_that_only_repeats_is_stopped_early() = runTest {
+        val repeats = List(12) { toolCall(read("src/Main.kt", id = "call_$it")) }
+
+        val reply = session(repeats).send("ctx", "hello")
+
+        assertTrue("the session should report it gave up", reply.truncated)
+        assertEquals(
+            "the tool ran more than once despite every call being identical",
+            1,
+            reply.toolRuns.size,
+        )
+        // Three requests, not twelve: the first call, the round that repeats it
+        // and is corrected, and the round that repeats it again and ends.
+        assertTrue(
+            "made ${api!!.requestCount} requests; the guard should stop it within four",
+            api!!.requestCount <= 4,
+        )
+    }
+
+    /**
+     * And a model making genuine progress is not cut off by the guard.
+     *
+     * The counter resets whenever a round runs something new, so a long chain
+     * of *different* calls still gets its full allowance. A guard that counted
+     * rounds rather than novelty would strangle real work.
+     */
+    @Test
+    fun distinct_calls_are_never_treated_as_repeats() = runTest {
+        File(root, "src/Other.kt").writeText("fun other() = 1")
+        val reply = session(
+            listOf(
+                toolCall(read("src/Main.kt", id = "c1")),
+                toolCall(read("src/Other.kt", id = "c2")),
+                text("Both read."),
+            ),
+        ).send("ctx", "read both files")
+
+        assertEquals("Both read.", reply.text)
+        assertEquals(2, reply.toolRuns.size)
+        assertFalse(reply.truncated)
     }
 }

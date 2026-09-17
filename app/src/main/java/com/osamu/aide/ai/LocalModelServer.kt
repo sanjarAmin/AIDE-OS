@@ -131,23 +131,9 @@ class LocalModelServer(
             Log.w(TAG, "llama-server did not start", it)
             return null
         }
-        process = started
-
-        // Drained on a daemon thread. A process whose output nobody reads fills
-        // its pipe buffer and stops, which would present as a server that
-        // answered `/health` and then hung mid-generation.
-        Thread {
-            runCatching {
-                started.inputStream.bufferedReader().forEachLine { line ->
-                    synchronized(log) {
-                        log.appendLine(line)
-                        if (log.length > LOG_LIMIT) log.delete(0, log.length - LOG_LIMIT)
-                    }
-                }
-            }
-        }.apply { isDaemon = true }.start()
-
         val address = "http://$HOST:$port"
+        adopt(started, address)
+
         if (!awaitHealth(address, started)) {
             stop()
             return null
@@ -159,7 +145,42 @@ class LocalModelServer(
         return address
     }
 
+    /**
+     * Takes ownership of a launched server: drains its output and watches it die.
+     *
+     * **Internal so a test can hand it an ordinary short-lived process.** The
+     * death watch is worth asserting and starting a real `llama-server` to
+     * assert it would need a gigabyte of model on the device, which makes the
+     * test a skip on most of them -- and a skip reports as OK. Any process that
+     * exits exercises the same path, because the signal *is* the output stream
+     * closing.
+     */
+    @Synchronized
+    internal fun adopt(started: Process, address: String) {
+        process = started
+
+        // Drained on a daemon thread. A process whose output nobody reads fills
+        // its pipe buffer and stops, which would present as a server that
+        // answered `/health` and then hung mid-generation.
+        //
+        // **The drain doubles as the death watch**, which is why it is handed
+        // the address: `forEachLine` returns when the child closes its output,
+        // and nothing else in this class ever learns that the child is gone.
+        Thread {
+            runCatching {
+                started.inputStream.bufferedReader().forEachLine { line ->
+                    synchronized(log) {
+                        log.appendLine(line)
+                        if (log.length > LOG_LIMIT) log.delete(0, log.length - LOG_LIMIT)
+                    }
+                }
+            }
+            noteExit(started, address)
+        }.apply { isDaemon = true }.start()
+    }
+
     /** Stops the server and withdraws the address. */
+    @Synchronized
     fun stop() {
         // Cleared first. A crash between destroying the process and clearing
         // this would leave a dead address behind, and every later session would
@@ -167,6 +188,32 @@ class LocalModelServer(
         keys.saveLocalBaseUrl(null)
         process?.destroyForcibly()
         process = null
+    }
+
+    /**
+     * Withdraws the address of a server that died without being asked to.
+     *
+     * **Measured, not anticipated.** After a termination run the app was still
+     * up, `llama-server` was gone from `ps`, and `local.baseUrl` still named
+     * port 46819 -- so `ApiKeyStore.isReady(LOCAL)` was true and the next
+     * message would have gone to a closed port. [adoptOrForgetExistingServer]
+     * does not cover this: it runs at launch, and this app had not restarted.
+     * A 1.5B holding a gigabyte on a phone with 218 MB free is a plausible lmkd
+     * target, so the child dying mid-session is the normal case and not the
+     * exotic one. `tools/localai/FINDINGS.md` §10.
+     *
+     * Guarded on identity, because a [stop] and a fresh [start] can both happen
+     * before the old drain thread wakes: clearing by address alone would
+     * withdraw the *new* server's URL.
+     */
+    @Synchronized
+    private fun noteExit(exited: Process, address: String) {
+        if (process !== exited) return
+        process = null
+        if (keys.localBaseUrl() == address) {
+            Log.w(TAG, "llama-server exited on its own; withdrawing $address")
+            keys.saveLocalBaseUrl(null)
+        }
     }
 
     /** The last of the server's output, for a failure a user has to act on. */
