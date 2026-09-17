@@ -58,8 +58,18 @@ class ChatStreamingTest {
         }
     }
 
-    /** One scripted turn: prose fragments, then any tool calls to ask for. */
-    private class Turn(val deltas: List<String>, val calls: List<AiPart.FunctionCall> = emptyList())
+    /**
+     * One scripted turn: prose fragments, then any tool calls to ask for.
+     *
+     * [settled] is the authoritative text when it differs from the deltas --
+     * the written-call case, where the client streams raw JSON and then returns
+     * it stripped.
+     */
+    private class Turn(
+        val deltas: List<String>,
+        val calls: List<AiPart.FunctionCall> = emptyList(),
+        val settled: String? = null,
+    )
 
     private class FakeClient(private val turns: List<Turn>) : AiClient {
         override val provider = AiProviderType.OPENAI
@@ -82,7 +92,8 @@ class ChatStreamingTest {
 
         private fun response(turn: Turn) = AiClientResponse(
             parts = buildList {
-                turn.deltas.joinToString("").takeIf { it.isNotEmpty() }?.let { add(AiPart.Text(it)) }
+                val text = turn.settled ?: turn.deltas.joinToString("")
+                text.takeIf { it.isNotEmpty() }?.let { add(AiPart.Text(it)) }
                 addAll(turn.calls)
             },
         )
@@ -200,7 +211,9 @@ class ChatStreamingTest {
             }
         }
         assertEquals(
-            listOf("user", "assistant:Let me look. ", "tool:read_file", "assistant:It is empty."),
+            // "Let me look." without its trailing space: the authoritative text
+            // arrives trimmed, and it replaces what streamed.
+            listOf("user", "assistant:Let me look.", "tool:read_file", "assistant:It is empty."),
             kinds,
         )
     }
@@ -269,6 +282,56 @@ class ChatStreamingTest {
         advanceUntilIdle()
 
         assertEquals(listOf("clean"), controller.state.value.assistantTexts)
+    }
+
+    /**
+     * **Found by driving the phone, and it was permanent, not a flash.**
+     *
+     * The 1.5B wrote its call as prose in a ```json fence. The client
+     * recovered it and returned the text stripped, but the JSON had already
+     * streamed, and the tool card that followed closed that bubble before the
+     * end of the turn could correct it -- leaving a code block full of tool-call
+     * markup above the answer for good.
+     */
+    @Test
+    fun `a bubble whose prose was really a tool call is corrected before the card`() = runTest {
+        val controller = newController(
+            Turn(
+                deltas = listOf("""{"name": "read_file", "arguments": {"path": "M.kt"}}"""),
+                calls = listOf(AiPart.FunctionCall("", "read_file", mapOf("path" to "Main.kt"))),
+                // What the client returns once it has taken the object out:
+                // nothing was left but the call.
+                settled = "",
+            ),
+            Turn(listOf("It prints nothing.")),
+            scope = this,
+        )
+
+        controller.send("read Main.kt")
+        advanceUntilIdle()
+
+        val texts = controller.state.value.assistantTexts
+        assertTrue("the raw tool call was left on screen: $texts", texts.none { it.contains("\"name\"") })
+        assertEquals(listOf("It prints nothing."), texts)
+        assertEquals(1, controller.state.value.entries.filterIsInstance<ChatEntry.Tool>().size)
+    }
+
+    @Test
+    fun `a settled text that only tidies the prose keeps the bubble`() = runTest {
+        val controller = newController(
+            Turn(
+                deltas = listOf("Let me look. ", """{"name": "read_file"}"""),
+                calls = listOf(AiPart.FunctionCall("", "read_file", mapOf("path" to "Main.kt"))),
+                settled = "Let me look.",
+            ),
+            Turn(listOf("Done.")),
+            scope = this,
+        )
+
+        controller.send("read it")
+        advanceUntilIdle()
+
+        assertEquals(listOf("Let me look.", "Done."), controller.state.value.assistantTexts)
     }
 
     @Test

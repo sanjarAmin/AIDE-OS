@@ -93,6 +93,42 @@ class ConversationStoreTest {
         assertEquals("c-good", listed.single().id)
     }
 
+    /**
+     * **A restored id must not collide with one this process will mint.**
+     *
+     * This crashed the app, found by driving it. Ids come from a counter that
+     * starts at zero in each process, and a stored conversation carries the ids
+     * a *previous* process minted -- so reopening a chat and sending one more
+     * message produced two entries with id 1, and `LazyColumn` throws on a
+     * duplicate key. Written as the shape it happened in: a file from another
+     * run, then a fresh entry from this one.
+     */
+    @Test
+    fun `restored ids cannot collide with ids minted later`() {
+        // Saving first creates the directory; then plant a file with the low
+        // ids a freshly started process hands out.
+        store().save("seed", listOf(ChatEntry.FromUser("seed")))
+        val directory = File(root, "chats").listFiles()!!.single()
+        File(directory, "c-1.json").writeText(
+            """
+            {"id":"c-1","title":"from a previous run","updatedAt":1,"entries":[
+              {"kind":"user","id":1,"at":1,"text":"asked last week"},
+              {"kind":"assistant","id":2,"at":2,"text":"answered last week"}
+            ]}
+            """.trimIndent(),
+        )
+
+        val restored = store().load("c-1")
+        val fresh = ChatEntry.FromUser("asked just now")
+
+        assertEquals(2, restored.size)
+        assertEquals("asked last week", (restored[0] as ChatEntry.FromUser).text)
+        assertTrue(
+            "a restored id collided with a new one: ${restored.map { it.id }} vs ${fresh.id}",
+            restored.none { it.id == fresh.id },
+        )
+    }
+
     @Test
     fun `saving nothing removes the conversation`() {
         store().save("c-1", listOf(ChatEntry.FromUser("hi")))

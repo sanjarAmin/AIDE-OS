@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Input
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.WrapText
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -30,6 +31,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontStyle
@@ -41,18 +44,46 @@ import kotlinx.coroutines.delay
 import java.util.regex.Pattern
 
 /**
- * A syntax-highlighted code block with language indicator and quick actions.
+ * A code block: the thing this panel exists to produce.
  *
- * Provides one-tap "Copy" with temporary confirmation, and "Insert at Cursor"
- * when an editor callback is provided.
+ * **Treated as a first-class citizen, not styled prose.** In a general-purpose
+ * chat a code block is a quotation; in an IDE it is the deliverable, and the
+ * two actions that matter -- put this in my file, put this on my clipboard --
+ * are always in the same place rather than hidden behind a long-press.
+ *
+ * **It scrolls sideways and does not wrap by default.** Wrapping code changes
+ * what it means: an 80-column line folded at 40 reads as two statements, and
+ * indentation stops lining up. The toggle exists because on a phone a long
+ * string literal is genuinely easier to read wrapped, but the default respects
+ * the line breaks the author chose.
+ *
+ * **Long blocks collapse.** A model asked to rewrite a file returns the file,
+ * and 300 lines of it between two paragraphs makes the answer unreadable and
+ * unscrollable -- the transcript becomes one message. Anything over
+ * [COLLAPSE_LINES] shows its head with a tap to open.
  */
 @Composable
 fun CodeBlock(
     code: String,
     language: String? = null,
     onInsertCode: ((String) -> Unit)? = null,
+    /**
+     * False while the fence is still streaming.
+     *
+     * The actions are withheld until the block closes: copying or inserting
+     * half a function produces something that does not compile, and the person
+     * has no way to know it was incomplete once it is in their file.
+     */
+    complete: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
+    var wrapped by remember { mutableStateOf(false) }
+    var expanded by remember(code) { mutableStateOf(false) }
+    val lineCount = remember(code) { code.count { it == '\n' } + 1 }
+    val collapsible = lineCount > COLLAPSE_LINES
+    val shown = remember(code, expanded, collapsible) {
+        if (collapsible && !expanded) code.lineSequence().take(COLLAPSE_LINES).joinToString("\n") else code
+    }
     val clipboardManager = LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }
 
@@ -63,9 +94,12 @@ fun CodeBlock(
         }
     }
 
-    val displayLang = language?.trim()?.uppercase()?.ifBlank { "CODE" } ?: "CODE"
-    val highlightedText = remember(code, language) {
-        highlightSyntax(code, language)
+    // Sentence case, not caps. A tracked-out uppercase label above a block is
+    // the commonest generated-UI tell, and the language is a fact about the
+    // code rather than a heading that needs shouting.
+    val displayLang = language?.trim()?.lowercase()?.ifBlank { null } ?: "code"
+    val highlightedText = remember(shown, language) {
+        highlightSyntax(shown, language)
     }
 
     Surface(
@@ -85,18 +119,51 @@ fun CodeBlock(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text(
-                    text = displayLang,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.SemiBold,
-                )
+                Row(
+                    // The label takes the room the actions leave, so a long
+                    // language name cannot squeeze the buttons to nothing --
+                    // the defect CLAUDE.md counts nine of.
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = displayLang,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (collapsible) {
+                        Text(
+                            text = "$lineCount lines",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            maxLines = 1,
+                        )
+                    }
+                }
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
-                    if (onInsertCode != null) {
+                    IconButton(
+                        onClick = { wrapped = !wrapped },
+                        modifier = Modifier.size(28.dp).testTag(CODE_WRAP_TAG),
+                    ) {
+                        Icon(
+                            Icons.Default.WrapText,
+                            contentDescription = if (wrapped) "Stop wrapping lines" else "Wrap long lines",
+                            tint = if (wrapped) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                    if (onInsertCode != null && complete) {
                         IconButton(
                             onClick = { onInsertCode(code) },
                             modifier = Modifier.size(28.dp),
@@ -110,12 +177,13 @@ fun CodeBlock(
                         }
                     }
 
+                    if (complete) {
                     IconButton(
                         onClick = {
                             clipboardManager.setText(AnnotatedString(code))
                             copied = true
                         },
-                        modifier = Modifier.size(28.dp),
+                        modifier = Modifier.size(28.dp).testTag(CODE_COPY_TAG),
                     ) {
                         if (copied) {
                             Icon(
@@ -133,27 +201,59 @@ fun CodeBlock(
                             )
                         }
                     }
+                    }
                 }
             }
 
-            // Code Content
+            val codeStyle = CodeTextStyle.copy(fontSize = 12.5.sp, lineHeight = 18.sp)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
+                    .then(if (wrapped) Modifier else Modifier.horizontalScroll(rememberScrollState()))
                     .padding(10.dp),
             ) {
                 Text(
                     text = highlightedText,
-                    style = CodeTextStyle.copy(
-                        fontSize = 12.5.sp,
-                        lineHeight = 18.sp,
-                    ),
+                    style = codeStyle,
+                    softWrap = wrapped,
                 )
+            }
+
+            if (collapsible) {
+                // A full-width target rather than a small link: this is the
+                // control most likely to be tapped with a thumb.
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    onClick = { expanded = !expanded },
+                    modifier = Modifier.fillMaxWidth().testTag(CODE_EXPAND_TAG),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(vertical = 6.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = if (expanded) {
+                                "Show less"
+                            } else {
+                                "Show all $lineCount lines"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
             }
         }
     }
 }
+
+/** Long enough to read the shape of a function, short enough to scroll past. */
+private const val COLLAPSE_LINES = 14
+
+const val CODE_COPY_TAG = "code-copy"
+const val CODE_WRAP_TAG = "code-wrap"
+const val CODE_EXPAND_TAG = "code-expand"
 
 /**
  * Fast, lightweight syntax highlighter for code snippets in the chat.

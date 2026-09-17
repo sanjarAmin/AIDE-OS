@@ -1,46 +1,31 @@
 package com.osamu.aide.ai.ui
 
-import android.content.Intent
-import android.net.Uri
-import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Block
-import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ErrorOutline
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
@@ -61,48 +46,99 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.osamu.aide.ai.core.AiProviderType
-import com.osamu.aide.ai.core.ApprovalRequest
+import com.osamu.aide.ai.core.ApprovalScope
 import com.osamu.aide.ai.core.ChatEntry
 import com.osamu.aide.ai.core.ChatUiState
-import com.osamu.aide.ai.core.GoogleAuthManager
-import com.osamu.aide.core.ui.theme.CodeTextStyle
+import kotlinx.coroutines.delay
 
 /**
  * The assistant panel.
  *
- * Four providers, each with its own models and its own key. The header is where
- * both are chosen; see [AgentHeader] for why it says as much as it does.
+ * **Laid out for the two things that actually happen here**: reading an answer
+ * that is still being written, and checking what it did to the project. So the
+ * transcript gets every pixel that is not a control, the controls collapse
+ * rather than compete, and nothing decorative takes horizontal space -- this
+ * runs at 360 dp on an ordinary phone, which is the width CLAUDE.md says to
+ * drive before believing a row is fine.
+ *
+ * **Waiting is designed for, not hidden.** A local 1.5B takes tens of seconds
+ * for a first answer (`tools/localai/FINDINGS.md` §9), so the panel always says
+ * what it is doing and, once it has been a while, how long it has been doing it.
  */
+/**
+ * Everything the panel can ask of the app, in one holder.
+ *
+ * **The same idiom the workspace already uses** for git, the terminal, the
+ * debugger and logcat. The panel grew from five callbacks to fifteen with
+ * history and message actions, and threading fifteen lambdas through the
+ * dock's helper composable -- which already takes thirty parameters -- is how a
+ * screen becomes unmaintainable.
+ *
+ * Hold it in a `remember` at the call site: a fresh instance per frame makes
+ * every parameter of [ChatPanel] change and recomposes the whole transcript.
+ */
+class ChatActions(
+    val send: (String) -> Unit,
+    val approve: (Boolean, ApprovalScope) -> Unit,
+    val dismissError: () -> Unit,
+    val addKey: () -> Unit,
+    val signInGoogle: () -> Unit = addKey,
+    val switchProvider: (AiProviderType) -> Unit = {},
+    val switchModel: (String) -> Unit = {},
+    val toggleShareContext: (Boolean) -> Unit = {},
+    val cancelSend: () -> Unit = {},
+    val newChat: () -> Unit = {},
+    val regenerate: () -> Unit = {},
+    val editAndResend: (Long, String) -> Unit = { _, _ -> },
+    val openConversation: (String) -> Unit = {},
+    val deleteConversation: (String) -> Unit = {},
+    val renameConversation: (String, String) -> Unit = { _, _ -> },
+    val insertCode: ((String) -> Unit)? = null,
+)
+
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ChatPanel(
     state: ChatUiState,
-    onSend: (String) -> Unit,
-    onApproval: (Boolean) -> Unit,
-    onDismissError: () -> Unit,
-    onAddKey: () -> Unit,
-    onSignInGoogle: () -> Unit = onAddKey,
-    onSwitchProvider: (AiProviderType) -> Unit = {},
-    onSwitchModel: (String) -> Unit = {},
-    onToggleShareContext: (Boolean) -> Unit = {},
-    onCancelSend: () -> Unit = {},
-    onNewChat: () -> Unit = {},
-    onInsertCode: ((String) -> Unit)? = null,
+    actions: ChatActions,
     activeFileName: String? = null,
     modifier: Modifier = Modifier,
 ) {
+    val onSend = actions.send
+    val onApproval = actions.approve
+    val onDismissError = actions.dismissError
+    val onAddKey = actions.addKey
+    val onSignInGoogle = actions.signInGoogle
+    val onSwitchProvider = actions.switchProvider
+    val onSwitchModel = actions.switchModel
+    val onToggleShareContext = actions.toggleShareContext
+    val onCancelSend = actions.cancelSend
+    val onNewChat = actions.newChat
+    val onRegenerate = actions.regenerate
+    val onEditAndResend = actions.editAndResend
+    val onOpenConversation = actions.openConversation
+    val onDeleteConversation = actions.deleteConversation
+    val onRenameConversation = actions.renameConversation
+    val onInsertCode = actions.insertCode
+
+    var showHistory by remember { mutableStateOf(false) }
+    // Survives the panel being closed and reopened, which on a phone happens
+    // every time the editor needs the screen. Losing a half-typed question to
+    // a glance at the code is the kind of thing that stops people using a
+    // panel at all.
+    var draft by rememberSaveable { mutableStateOf("") }
+    var editing by remember { mutableStateOf<ChatEntry.FromUser?>(null) }
+
     Column(modifier.fillMaxWidth()) {
         AgentHeader(
             state = state,
@@ -110,20 +146,47 @@ fun ChatPanel(
             onSwitchModel = onSwitchModel,
             onToggleShareContext = onToggleShareContext,
             onNewChat = onNewChat,
+            onOpenHistory = { showHistory = true },
         )
         HorizontalDivider()
 
-        Transcript(
-            state = state,
-            onSend = onSend,
-            onSignInGoogle = onSignInGoogle,
-            onAddKey = onAddKey,
-            onInsertCode = onInsertCode,
-            modifier = Modifier.weight(1f),
-        )
+        Box(Modifier.weight(1f)) {
+            if (state.entries.isEmpty()) {
+                EmptyTranscript(
+                    state = state,
+                    onSend = onSend,
+                    onSignInGoogle = onSignInGoogle,
+                    onAddKey = onAddKey,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else {
+                Transcript(
+                    state = state,
+                    onInsertCode = onInsertCode,
+                    onRegenerate = onRegenerate,
+                    onEdit = { entry ->
+                        editing = entry
+                        draft = withoutMarker(entry.text)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
 
-        state.error?.let { ErrorBar(it, onDismissError) }
-        if (state.needsKey) {
+        state.error?.let { message ->
+            ErrorBar(
+                message = message,
+                onRetry = onRegenerate.takeIf { state.canRegenerate && !state.sending },
+                onDismiss = onDismissError,
+            )
+        }
+
+        // **Only when the empty state is not already saying it.** Found by
+        // driving: an unconfigured provider put "Set up on-device" in the
+        // middle of the panel and the same sentence again in a bar above the
+        // composer. Mid-conversation the bar is the only place it can go, which
+        // is the case this keeps it for.
+        if (state.needsKey && state.entries.isNotEmpty()) {
             KeyPrompt(
                 activeProvider = state.activeProvider,
                 onAddKey = onAddKey,
@@ -136,36 +199,63 @@ fun ChatPanel(
             ApprovalPrompt(request, onApproval)
         }
 
-        if (state.entries.isNotEmpty()) {
-            QuickActionsBar(onSend = onSend)
-        }
-
         HorizontalDivider()
         Composer(
             enabled = !state.sending && state.pendingApproval == null,
             sending = state.sending,
             activeStatus = state.activeStatus,
             activeFileName = activeFileName,
-            onSend = onSend,
+            draft = draft,
+            onDraftChange = { draft = it },
+            editing = editing,
+            onCancelEdit = {
+                editing = null
+                draft = ""
+            },
+            onSubmit = { text ->
+                val target = editing
+                if (target != null) {
+                    onEditAndResend(target.id, text)
+                    editing = null
+                } else {
+                    onSend(text)
+                }
+                draft = ""
+            },
             onCancelSend = onCancelSend,
+        )
+    }
+
+    if (showHistory) {
+        HistorySheet(
+            conversations = state.conversations,
+            activeId = state.activeConversationId,
+            onOpen = {
+                onOpenConversation(it)
+                showHistory = false
+            },
+            onDelete = onDeleteConversation,
+            onRename = onRenameConversation,
+            onNewChat = {
+                onNewChat()
+                showHistory = false
+            },
+            onDismiss = { showHistory = false },
         )
     }
 }
 
 /**
- * Which assistant is answering, and which of its models.
+ * Who is answering, and the two things done most often to a conversation.
  *
- * **Both controls now look like controls.** They were a bare `TextButton` and a
- * bare chip -- text with no affordance, in a header full of other text -- so the
- * only way to find out the assistant could be changed at all was to tap the
- * name and see what happened. Each carries a caret, and each menu ticks the
- * entry that is currently in use.
+ * **One identity control, not two.** The provider and the model were separate
+ * controls competing for the same row, and at 360 dp the model's name -- which
+ * can be `qwen2.5-coder-1.5b` -- squeezed everything else. They are one button
+ * now: the provider reads as the name, the model as its subtitle, and the menu
+ * that opens offers both.
  *
- * **The provider menu says which providers can actually answer.** Switching to
- * one with no key used to look like it worked; the failure arrived on the next
- * message, by which point the switch was three taps back and looked unrelated.
- * `Needs a key` is stated in the menu, before the choice, and the key prompt
- * appears the moment the switch is made rather than after a lost message.
+ * Everything past New chat and History lives in the overflow, because a row of
+ * five icons beside a long model name is the squeeze CLAUDE.md documents.
  */
 @Composable
 private fun AgentHeader(
@@ -174,150 +264,173 @@ private fun AgentHeader(
     onSwitchModel: (String) -> Unit,
     onToggleShareContext: (Boolean) -> Unit,
     onNewChat: () -> Unit,
+    onOpenHistory: () -> Unit,
 ) {
-    var showProviderMenu by remember { mutableStateOf(false) }
-    var showModelMenu by remember { mutableStateOf(false) }
+    var showIdentity by remember { mutableStateOf(false) }
+    var showOverflow by remember { mutableStateOf(false) }
 
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.fillMaxWidth()) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
+            modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Icon(
-                    Icons.Default.AutoAwesome,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(18.dp),
-                )
-                Box {
-                    TextButton(onClick = { showProviderMenu = true }) {
-                        Text(
-                            text = state.activeProvider.displayName,
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.primary,
+            Box(Modifier.weight(1f)) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    onClick = { showIdentity = true },
+                    modifier = Modifier.testTag(IDENTITY_TAG),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.AutoAwesome,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp),
                         )
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                // **The provider, not the conversation's
+                                // title.** Showing the title here truncated it
+                                // to "What does this project do, an..." while
+                                // the same words sat in full immediately below,
+                                // and it cost the one line that says which
+                                // assistant is answering -- the thing this
+                                // control exists to change. Titles belong to
+                                // the history sheet, where they distinguish
+                                // conversations that are not on screen.
+                                text = state.activeProvider.displayName,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = state.activeModel,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.MiddleEllipsis,
+                            )
+                        }
                         Icon(
                             Icons.Default.ArrowDropDown,
-                            contentDescription = "Change assistant",
-                            tint = MaterialTheme.colorScheme.primary,
+                            contentDescription = "Change assistant or model",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(18.dp),
                         )
                     }
-                    DropdownMenu(
-                        expanded = showProviderMenu,
-                        onDismissRequest = { showProviderMenu = false },
-                    ) {
-                        AiProviderType.entries.forEach { provider ->
-                            val configured = provider in state.providersWithKeys
-                            DropdownMenuItem(
-                                text = { Text(provider.displayName) },
-                                trailingIcon = if (configured) {
-                                    null
-                                } else {
-                                    {
-                                        Text(
-                                            text = "Needs a key",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
-                                },
-                                leadingIcon = {
-                                    // A fixed-width slot either way, so the
-                                    // names stay on one left edge instead of
-                                    // stepping in and out as keys are added.
-                                    if (provider == state.activeProvider) {
-                                        Icon(
-                                            Icons.Default.Check,
-                                            contentDescription = "in use",
-                                            modifier = Modifier.size(18.dp),
-                                        )
-                                    } else {
-                                        Box(Modifier.size(18.dp))
-                                    }
-                                },
-                                onClick = {
-                                    onSwitchProvider(provider)
-                                    showProviderMenu = false
-                                },
-                            )
-                        }
+                }
+
+                DropdownMenu(expanded = showIdentity, onDismissRequest = { showIdentity = false }) {
+                    Text(
+                        text = "Assistant",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                    AiProviderType.entries.forEach { provider ->
+                        val configured = provider in state.providersWithKeys
+                        DropdownMenuItem(
+                            text = { Text(provider.displayName) },
+                            // Stated before the choice, not discovered on the
+                            // next message when the switch is three taps back.
+                            trailingIcon = if (configured) {
+                                null
+                            } else {
+                                {
+                                    Text(
+                                        text = "Needs setup",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            },
+                            leadingIcon = { TickSlot(provider == state.activeProvider) },
+                            onClick = {
+                                onSwitchProvider(provider)
+                                showIdentity = false
+                            },
+                        )
+                    }
+                    HorizontalDivider()
+                    Text(
+                        text = "Model",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                    state.activeProvider.availableModels.forEach { model ->
+                        DropdownMenuItem(
+                            text = { Text(model, style = MaterialTheme.typography.bodySmall) },
+                            leadingIcon = { TickSlot(model == state.activeModel) },
+                            onClick = {
+                                onSwitchModel(model)
+                                showIdentity = false
+                            },
+                        )
                     }
                 }
             }
 
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                IconButton(
-                    onClick = onNewChat,
-                    modifier = Modifier.size(32.dp),
-                ) {
+            IconButton(onClick = onOpenHistory, modifier = Modifier.size(36.dp).testTag(HISTORY_TAG)) {
+                Icon(
+                    Icons.Default.History,
+                    contentDescription = "Past conversations",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(19.dp),
+                )
+            }
+            IconButton(onClick = onNewChat, modifier = Modifier.size(36.dp).testTag(NEW_CHAT_TAG)) {
+                Icon(
+                    Icons.Default.Add,
+                    contentDescription = "New chat",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(19.dp),
+                )
+            }
+            Box {
+                IconButton(onClick = { showOverflow = true }, modifier = Modifier.size(36.dp)) {
                     Icon(
-                        Icons.Default.Add,
-                        contentDescription = "New chat",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp),
+                        Icons.Default.MoreVert,
+                        contentDescription = "More",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(19.dp),
                     )
                 }
-
-                Box {
-                    AssistChip(
-                        onClick = { showModelMenu = true },
-                        label = {
+                DropdownMenu(expanded = showOverflow, onDismissRequest = { showOverflow = false }) {
+                    DropdownMenuItem(
+                        text = {
                             Text(
-                                text = state.activeModel,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                style = MaterialTheme.typography.labelSmall,
+                                if (state.shareProjectContext) {
+                                    "Stop sending project files"
+                                } else {
+                                    "Send project files"
+                                },
                             )
                         },
-                        trailingIcon = {
-                            Icon(
-                                Icons.Default.ArrowDropDown,
-                                contentDescription = "Change model",
-                                modifier = Modifier.size(18.dp),
-                            )
+                        leadingIcon = { TickSlot(state.shareProjectContext) },
+                        onClick = {
+                            onToggleShareContext(!state.shareProjectContext)
+                            showOverflow = false
                         },
-                        colors = AssistChipDefaults.assistChipColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                        ),
                     )
-                    DropdownMenu(
-                        expanded = showModelMenu,
-                        onDismissRequest = { showModelMenu = false },
-                    ) {
-                        state.activeProvider.availableModels.forEach { model ->
-                            DropdownMenuItem(
-                                text = { Text(model) },
-                                leadingIcon = {
-                                    if (model == state.activeModel) {
-                                        Icon(
-                                            Icons.Default.Check,
-                                            contentDescription = "in use",
-                                            modifier = Modifier.size(18.dp),
-                                        )
-                                    } else {
-                                        Box(Modifier.size(18.dp))
-                                    }
-                                },
-                                onClick = {
-                                    onSwitchModel(model)
-                                    showModelMenu = false
-                                },
-                            )
-                        }
+                    if (state.standingApprovals.isNotEmpty()) {
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    "Allowed here: " + state.standingApprovals.joinToString(", ") {
+                                        it.replace('_', ' ')
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            },
+                            enabled = false,
+                            onClick = {},
+                        )
                     }
                 }
             }
@@ -325,48 +438,26 @@ private fun AgentHeader(
     }
 }
 
+/** A fixed-width tick slot, so names keep one left edge whether ticked or not. */
 @Composable
-private fun Transcript(
-    state: ChatUiState,
-    onSend: (String) -> Unit,
-    onSignInGoogle: () -> Unit,
-    onAddKey: () -> Unit,
-    onInsertCode: ((String) -> Unit)? = null,
-    modifier: Modifier = Modifier,
-) {
-    if (state.entries.isEmpty()) {
-        EmptyTranscript(
-            state = state,
-            onSend = onSend,
-            onSignInGoogle = onSignInGoogle,
-            onAddKey = onAddKey,
-            modifier = modifier,
-        )
-        return
-    }
-
-    val listState = rememberLazyListState()
-
-    LaunchedEffect(state.entries.size) {
-        if (state.entries.isNotEmpty()) listState.animateScrollToItem(state.entries.lastIndex)
-    }
-
-    LazyColumn(
-        state = listState,
-        modifier = modifier.fillMaxWidth(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        items(state.entries) { entry ->
-            when (entry) {
-                is ChatEntry.FromUser -> Bubble(entry.text, fromUser = true)
-                is ChatEntry.FromAssistant -> Bubble(entry.text, fromUser = false, onInsertCode = onInsertCode)
-                is ChatEntry.Tool -> ToolCard(entry)
-            }
-        }
+private fun TickSlot(ticked: Boolean) {
+    if (ticked) {
+        Icon(Icons.Default.Check, contentDescription = "in use", modifier = Modifier.size(18.dp))
+    } else {
+        Box(Modifier.size(18.dp))
     }
 }
 
+/**
+ * The panel before anything has been asked.
+ *
+ * **An invitation, not a logo.** Four openings, phrased as the things people
+ * actually ask an assistant that can see their project, and laid out in a
+ * `FlowRow` because four chips do not fit across 360 dp -- a `Row` would squeeze
+ * the last one to 19 dp and wrap its label inside it, which is the exact defect
+ * `CreateProjectDialogTest` was written for.
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun EmptyTranscript(
     state: ChatUiState,
@@ -375,582 +466,162 @@ private fun EmptyTranscript(
     onAddKey: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(24.dp),
-        contentAlignment = Alignment.Center,
+    Column(
+        // **Centred vertically, left-aligned horizontally.** Driving it showed
+        // the cost of the obvious layout: three lines at the top of the panel
+        // and a screen of black underneath, which is what reads as unfinished.
+        // The text still starts on the same left edge every other block uses --
+        // centring the words as well would make it a splash screen.
+        modifier = modifier.fillMaxHeight().padding(horizontal = 20.dp, vertical = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically),
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Icon(
-                Icons.Default.AutoAwesome,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(36.dp),
-            )
-
-            Text(
-                text = "Ask about your code",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-
-            Text(
-                text = "The assistant can read and search the files in this project, " +
-                    "and edit them once you confirm the change.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
-
-            if (state.needsKey) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.padding(top = 8.dp),
-                ) {
-                    if (state.activeProvider == AiProviderType.GEMINI &&
-                        GoogleAuthManager.SIGN_IN_ENABLED
-                    ) {
-                        OutlinedButton(onClick = onSignInGoogle) {
-                            Text("Sign in with Google")
-                        }
-                    }
-                    Button(onClick = onAddKey) {
-                        Text(
-                            if (state.activeProvider == AiProviderType.CUSTOM) {
-                                "Set Custom's address"
-                            } else {
-                                "Add ${state.activeProvider.displayName} key"
-                            },
-                        )
-                    }
-                }
-            }
-
-            Column(
-                modifier = Modifier.padding(top = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(
-                    text = "Suggested Prompts",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    AssistChip(
-                        onClick = { onSend("Explain the architecture and files in this project.") },
-                        label = { Text("Explain architecture") },
-                    )
-                    AssistChip(
-                        onClick = { onSend("Find any build errors or missing dependencies in this project.") },
-                        label = { Text("Check build errors") },
-                    )
-                    AssistChip(
-                        onClick = { onSend("Help me create a new Compose screen for this app.") },
-                        label = { Text("Create Compose UI") },
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun QuickActionsBar(onSend: (String) -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        AssistChip(
-            onClick = { onSend("Explain what this code does.") },
-            label = { Text("Explain code") },
+        Text(
+            text = "Ask about this project",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface,
         )
-        AssistChip(
-            onClick = { onSend("Check this project for potential bugs or improvements.") },
-            label = { Text("Find bugs") },
+        Text(
+            text = "I can read and search your files, and change them once you say yes.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        AssistChip(
-            onClick = { onSend("Generate unit tests for this project.") },
-            label = { Text("Generate test") },
-        )
-        AssistChip(
-            onClick = { onSend("Run the build and fix any compiler errors found.") },
-            label = { Text("Fix error") },
-        )
-    }
-}
 
-@Composable
-private fun Bubble(
-    text: String,
-    fromUser: Boolean,
-    onInsertCode: ((String) -> Unit)? = null,
-) {
-    val colors = MaterialTheme.colorScheme
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = if (fromUser) Arrangement.End else Arrangement.Start,
-    ) {
-        if (fromUser) {
-            Surface(
-                color = colors.primaryContainer,
-                shape = RoundedCornerShape(topStart = 16.dp, topEnd = 4.dp, bottomStart = 16.dp, bottomEnd = 16.dp),
-                modifier = Modifier.fillMaxWidth(0.85f),
-            ) {
-                Text(
-                    text = text,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = colors.onPrimaryContainer,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                )
-            }
-        } else {
-            Surface(
-                color = colors.surfaceContainerLow,
-                shape = RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Box(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                    MarkdownText(
-                        markdown = text,
-                        onInsertCode = onInsertCode,
-                        textColor = colors.onSurface,
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ToolCard(entry: ChatEntry.Tool) {
-    val colors = MaterialTheme.colorScheme
-    var expanded by remember { mutableStateOf(false) }
-
-    val (icon, tint) = when {
-        entry.declined -> Icons.Default.Block to colors.outline
-        entry.failed -> Icons.Default.ErrorOutline to colors.error
-        else -> entry.name.icon() to colors.primary
-    }
-
-    Surface(
-        color = colors.surfaceContainerHigh.copy(alpha = 0.65f),
-        shape = RoundedCornerShape(8.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 2.dp),
-        onClick = { expanded = !expanded },
-    ) {
-        Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+        if (state.needsKey) {
             Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(top = 4.dp),
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.weight(1f),
+                if (state.activeProvider == AiProviderType.GEMINI &&
+                    com.osamu.aide.ai.core.GoogleAuthManager.SIGN_IN_ENABLED
                 ) {
-                    Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(16.dp))
+                    OutlinedButton(onClick = onSignInGoogle) { Text("Sign in with Google") }
+                }
+                Button(onClick = onAddKey) {
                     Text(
-                        text = entry.summary(),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (entry.failed) colors.error else colors.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        when (state.activeProvider) {
+                            AiProviderType.CUSTOM -> "Set the address"
+                            AiProviderType.LOCAL -> "Set up on-device"
+                            else -> "Add a key"
+                        },
                     )
                 }
-                Icon(
-                    if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = if (expanded) "Collapse" else "Expand",
-                    tint = colors.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp),
-                )
             }
-
-            if (expanded) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    if (entry.input.isNotEmpty()) {
-                        Text(
-                            text = "ARGUMENTS",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = colors.primary,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        entry.input.forEach { (k, v) ->
-                            Text(
-                                text = "$k: $v",
-                                style = CodeTextStyle.copy(fontSize = 11.5.sp),
-                                color = colors.onSurfaceVariant,
-                            )
-                        }
-                    }
-
-                    val toolResult = entry.result
-                    if (!toolResult.isNullOrBlank()) {
-                        Text(
-                            text = "RESULT",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = colors.primary,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(top = 4.dp),
-                        )
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = 140.dp)
-                                .background(colors.surface, RoundedCornerShape(6.dp))
-                                .verticalScroll(rememberScrollState())
-                                .horizontalScroll(rememberScrollState())
-                                .padding(8.dp),
-                        ) {
-                            Text(
-                                text = toolResult,
-                                style = CodeTextStyle.copy(fontSize = 11.5.sp),
-                                color = if (entry.failed) colors.error else colors.onSurface,
-                            )
-                        }
-                    }
+            // What setting up actually involves, since this is now the only
+            // place that says it.
+            Text(
+                text = when (state.activeProvider) {
+                    AiProviderType.CUSTOM -> "Custom needs the address of an OpenAI-compatible server."
+                    AiProviderType.LOCAL ->
+                        "Download the engine and a model, then start the server. Nothing leaves the phone."
+                    else -> "${state.activeProvider.displayName} needs an API key. It stays on this device."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            FlowRow(
+                modifier = Modifier.padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                for (opening in OPENINGS) {
+                    AssistChip(
+                        onClick = { onSend(opening.prompt) },
+                        label = { Text(opening.label, style = MaterialTheme.typography.labelMedium) },
+                    )
                 }
             }
         }
     }
-}
-
-private fun ChatEntry.Tool.summary(): String {
-    val verb = when {
-        declined -> "declined"
-        failed -> "could not run"
-        else -> "ran"
-    }
-    return if (detail.isBlank()) "$verb $name" else "$verb $name — $detail"
-}
-
-private fun String.icon(): ImageVector = when (this) {
-    "list_files" -> Icons.Default.FolderOpen
-    "read_file" -> Icons.Default.Description
-    "grep" -> Icons.Default.Search
-    "git_status", "git_diff", "git_log" -> Icons.Default.AccountTree
-    "run_shell" -> Icons.Default.Terminal
-    "search_definitions" -> Icons.Default.Code
-    "run_build", "read_build_errors" -> Icons.Default.Build
-    "check_kotlin", "explain_kotlin_symbol" -> Icons.Default.Code
-    else -> Icons.Default.Edit
 }
 
 /**
- * Android Studio-style diff and approval prompt.
+ * What to ask an assistant that can see your project.
+ *
+ * Written as a person would say them, not as feature names. "Explain
+ * architecture" is a label on a button; "What does this project do?" is a
+ * question, and it is also literally what gets sent.
  */
-@Composable
-private fun ApprovalPrompt(request: ApprovalRequest, onApproval: (Boolean) -> Unit) {
-    val colors = MaterialTheme.colorScheme
+private class Opening(val label: String, val prompt: String)
 
-    Surface(
-        color = colors.secondaryContainer,
-        shape = RoundedCornerShape(10.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(8.dp),
-    ) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Icon(
-                    if (request.toolName == "run_shell") Icons.Default.Terminal else Icons.Default.Edit,
-                    contentDescription = null,
-                    tint = colors.onSecondaryContainer,
-                    modifier = Modifier.size(18.dp),
-                )
-                Text(
-                    text = if (request.toolName == "run_shell") {
-                        "Run shell command?"
-                    } else {
-                        "Write ${request.path.ifBlank { "a file" }}?"
-                    },
-                    style = MaterialTheme.typography.titleSmall,
-                    color = colors.onSecondaryContainer,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
-            Text(
-                text = if (request.toolName == "run_shell") {
-                    "This executes in the project environment. Shell commands can alter files."
-                } else {
-                    "This replaces or updates file contents. Review the proposed changes below:"
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = colors.onSecondaryContainer,
-            )
+private val OPENINGS = listOf(
+    Opening("What does this do?", "What does this project do, and how is it laid out?"),
+    Opening("Find the bug", "Look through this project for bugs or mistakes and tell me what you find."),
+    Opening("Explain a file", "Which file should I read first to understand this project, and what is in it?"),
+    Opening("Write a test", "Write a unit test for the most important logic in this project."),
+)
 
-            if (request.preview.isNotBlank()) {
-                if (request.toolName == "run_shell") {
-                    Box(
-                        Modifier
-                            .fillMaxWidth()
-                            .background(colors.surface, RoundedCornerShape(6.dp))
-                            .padding(10.dp),
-                    ) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text(
-                                text = "$",
-                                style = CodeTextStyle.copy(fontWeight = FontWeight.Bold),
-                                color = colors.primary,
-                            )
-                            Text(request.preview, style = CodeTextStyle, color = colors.onSurface)
-                        }
-                    }
-                } else {
-                    Box(
-                        Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 240.dp)
-                            .background(colors.surface, RoundedCornerShape(6.dp))
-                            .verticalScroll(rememberScrollState())
-                            .horizontalScroll(rememberScrollState())
-                            .padding(6.dp),
-                    ) {
-                        DiffViewer(request.preview)
-                    }
-                }
-            }
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(top = 4.dp),
-            ) {
-                Button(onClick = { onApproval(true) }) { Text("Allow") }
-                OutlinedButton(onClick = { onApproval(false) }) { Text("Decline") }
-            }
-        }
-    }
-}
-
-@Composable
-private fun DiffViewer(preview: String) {
-    val lines = remember(preview) { preview.lines() }
-    val additionColor = Color(0xFF2E7D32)
-    val additionBg = Color(0x224CAF50)
-    val deletionColor = Color(0xFFC62828)
-    val deletionBg = Color(0x22F44336)
-
-    Column {
-        lines.forEachIndexed { index, line ->
-            val (bgColor, textColor) = when {
-                line.startsWith("+") -> additionBg to additionColor
-                line.startsWith("-") -> deletionBg to deletionColor
-                else -> Color.Transparent to MaterialTheme.colorScheme.onSurface
-            }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(bgColor)
-                    .padding(vertical = 1.dp, horizontal = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(
-                    text = "${index + 1}".padStart(3),
-                    style = CodeTextStyle.copy(fontSize = 11.sp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                )
-                Text(
-                    text = line,
-                    style = CodeTextStyle.copy(fontSize = 11.5.sp),
-                    color = textColor,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun ErrorBar(message: String, onDismiss: () -> Unit) {
-    Surface(color = MaterialTheme.colorScheme.errorContainer) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Icon(
-                Icons.Default.ErrorOutline,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onErrorContainer,
-                modifier = Modifier.size(18.dp),
-            )
-            Text(
-                text = message,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(onClick = onDismiss) { Text("Dismiss") }
-        }
-    }
-}
-
-@Composable
-private fun KeyPrompt(
-    activeProvider: AiProviderType = AiProviderType.GEMINI,
-    onAddKey: () -> Unit,
-    onSignInGoogle: () -> Unit = onAddKey,
-) {
-    val context = LocalContext.current
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = when (activeProvider) {
-                    AiProviderType.CUSTOM ->
-                        "Custom needs the address of an OpenAI-compatible server."
-                    // Not a key, and saying "needs an API key" would send the
-                    // user looking for one that does not exist. What it needs
-                    // is a download and a running server.
-                    AiProviderType.LOCAL ->
-                        "On-device needs the llama.cpp engine and a model downloaded, " +
-                            "then the server started."
-                    else ->
-                        "${activeProvider.displayName} needs an API key. It stays on this device."
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f),
-            )
-            val consoleUrl = when (activeProvider) {
-                AiProviderType.GEMINI -> "https://aistudio.google.com/app/apikey"
-                AiProviderType.ANTHROPIC -> "https://console.anthropic.com/settings/keys"
-                AiProviderType.OPENAI -> "https://platform.openai.com/api-keys"
-                AiProviderType.CUSTOM -> null
-                // Nothing to sign up for; the model is on the phone.
-                AiProviderType.LOCAL -> null
-            }
-            if (consoleUrl != null) {
-                TextButton(
-                    onClick = {
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(consoleUrl))
-                        context.startActivity(intent)
-                    },
-                ) {
-                    Text(if (activeProvider == AiProviderType.GEMINI) "Get free key" else "Get key")
-                }
-            }
-            if (activeProvider == AiProviderType.GEMINI && GoogleAuthManager.SIGN_IN_ENABLED) {
-                TextButton(onClick = onSignInGoogle) { Text("Sign in") }
-            }
-            TextButton(onClick = onAddKey) {
-                Text(if (activeProvider == AiProviderType.CUSTOM) "Set address" else "Add key")
-            }
-        }
-    }
-}
-
+/**
+ * The input, and everything that belongs to the act of sending.
+ *
+ * **The send button is the row's control and the field is its label**, which is
+ * why the field carries the weight: without it the button is measured in what
+ * the field leaves, and a long draft squeezes it to nothing. Nine instances of
+ * that defect are on record in this codebase.
+ */
 @Composable
 private fun Composer(
     enabled: Boolean,
     sending: Boolean,
     activeStatus: String?,
     activeFileName: String?,
-    onSend: (String) -> Unit,
+    draft: String,
+    onDraftChange: (String) -> Unit,
+    editing: ChatEntry.FromUser?,
+    onCancelEdit: () -> Unit,
+    onSubmit: (String) -> Unit,
     onCancelSend: () -> Unit,
 ) {
-    var draft by remember { mutableStateOf("") }
-    var attachActiveFile by remember { mutableStateOf(activeFileName != null) }
+    var attachActiveFile by remember(activeFileName) { mutableStateOf(activeFileName != null) }
 
     fun submit() {
         if (!enabled || draft.isBlank()) return
-        val finalPrompt = if (attachActiveFile && activeFileName != null) {
-            "[@${activeFileName}]\n$draft"
+        val prefix = if (attachActiveFile && activeFileName != null && editing == null) {
+            "[@$activeFileName]\n"
         } else {
-            draft
+            ""
         }
-        onSend(finalPrompt)
-        draft = ""
+        onSubmit(prefix + draft)
     }
 
     Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 6.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        // In-flight status indicator
-        if (sending) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
-            ) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(14.dp),
-                    strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Text(
-                    text = activeStatus ?: "Thinking...",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
+        if (sending) WorkingIndicator(activeStatus)
 
-        // Active File context chip
-        if (activeFileName != null && attachActiveFile) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                AssistChip(
-                    onClick = { attachActiveFile = false },
-                    label = {
-                        Text(
-                            text = "Context: $activeFileName",
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                    },
-                    leadingIcon = {
-                        Icon(
-                            Icons.Default.Description,
-                            contentDescription = null,
-                            modifier = Modifier.size(14.dp),
-                        )
-                    },
-                    trailingIcon = {
-                        Icon(
-                            Icons.Default.Close,
-                            contentDescription = "Remove context",
-                            modifier = Modifier.size(14.dp),
-                        )
-                    },
-                    colors = AssistChipDefaults.assistChipColors(
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f),
-                    ),
+        if (editing != null) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Editing your message",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f),
                 )
+                TextButton(onClick = onCancelEdit) { Text("Cancel") }
             }
+        } else if (activeFileName != null && attachActiveFile) {
+            AssistChip(
+                onClick = { attachActiveFile = false },
+                label = {
+                    Text(
+                        text = activeFileName,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.MiddleEllipsis,
+                    )
+                },
+                leadingIcon = {
+                    Icon(Icons.Default.Description, contentDescription = null, modifier = Modifier.size(14.dp))
+                },
+                trailingIcon = {
+                    Icon(Icons.Default.Close, contentDescription = "Do not send this file", modifier = Modifier.size(14.dp))
+                },
+                colors = AssistChipDefaults.assistChipColors(
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f),
+                ),
+                modifier = Modifier.testTag(ATTACHMENT_TAG),
+            )
         }
 
         Row(
@@ -960,28 +631,29 @@ private fun Composer(
         ) {
             OutlinedTextField(
                 value = draft,
-                onValueChange = { draft = it },
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("Ask about this project...") },
+                onValueChange = onDraftChange,
+                modifier = Modifier.weight(1f).testTag(COMPOSER_TAG),
+                // Not the same words as the empty state's heading. Both said
+                // "Ask about this project", which reads as a stutter on the
+                // one screen that shows both at once.
+                placeholder = { Text(if (editing != null) "Ask it differently" else "Ask a question") },
+                // Grows to six lines and then scrolls: enough to see a
+                // multi-part question, not enough to swallow the transcript.
                 maxLines = 6,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = ImeAction.Default),
+                shape = MaterialTheme.shapes.large,
             )
 
             if (sending) {
                 IconButton(
                     onClick = onCancelSend,
-                    modifier = Modifier
-                        .padding(bottom = 6.dp)
-                        .background(
-                            MaterialTheme.colorScheme.errorContainer,
-                            RoundedCornerShape(12.dp),
-                        ),
+                    modifier = Modifier.padding(bottom = 4.dp).testTag(STOP_TAG),
                 ) {
                     Icon(
                         Icons.Default.Stop,
-                        contentDescription = "Stop generation",
+                        contentDescription = "Stop",
                         tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(20.dp),
+                        modifier = Modifier.size(22.dp),
                     )
                 }
             } else {
@@ -989,25 +661,164 @@ private fun Composer(
                 IconButton(
                     onClick = ::submit,
                     enabled = canSend,
-                    modifier = Modifier
-                        .padding(bottom = 6.dp)
-                        .background(
-                            if (canSend) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                            RoundedCornerShape(12.dp),
-                        ),
+                    modifier = Modifier.padding(bottom = 4.dp).testTag(SEND_TAG),
                 ) {
                     Icon(
                         Icons.AutoMirrored.Filled.Send,
                         contentDescription = "Send",
                         tint = if (canSend) {
-                            MaterialTheme.colorScheme.onPrimary
+                            MaterialTheme.colorScheme.primary
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
                         },
-                        modifier = Modifier.size(18.dp),
+                        modifier = Modifier.size(20.dp),
                     )
                 }
             }
         }
     }
 }
+
+/**
+ * What the assistant is doing, and -- once it has been a while -- for how long.
+ *
+ * **The elapsed count is the point.** On this hardware a first answer from a
+ * local model can take a minute (`tools/localai/FINDINGS.md` §9), and a
+ * spinner with no number is indistinguishable from a hang. It appears only
+ * after a few seconds, so a fast provider never shows a stopwatch.
+ */
+@Composable
+private fun WorkingIndicator(activeStatus: String?) {
+    var seconds by remember(activeStatus) { mutableStateOf(0) }
+    LaunchedEffect(activeStatus) {
+        seconds = 0
+        while (true) {
+            delay(1_000)
+            seconds++
+        }
+    }
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.padding(horizontal = 4.dp),
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(13.dp),
+            strokeWidth = 2.dp,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Text(
+            text = activeStatus ?: "Thinking",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f).testTag(STATUS_TAG),
+        )
+        AnimatedVisibility(seconds >= SHOW_ELAPSED_AFTER) {
+            Text(
+                text = "${seconds}s",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * A failure, with the one action that usually fixes it.
+ *
+ * Dismiss alone left the user to retype their question; the message they sent
+ * is still in the transcript, so sending it again is one tap.
+ */
+@Composable
+private fun ErrorBar(message: String, onRetry: (() -> Unit)?, onDismiss: () -> Unit) {
+    Surface(color = MaterialTheme.colorScheme.errorContainer) {
+        Row(
+            Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                Icons.Default.ErrorOutline,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.size(17.dp),
+            )
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).testTag(ERROR_TAG),
+            )
+            if (onRetry != null) {
+                TextButton(onClick = onRetry) {
+                    Icon(Icons.Default.Refresh, null, Modifier.size(15.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Retry")
+                }
+            }
+            IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = "Dismiss",
+                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun KeyPrompt(
+    activeProvider: AiProviderType,
+    onAddKey: () -> Unit,
+    onSignInGoogle: () -> Unit,
+) {
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = when (activeProvider) {
+                    AiProviderType.CUSTOM -> "Custom needs the address of an OpenAI-compatible server."
+                    // Not a key, and saying "needs an API key" would send the
+                    // user looking for one that does not exist. What it needs
+                    // is a download and a running server.
+                    AiProviderType.LOCAL ->
+                        "On-device needs the engine and a model downloaded, then the server started."
+                    else -> "${activeProvider.displayName} needs an API key. It stays on this device."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            if (activeProvider == AiProviderType.GEMINI &&
+                com.osamu.aide.ai.core.GoogleAuthManager.SIGN_IN_ENABLED
+            ) {
+                TextButton(onClick = onSignInGoogle) { Text("Sign in") }
+            }
+            TextButton(onClick = onAddKey) {
+                Text(if (activeProvider == AiProviderType.CUSTOM) "Set address" else "Set up")
+            }
+        }
+    }
+}
+
+/** After this long, a spinner alone stops being honest. */
+private const val SHOW_ELAPSED_AFTER = 3
+
+const val IDENTITY_TAG = "chat-identity"
+const val HISTORY_TAG = "chat-history"
+const val NEW_CHAT_TAG = "chat-new"
+const val COMPOSER_TAG = "chat-composer"
+const val SEND_TAG = "chat-send"
+const val STOP_TAG = "chat-stop"
+const val STATUS_TAG = "chat-status"
+const val ERROR_TAG = "chat-error"
+const val ATTACHMENT_TAG = "chat-attachment"

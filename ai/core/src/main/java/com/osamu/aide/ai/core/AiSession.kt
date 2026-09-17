@@ -61,6 +61,23 @@ interface TurnListener {
      * close the current assistant bubble and open a new one after the card.
      */
     fun onToolRun(run: ToolRun) {}
+
+    /**
+     * The authoritative text of the block that has just finished streaming.
+     *
+     * **Because the deltas are not always what should be on screen.** A local
+     * model that writes its tool call into its prose has that object stripped
+     * from the response (`tools/localai/FINDINGS.md` §4) -- but the raw JSON
+     * has already streamed, and when a tool call follows in the same round the
+     * bubble is closed before the end of the turn could correct it. Driving the
+     * phone showed the result: a permanent code block holding
+     * `{"name": "read_file", ...}` sitting above the answer.
+     *
+     * Fires once per round, after the response arrives and before any tool
+     * runs, with the text that block should end up showing. Blank means the
+     * block should not be shown at all.
+     */
+    fun onTextSettled(text: String) {}
 }
 
 /** What one tool call did, for the UI to show alongside the answer. */
@@ -202,6 +219,7 @@ class AiSession(
             }
 
             anthropicMessages += response.toParam()
+            listener?.onTextSettled(response.textOnly())
 
             val calls = response.content().mapNotNull { it.toolUse().orElse(null) }
             if (calls.isEmpty()) return Reply(response.textOnly(), runs)
@@ -320,6 +338,10 @@ class AiSession(
             } else {
                 aiClient.send(request) { delta -> listener.onTextDelta(delta) }
             }
+
+            // Before the tool cards, because a card closes the open bubble and
+            // the correction has to reach it first.
+            listener?.onTextSettled(response.text)
 
             val modelMessage = AiMessage(
                 role = AiRole.ASSISTANT,

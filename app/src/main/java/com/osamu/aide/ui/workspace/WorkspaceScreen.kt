@@ -105,6 +105,7 @@ import com.osamu.aide.core.fs.FileNode
 import com.osamu.aide.core.fs.SourceLanguage
 import com.osamu.aide.ai.core.AiProviderType
 import com.osamu.aide.ai.core.ChatUiState
+import com.osamu.aide.ai.ui.ChatActions
 import com.osamu.aide.ai.ui.ChatPanel
 import com.osamu.aide.core.ui.layout.AdaptiveWorkspace
 import com.osamu.aide.core.ui.layout.PaneBreakpoints
@@ -248,6 +249,35 @@ fun WorkspaceScreen(
 
     val snackbarHostState = remember { SnackbarHostState() }
     val editorController = remember { CodeEditorController() }
+    // **Remembered, not rebuilt per frame.** A fresh holder every recomposition
+    // changes an argument of `ChatPanel` and recomposes the whole transcript,
+    // which during streaming is once per token.
+    val chatActions = remember(assistant, editorController) {
+        ChatActions(
+            send = assistant::send,
+            approve = assistant::resolveApproval,
+            dismissError = assistant::dismissError,
+            addKey = {
+                isChatOpen = false
+                onOpenSettings("ai")
+            },
+            signInGoogle = {
+                isChatOpen = false
+                onOpenSettings("ai")
+            },
+            switchProvider = assistant::switchProvider,
+            switchModel = assistant::switchModel,
+            toggleShareContext = assistant::toggleShareContext,
+            cancelSend = assistant::cancelSend,
+            newChat = assistant::newChat,
+            regenerate = assistant::regenerate,
+            editAndResend = assistant::editAndResend,
+            openConversation = assistant::openConversation,
+            deleteConversation = assistant::deleteConversation,
+            renameConversation = assistant::renameConversation,
+            insertCode = editorController::insert,
+        )
+    }
 
     val completeAtCursor: () -> Unit = {
         val open = state.active
@@ -702,16 +732,7 @@ fun WorkspaceScreen(
                                     debugBuildStatus = debugBuildStatus(state.build),
                                     debugFocus = debugFocus,
                                     chatState = chat,
-                                    onSendChat = assistant::send,
-                                    onApprovalChat = assistant::resolveApproval,
-                                    onDismissErrorChat = assistant::dismissError,
-                                    onAddKeyChat = { onOpenSettings("ai") },
-                                    onSignInGoogleChat = { onOpenSettings("ai") },
-                                    onSwitchProviderChat = assistant::switchProvider,
-                                    onSwitchModelChat = assistant::switchModel,
-                                    onToggleShareContextChat = assistant::toggleShareContext,
-                                    onCancelSendChat = assistant::cancelSend,
-                                    onNewChat = assistant::newChat,
+                                    chatActions = chatActions,
                                     onInsertCode = editorController::insert,
                                     activeFileName = state.selectedFile?.name,
                                     sideToolFocus = sideToolFocus,
@@ -842,23 +863,7 @@ fun WorkspaceScreen(
         ) {
             ChatPanel(
                 state = chat,
-                onSend = assistant::send,
-                onApproval = assistant::resolveApproval,
-                onDismissError = assistant::dismissError,
-                onAddKey = {
-                    isChatOpen = false
-                    onOpenSettings("ai")
-                },
-                onSignInGoogle = {
-                    isChatOpen = false
-                    onOpenSettings("ai")
-                },
-                onSwitchProvider = assistant::switchProvider,
-                onSwitchModel = assistant::switchModel,
-                onToggleShareContext = assistant::toggleShareContext,
-                onCancelSend = assistant::cancelSend,
-                onNewChat = assistant::newChat,
-                onInsertCode = editorController::insert,
+                actions = chatActions,
                 activeFileName = state.selectedFile?.name,
                 modifier = Modifier.fillMaxSize(),
             )
@@ -1558,16 +1563,7 @@ private fun SideToolTabs(
     debugBuildStatus: String?,
     debugFocus: Int,
     chatState: ChatUiState,
-    onSendChat: (String) -> Unit,
-    onApprovalChat: (Boolean) -> Unit,
-    onDismissErrorChat: () -> Unit,
-    onAddKeyChat: () -> Unit,
-    onSignInGoogleChat: () -> Unit,
-    onSwitchProviderChat: (AiProviderType) -> Unit,
-    onSwitchModelChat: (String) -> Unit,
-    onToggleShareContextChat: (Boolean) -> Unit,
-    onCancelSendChat: () -> Unit,
-    onNewChat: () -> Unit,
+    chatActions: ChatActions,
     onInsertCode: (String) -> Unit,
     activeFileName: String?,
     sideToolFocus: SideTool?,
@@ -1616,17 +1612,7 @@ private fun SideToolTabs(
                 )
                 SideTool.ASSISTANT -> ChatPanel(
                     state = chatState,
-                    onSend = onSendChat,
-                    onApproval = onApprovalChat,
-                    onDismissError = onDismissErrorChat,
-                    onAddKey = onAddKeyChat,
-                    onSignInGoogle = onSignInGoogleChat,
-                    onSwitchProvider = onSwitchProviderChat,
-                    onSwitchModel = onSwitchModelChat,
-                    onToggleShareContext = onToggleShareContextChat,
-                    onCancelSend = onCancelSendChat,
-                    onNewChat = onNewChat,
-                    onInsertCode = onInsertCode,
+                    actions = chatActions,
                     activeFileName = activeFileName,
                     modifier = Modifier.fillMaxSize(),
                 )

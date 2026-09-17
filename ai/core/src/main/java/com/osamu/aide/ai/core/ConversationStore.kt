@@ -186,8 +186,20 @@ private fun ChatEntry.toJson(): JSONObject = when (this) {
         .put("result", result)
 }
 
+/**
+ * **A fresh id, not the stored one.**
+ *
+ * An id is a list key for this process, not durable identity. Restoring the
+ * stored value crashed the app: the counter restarts at zero in every process,
+ * so a conversation saved yesterday came back holding ids 1 and 2, the next
+ * message minted id 1 again, and `LazyColumn` threw on the duplicate key.
+ *
+ * The field is still written, because a file that records the order it was
+ * saved in is easier to read when something goes wrong -- it is just not
+ * trusted on the way back in.
+ */
 private fun JSONObject.toEntry(): ChatEntry {
-    val id = optLong("id", System.nanoTime())
+    val id = ChatEntry.nextId()
     val at = optLong("at")
     return when (optString("kind")) {
         "user" -> ChatEntry.FromUser(text = getString("text"), id = id, at = at)

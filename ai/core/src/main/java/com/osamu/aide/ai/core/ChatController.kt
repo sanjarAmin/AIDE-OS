@@ -391,6 +391,27 @@ class ChatController(
             }
         }
 
+        /**
+         * Replaces the open bubble with what it should have said.
+         *
+         * Only the bubble still being written to: earlier ones in the same turn
+         * are finished and correct. A blank settlement removes the bubble,
+         * which is the case where everything the model produced that round was
+         * a tool call it had written out as prose.
+         */
+        override fun onTextSettled(text: String) {
+            _state.update { current ->
+                val open = current.entries.lastOrNull() as? ChatEntry.FromAssistant
+                if (open == null || !open.streaming || open.text == text) return@update current
+                val entries = if (text.isBlank()) {
+                    current.entries.dropLast(1)
+                } else {
+                    current.entries.dropLast(1) + open.copy(text = text)
+                }
+                current.copy(entries = entries)
+            }
+        }
+
         override fun onToolRun(run: ToolRun) {
             // The open bubble is closed first: prose that came before a tool
             // call belongs above the card, and anything after it starts a new
