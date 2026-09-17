@@ -151,25 +151,27 @@ copying two lines rather than computing them.
 
 The other fetch scripts do not do this yet. They should.
 
-### The pin is recorded; the release is not published yet
+### Published, and the pin was re-derived rather than trusted
 
 `ToolchainComponent.python` names
-`.../releases/download/python-3.14.6/python-3.14.6-<arch>.tar.gz`, and **that
-tag does not exist at the time of writing**. The two archives are built and
-their checksums are what the component records, so publishing them is an upload
-and not a rebuild — run `fetch-python.sh` for each arch, upload the two
-`.tar.gz` it names, and nothing in the Kotlin has to change.
+`.../releases/download/python-3.14.6/python-3.14.6-<arch>.tar.gz`, and **both
+assets are published there** as of 2026-09-16.
 
-Until then:
+The reproducibility above is not a nicety and this is where it paid: the
+archives were rebuilt from scratch on a different day, on a machine whose
+scratch directory had been cleared, and came out **bit-for-bit identical** to
+the checksums recorded here weeks earlier. Publishing was then an upload rather
+than a re-pin, and the release notes carry the same two checksums so a reader
+can check without cloning.
 
-- **`-Ppins=true` fails for this component and only this one**, with a 404. That
-  is the network-gated check doing its job, not a wrong pin. Every other suite
-  is unaffected — `PinnedReleaseTest` is skipped by default precisely so a suite
-  does not fail on an aeroplane.
-- **In-app install of Python 404s.** The instrumented tests do not go through
-  the installer; they take `python.tar` from `DEVICE_ARCHIVES`
-  (`gradle/stage-device-archives.gradle.kts`), which is why
-  `:engine:python:connectedDebugAndroidTest` is green regardless.
+Verified the way a consumer sees it -- downloading each asset from the exact URL
+the component builds and comparing against the pinned sha1 and byte count, both
+`200`, both matching.
+
+`PinnedReleaseTest` (`-Ppins=true`) checks every component this way and was
+*not* run for this: it reads each archive whole, which is well over a gigabyte
+of JDK, clang, node and mono to re-verify pins nothing had touched. The one new
+pin was checked directly instead.
 
 If the archive is ever rebuilt from a newer Termux index, the version, both
 checksums and both byte counts move together — the script prints all of them.
