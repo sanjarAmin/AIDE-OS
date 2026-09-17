@@ -38,6 +38,16 @@ sealed interface Endpoint {
  * arrives on the first chat message and names neither the setting nor the fix.
  * A local proxy over `http://localhost` would need a loopback exemption in the
  * shipped manifest, which is a security decision nobody has asked for yet.
+ * **Measured, not assumed**: `LoopbackCleartextTest` gets
+ * `Cleartext HTTP traffic to 127.0.0.1 not permitted` in this app's own
+ * process. The phone's *browser* loads such a URL happily, which misleads
+ * everyone who tries it by hand -- the policy is per app.
+ *
+ * So the local-model feature needs **both** halves changed together: a
+ * `network-security-config` scoped to `127.0.0.1`, and an exception here. The
+ * https rule above is right about a remote endpoint and wrong about loopback,
+ * where there is no wire for the header to be read from.
+ * `tools/localai/FINDINGS.md` §5.
  */
 fun parseEndpoint(raw: String): Endpoint {
     val trimmed = raw.trim()

@@ -96,22 +96,34 @@ never sees it. Two ways to use it, neither tried yet:
   template, so the server parses it. Which template the server detected was not
   captured at the default log level — the first thing to check.
 
-## 5. The app may not talk to it yet: cleartext to loopback is blocked
+## 5. The app cannot talk to it: cleartext to loopback is blocked, measured
 
-For an app targeting SDK 37 with no network security config — which is what
-AIDE-OS ships — `NetworkSecurityPolicy` reports:
+**Confirmed on hardware, in the app's own process** (NX809J, targetSdk 37,
+`LoopbackCleartextTest`):
 
 ```
-anywhere=false  127.0.0.1=false  localhost=false
+java.io.IOException: Cleartext HTTP traffic to 127.0.0.1 not permitted
 ```
 
-So OkHttp in the app would refuse `http://127.0.0.1:<port>` before connecting,
-and `parseEndpoint` refuses `http` outright. A local model needs **both**: a
-network security config permitting cleartext to `127.0.0.1` only, and an
-exception in `parseEndpoint` for loopback. Neither leaks anything off the
-device, but both are security settings and should be changed deliberately, not
-as a side effect. The spike talks HTTP over a raw socket precisely so this
-policy could not block the other questions.
+`:app` ships no `network-security-config` and sets no `usesCleartextTraffic`,
+so the platform default applies, and **the default blocks loopback as well**.
+This section previously said so without a run behind it; it now has one, and
+the test is a characterisation test that fails the day an exemption is added --
+which is the signal wanted.
+
+**The phone's browser opening `http://127.0.0.1:8080` is not a
+counter-example**, and it is the obvious thing to reach for: the Node HTTP
+server template really does serve a page the browser really does load. Cleartext
+policy is **per app**. The browser ships its own config; ours does not; one says
+nothing about the other. Anyone testing this feature by hand will hit that
+confusion, which is why it is written down here.
+
+**There are two walls, not one.** Even with the platform permitting it,
+`Endpoint.parseEndpoint` rejects any `http://` URL before a request is
+attempted, with reasoning that is right for a remote endpoint and wrong for
+loopback: the API key travels as a header, and on loopback there is no wire to
+read it from. Both need changing together, and the exemption must be scoped to
+`127.0.0.1` rather than opened globally.
 
 ## 6. Two harness traps
 
