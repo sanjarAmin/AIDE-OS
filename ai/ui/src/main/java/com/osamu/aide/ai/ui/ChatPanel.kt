@@ -823,10 +823,17 @@ private fun KeyPrompt(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = if (activeProvider == AiProviderType.CUSTOM) {
-                    "Custom needs the address of an OpenAI-compatible server."
-                } else {
-                    "${activeProvider.displayName} needs an API key. It stays on this device."
+                text = when (activeProvider) {
+                    AiProviderType.CUSTOM ->
+                        "Custom needs the address of an OpenAI-compatible server."
+                    // Not a key, and saying "needs an API key" would send the
+                    // user looking for one that does not exist. What it needs
+                    // is a download and a running server.
+                    AiProviderType.LOCAL ->
+                        "On-device needs the llama.cpp engine and a model downloaded, " +
+                            "then the server started."
+                    else ->
+                        "${activeProvider.displayName} needs an API key. It stays on this device."
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -837,6 +844,8 @@ private fun KeyPrompt(
                 AiProviderType.ANTHROPIC -> "https://console.anthropic.com/settings/keys"
                 AiProviderType.OPENAI -> "https://platform.openai.com/api-keys"
                 AiProviderType.CUSTOM -> null
+                // Nothing to sign up for; the model is on the phone.
+                AiProviderType.LOCAL -> null
             }
             if (consoleUrl != null) {
                 TextButton(

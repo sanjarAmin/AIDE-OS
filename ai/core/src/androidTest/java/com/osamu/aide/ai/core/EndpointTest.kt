@@ -217,4 +217,85 @@ class EndpointTest {
 
         assertEquals("/proxy/v1/messages", scripted.path(0))
     }
+
+    // ---- http, for loopback only ----
+
+    /**
+     * **The address the local-model provider has to use.**
+     *
+     * `http` was rejected outright, which was right for every endpoint that
+     * existed at the time and wrong for the one that came later: a
+     * `llama-server` this app starts listens on 127.0.0.1, and there is no
+     * wire for the API-key header to be read from. The manifest's
+     * `network_security_config.xml` permits cleartext for exactly these hosts,
+     * and `LoopbackCleartextTest` measures what happens when it does not.
+     */
+    @Test
+    fun http_is_accepted_for_loopback() {
+        for (address in listOf(
+            "http://127.0.0.1:8080",
+            "http://localhost:8080",
+            "http://127.0.0.1",
+        )) {
+            val parsed = parseEndpoint(address)
+            assertTrue("$address was rejected: $parsed", parsed is Endpoint.Custom)
+        }
+    }
+
+    /**
+     * And the scheme survives.
+     *
+     * `parseEndpoint` rebuilt its answer with a hardcoded `https://`, which
+     * was invisible while http could never get that far. Left alone it would
+     * hand back an `https` URL for a loopback server that speaks plain http,
+     * and the failure would be a cleartext error naming an address the user
+     * never typed.
+     */
+    @Test
+    fun a_loopback_address_keeps_its_http_scheme() {
+        val parsed = parseEndpoint("http://127.0.0.1:8080") as Endpoint.Custom
+
+        assertEquals("http://127.0.0.1:8080", parsed.baseUrl)
+    }
+
+    /** http to anywhere else is still refused, and the reason still says why. */
+    @Test
+    fun http_is_still_refused_for_a_remote_host() {
+        val parsed = parseEndpoint("http://api.example.com")
+
+        assertTrue("http to a remote host was accepted: $parsed", parsed is Endpoint.Rejected)
+        assertTrue(
+            "the reason no longer explains the key: ${(parsed as Endpoint.Rejected).reason}",
+            parsed.reason.contains("header"),
+        )
+    }
+
+    /**
+     * A hostname that merely looks local is not loopback.
+     *
+     * The match is by literal name, matching the manifest exemption. Resolving
+     * names here would put a DNS lookup in a parser, and a host that resolves
+     * to 127.0.0.1 today can resolve elsewhere tomorrow.
+     */
+    @Test
+    fun a_host_that_only_looks_local_is_not_exempt() {
+        for (address in listOf(
+            "http://localhost.example.com",
+            "http://127.0.0.1.example.com",
+            "http://mylocalhost",
+        )) {
+            assertTrue(
+                "$address was treated as loopback",
+                parseEndpoint(address) is Endpoint.Rejected,
+            )
+        }
+    }
+
+    /** https to loopback is fine too; nothing about this narrows it. */
+    @Test
+    fun https_to_loopback_is_unaffected() {
+        val parsed = parseEndpoint("https://127.0.0.1:8443") as Endpoint.Custom
+
+        assertEquals("https://127.0.0.1:8443", parsed.baseUrl)
+    }
 }

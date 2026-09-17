@@ -96,34 +96,45 @@ never sees it. Two ways to use it, neither tried yet:
   template, so the server parses it. Which template the server detected was not
   captured at the default log level — the first thing to check.
 
-## 5. The app cannot talk to it: cleartext to loopback is blocked, measured
+## 5. Cleartext to loopback: blocked by default, now exempted
 
-**Confirmed on hardware, in the app's own process** (NX809J, targetSdk 37,
-`LoopbackCleartextTest`):
+**Measured before it was fixed** (NX809J, targetSdk 37, in the app's own
+process):
 
 ```
 java.io.IOException: Cleartext HTTP traffic to 127.0.0.1 not permitted
 ```
 
-`:app` ships no `network-security-config` and sets no `usesCleartextTraffic`,
-so the platform default applies, and **the default blocks loopback as well**.
-This section previously said so without a run behind it; it now has one, and
-the test is a characterisation test that fails the day an exemption is added --
-which is the signal wanted.
+`:app` shipped no `network-security-config`, so the platform default applied,
+and **the default blocks loopback too**. This section previously asserted that
+without a run behind it.
 
 **The phone's browser opening `http://127.0.0.1:8080` is not a
-counter-example**, and it is the obvious thing to reach for: the Node HTTP
-server template really does serve a page the browser really does load. Cleartext
-policy is **per app**. The browser ships its own config; ours does not; one says
-nothing about the other. Anyone testing this feature by hand will hit that
-confusion, which is why it is written down here.
+counter-example**, and it is the first thing anyone reaches for -- the Node HTTP
+template really does serve a page the browser really does load. Cleartext policy
+is **per app**: the browser ships its own config and says nothing about ours.
+Worth remembering, because it will confuse the next person exactly as it did the
+last.
 
-**There are two walls, not one.** Even with the platform permitting it,
-`Endpoint.parseEndpoint` rejects any `http://` URL before a request is
-attempted, with reasoning that is right for a remote endpoint and wrong for
-loopback: the API key travels as a header, and on loopback there is no wire to
-read it from. Both need changing together, and the exemption must be scoped to
-`127.0.0.1` rather than opened globally.
+**Fixed, scoped to loopback.** `app/src/main/res/xml/network_security_config.xml`
+permits cleartext for `127.0.0.1`, `localhost` and `::1` and nothing else.
+Deliberately *not* `android:usesCleartextTraffic="true"`, which is one attribute
+instead of a file and would permit plaintext everywhere -- including to the
+remote providers, whose API key travels in a request header. On loopback there
+is no wire to read it from; on the internet there is.
+
+`LoopbackCleartextTest` pins both halves on a device: cleartext to `127.0.0.1`
+now succeeds, and to a public host is still refused. The second assertion is the
+one guarding the keys, and it is why the test checks the policy for
+`example.com` rather than only the happy path.
+
+**There were two walls, not one.** `Endpoint.parseEndpoint` rejected every
+`http://` URL before a request was attempted, on reasoning that is right for a
+remote endpoint and wrong for loopback. It now accepts http for the loopback
+literals only -- matched by name, not by resolving DNS inside a parser -- and
+**preserves the scheme it was given**, which it previously did not: it rebuilt
+every accepted URL as `https://`, harmless while http could not get that far and
+a silent rewrite once it could.
 
 ## 6. Two harness traps
 
@@ -416,12 +427,22 @@ worth building only once a phone's numbers are in:
    a directory where `GGML_BACKEND_PATH` names one file.
 2. ~~**Make tool calls structured**~~ — the lenient parser is in (§8). A
    natively parsed template is still worth having, for the call id.
-3. **Allow loopback cleartext** deliberately: a network security config for
-   `127.0.0.1` and a matching `parseEndpoint` exception.
-4. Then the feature: `:toolchain:manager` components for the engine and each
-   model (pinned, like everything else), a "Local model" provider that starts
-   `llama-server` and points the OpenAI client at it, and a smaller context for
-   it — the project listing sent with every question is the expensive part.
+3. ~~**Allow loopback cleartext**~~ — done (§5): a config scoped to the
+   loopback literals, a matching `parseEndpoint` exception, and a device test
+   asserting both that loopback works and that a public host still does not.
+4. **The feature, partly built.** `AiProviderType.LOCAL` exists and
+   `Assistant` builds a session and a completer for it; `ApiKeyStore` treats a
+   published address as its readiness signal, since it has no key;
+   `LocalModelServer` starts `llama-server` on a free loopback port, waits for
+   `/health`, publishes the address and withdraws it on stop. Context is capped
+   at 4096 for the reason this item always gave — the project listing goes with
+   every question and a phone pays for it twice, in KV cache and in
+   prompt-reading time.
+
+   **What is not done: nothing calls `LocalModelServer` yet.** There is no UI
+   to choose a model, start it, or stop it, and no lifecycle tying it to the
+   chat panel. Until that exists the provider can be selected and will report
+   itself not ready, which is honest but not useful.
 
 Still unasked: whether Android freezes or kills a `llama-server` child process
 when the IDE is in the background (the debugger's §9 problem), whether the

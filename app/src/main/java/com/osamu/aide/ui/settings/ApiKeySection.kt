@@ -393,6 +393,10 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                                     AiProviderType.GEMINI -> keys.saveGeminiApiKey(trimmed)
                                     AiProviderType.OPENAI -> keys.saveOpenAiApiKey(trimmed)
                                     AiProviderType.CUSTOM -> keys.saveCustomApiKey(trimmed)
+                                    // Nothing to save. The server is on this
+                                    // phone's loopback and authenticates nobody;
+                                    // the key field is not shown for it.
+                                    AiProviderType.LOCAL -> Unit
                                 }
                                 saved = true
                                 draft = ""
@@ -710,6 +714,7 @@ private fun keyPlaceholder(provider: AiProviderType): String = when (provider) {
     AiProviderType.ANTHROPIC -> "sk-ant-..."
     AiProviderType.OPENAI -> "sk-..."
     AiProviderType.CUSTOM -> "Whatever your service issues"
+    AiProviderType.LOCAL -> "No key needed"
 }
 
 /**
@@ -724,6 +729,7 @@ private fun whereToGetAKey(provider: AiProviderType): String = when (provider) {
     AiProviderType.ANTHROPIC -> "Create one at console.anthropic.com under API keys"
     AiProviderType.OPENAI -> "Create one at platform.openai.com/api-keys"
     AiProviderType.CUSTOM -> "Any OpenAI-compatible service."
+    AiProviderType.LOCAL -> "None. The model runs on this phone."
 }
 
 /** What the endpoint row reads when it is closed, which is most of the time. */
@@ -760,6 +766,7 @@ internal fun providerConsoleUrl(provider: AiProviderType): String? = when (provi
     AiProviderType.ANTHROPIC -> "https://console.anthropic.com/settings/keys"
     AiProviderType.OPENAI -> "https://platform.openai.com/api-keys"
     AiProviderType.CUSTOM -> null
+    AiProviderType.LOCAL -> null
 }
 
 internal fun providerConsoleLabel(provider: AiProviderType): String = when (provider) {
@@ -767,6 +774,7 @@ internal fun providerConsoleLabel(provider: AiProviderType): String = when (prov
     AiProviderType.ANTHROPIC -> "Get key from Anthropic Console"
     AiProviderType.OPENAI -> "Get key from OpenAI Platform"
     AiProviderType.CUSTOM -> "Get key from provider"
+    AiProviderType.LOCAL -> "No key needed"
 }
 
 internal fun looksLikeKeyFor(provider: AiProviderType, text: CharSequence): Boolean {
@@ -780,6 +788,9 @@ internal fun looksLikeKeyFor(provider: AiProviderType, text: CharSequence): Bool
         AiProviderType.OPENAI ->
             trimmed.startsWith("sk-") && !trimmed.startsWith("sk-ant-") && trimmed.length >= 40
         AiProviderType.CUSTOM ->
+            false
+        // There is no key shape to recognise, and nowhere to paste one.
+        AiProviderType.LOCAL ->
             false
     }
 }

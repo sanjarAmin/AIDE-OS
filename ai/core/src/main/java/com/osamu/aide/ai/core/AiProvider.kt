@@ -61,6 +61,33 @@ enum class AiProviderType(
             "claude-fable-5-1",
         ),
     ),
+    /**
+     * A `llama-server` this app started, on 127.0.0.1.
+     *
+     * **The models are the pinned GGUFs, not names a service accepts.**
+     * llama-server serves whatever model it was launched with and ignores the
+     * `model` field, so these exist to say *which download to start* and to
+     * give the picker something meaningful -- not to be sent anywhere. They
+     * must stay in step with `ToolchainComponent.LOCAL_MODELS`.
+     *
+     * The default is the 1.5B and deliberately not the largest available.
+     * `tools/localai/FINDINGS.md` §4 measured the 0.5B choosing the wrong tool
+     * 0/5 times and answering about files it never read, and §8 measured the 7B
+     * at 306 s to first token on a flagship phone. The 1.5B is the smallest one
+     * that behaves and the largest one that answers quickly.
+     */
+    LOCAL(
+        id = "local",
+        // One word, for the reason CUSTOM's name is one word.
+        displayName = "On device",
+        defaultModel = "qwen2.5-coder-1.5b",
+        availableModels = listOf(
+            "qwen2.5-coder-1.5b",
+            "qwen2.5-coder-3b",
+            "qwen2.5-coder-0.5b",
+            "qwen2.5-coder-7b",
+        ),
+    ),
     CUSTOM(
         id = "custom",
         // One word. "Custom / Compatible" is four times the width of the

@@ -61,10 +61,23 @@ fun parseEndpoint(raw: String): Endpoint {
         // this is the plain "pasted the hostname" case rather than a failure.
         null -> return Endpoint.Rejected("Needs a scheme — try https://$trimmed")
         "https" -> Unit
-        "http" -> return Endpoint.Rejected(
-            "https is required. Your API key is sent as a request header, so " +
-                "http would put it on the network in plaintext.",
-        )
+        // **http is allowed to loopback and nowhere else.** The rule above
+        // exists because the API key travels as a request header, and on the
+        // internet that is a credential in plaintext. On 127.0.0.1 there is no
+        // wire: the peer is a `llama-server` this app started, and refusing it
+        // was refusing the only address the local-model provider can use.
+        //
+        // The manifest has to agree -- `res/xml/network_security_config.xml`
+        // permits cleartext for exactly these hosts -- and it is the platform
+        // that enforces it, not this check. `LoopbackCleartextTest` measures
+        // the refusal that appears when the two disagree.
+        "http" -> if (!isLoopback(uri.host)) {
+            return Endpoint.Rejected(
+                "https is required for anything but 127.0.0.1. Your API key is " +
+                    "sent as a request header, so http would put it on the " +
+                    "network in plaintext.",
+            )
+        }
         else -> return Endpoint.Rejected("Only https endpoints are supported.")
     }
 
@@ -84,7 +97,13 @@ fun parseEndpoint(raw: String): Endpoint {
     }
 
     val port = if (uri.port != -1) ":${uri.port}" else ""
-    return Endpoint.Custom("https://$host$port${basePath(uri.path.orEmpty())}")
+    // **The scheme the user gave, not a hardcoded one.** This read `https://`
+    // unconditionally, which was harmless while `http` was rejected outright
+    // and would silently rewrite a loopback address to a scheme the platform
+    // then refuses -- a bug that would surface as a cleartext error for a URL
+    // the user never typed.
+    val scheme = uri.scheme.lowercase()
+    return Endpoint.Custom("$scheme://$host$port${basePath(uri.path.orEmpty())}")
 }
 
 /**
@@ -105,3 +124,18 @@ fun parseEndpoint(raw: String): Endpoint {
  */
 private fun basePath(path: String): String =
     path.trimEnd('/').removeSuffix("/v1").trimEnd('/')
+
+/**
+ * Whether [host] is this device talking to itself.
+ *
+ * The three spellings a user or a server can produce. `URI.host` keeps the
+ * brackets on an IPv6 literal, so `http://[::1]:8080` arrives here as `[::1]`
+ * and the bare form is accepted too for anyone assembling the string by hand.
+ *
+ * Deliberately not "any address that resolves to a loopback": that would mean
+ * a DNS lookup inside a parser, and a hostname that resolves to 127.0.0.1
+ * today can resolve elsewhere tomorrow. The exemption in the manifest is by
+ * literal name, so this matches by literal name.
+ */
+private fun isLoopback(host: String?): Boolean =
+    host?.lowercase() in setOf("127.0.0.1", "localhost", "::1", "[::1]")

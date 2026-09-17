@@ -3,6 +3,7 @@ package com.osamu.aide.ai
 import android.security.NetworkSecurityPolicy
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -24,8 +25,12 @@ import kotlin.concurrent.thread
  * either way, because the cleartext policy is **per app**: the browser ships
  * its own network-security-config and says nothing about ours.
  *
- * This app ships none, so the platform default applies at targetSdk 37, and
- * what that default does for `127.0.0.1` is the whole question.
+ * **Answered, and then changed.** The platform default blocks loopback too:
+ * this test first ran without a `network-security-config` and got
+ * `IOException: Cleartext HTTP traffic to 127.0.0.1 not permitted`. The app now
+ * ships one scoped to the loopback addresses, so cleartext to them is permitted
+ * and to everything else is not — which is what the two tests below assert, in
+ * that order.
  */
 @RunWith(AndroidJUnit4::class)
 class LoopbackCleartextTest {
@@ -38,30 +43,34 @@ class LoopbackCleartextTest {
         val public = policy.isCleartextTrafficPermitted("example.com")
 
         Log.i(TAG, "cleartext permitted: 127.0.0.1=$loopback localhost=$localhost example.com=$public")
-        // Printed rather than demanded: this test exists to establish the
-        // answer, and the end-to-end one below is the assertion that bites.
-        assertTrue("the policy object answered", loopback || !loopback)
+
+        // **Both directions, because the point of the config is that it is
+        // narrow.** `usesCleartextTraffic="true"` would satisfy the first two
+        // assertions and break the third, and the third is the one protecting
+        // the remote providers' API keys from travelling in plaintext.
+        assertTrue("cleartext to 127.0.0.1 is not permitted", loopback)
+        assertTrue("cleartext to localhost is not permitted", localhost)
+        assertTrue(
+            "cleartext is permitted to a public host, so the exemption is not " +
+                "scoped -- an API key in a request header would go out in the clear",
+            !public,
+        )
     }
 
     /**
-     * **Measured: it is refused.** A real server, a real request, this process.
+     * **The exemption works: a real server, a real request, this process.**
      *
-     * ```
-     * java.io.IOException: Cleartext HTTP traffic to 127.0.0.1 not permitted
-     * ```
+     * Without `res/xml/network_security_config.xml` this failed with
+     * `IOException: Cleartext HTTP traffic to 127.0.0.1 not permitted`, which
+     * is the measurement that justified adding the file. It now has to pass,
+     * because the local-model provider cannot reach a `llama-server` otherwise.
      *
-     * Asserted in that direction on purpose. This is a characterisation test:
-     * it pins the platform behaviour the local-model feature has to work
-     * around, and it **will fail the day someone adds a loopback exemption to
-     * the manifest** -- which is the signal wanted, not a nuisance. When that
-     * happens, flip the assertion and update `tools/localai/FINDINGS.md` §5.
-     *
-     * The browser opening the Node template's `http://127.0.0.1:8080` is not a
-     * counter-example: cleartext policy is per app, and the browser ships its
-     * own config.
+     * The browser opening the Node template's `http://127.0.0.1:8080` was never
+     * a counter-example, and is worth remembering when this next confuses
+     * someone: cleartext policy is per app, and the browser ships its own.
      */
     @Test
-    fun cleartext_to_this_apps_own_loopback_is_refused() {
+    fun cleartext_to_this_apps_own_loopback_is_permitted() {
         val server = ServerSocket(0)
         val port = server.localPort
         thread(isDaemon = true) {
@@ -88,18 +97,14 @@ class LoopbackCleartextTest {
         Log.i(TAG, "loopback http result: $outcome")
         server.close()
 
-        val failure = outcome.exceptionOrNull()
         assertTrue(
-            "cleartext to loopback now SUCCEEDS. If a network-security-config was " +
-                "added deliberately, flip this assertion and update " +
-                "tools/localai/FINDINGS.md §5 and Endpoint.parseEndpoint. Result: $outcome",
-            failure != null,
+            "cleartext to 127.0.0.1 was refused, so the local-model provider " +
+                "cannot reach its own server. Check that the manifest still " +
+                "sets android:networkSecurityConfig and that the file still " +
+                "lists this address: ${outcome.exceptionOrNull()}",
+            outcome.isSuccess,
         )
-        assertTrue(
-            "refused, but not for the cleartext policy -- so something else is " +
-                "wrong with loopback here: $failure",
-            failure!!.message?.contains("Cleartext") == true,
-        )
+        assertEquals("200 ok", outcome.getOrNull())
     }
 
     private companion object {

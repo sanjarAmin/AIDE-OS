@@ -62,6 +62,12 @@ class ApiKeyStore(context: Context) {
         AiProviderType.OPENAI -> hasOpenAi()
         AiProviderType.ANTHROPIC -> hasAnthropic()
         AiProviderType.CUSTOM -> hasCustom()
+        // **There is no key, and that is not a missing feature.** The server
+        // is a process this app started on its own loopback; there is nobody
+        // to authenticate to. Answering true would be a lie and answering
+        // false reads as "not configured", so [isReady] is the question worth
+        // asking about this provider and it does not consult a key at all.
+        AiProviderType.LOCAL -> false
     }
 
     fun hasProviderKey(provider: AiProviderType): Boolean = when (provider) {
@@ -69,6 +75,7 @@ class ApiKeyStore(context: Context) {
         AiProviderType.OPENAI -> hasOpenAi()
         AiProviderType.ANTHROPIC -> hasAnthropic()
         AiProviderType.CUSTOM -> hasCustom()
+        AiProviderType.LOCAL -> false
     }
 
     private fun hasGemini(): Boolean =
@@ -99,6 +106,11 @@ class ApiKeyStore(context: Context) {
      */
     fun isReady(provider: AiProviderType): Boolean = when (provider) {
         AiProviderType.CUSTOM -> !customBaseUrl().isNullOrBlank()
+        // **Ready when a server is listening**, which is a running process
+        // rather than a stored secret, so whoever started it writes the
+        // address here and clears it on stop. Nothing else can know: the port
+        // is chosen at launch.
+        AiProviderType.LOCAL -> !localBaseUrl().isNullOrBlank()
         else -> hasProviderKey(provider)
     }
 
@@ -115,6 +127,7 @@ class ApiKeyStore(context: Context) {
             AiProviderType.GEMINI -> geminiApiKey() ?: googleAccessToken()
             AiProviderType.OPENAI -> openAiApiKey()
             AiProviderType.CUSTOM -> customApiKey()
+            AiProviderType.LOCAL -> null
         }
     }
 
@@ -235,6 +248,27 @@ class ApiKeyStore(context: Context) {
         editor.commit()
     }
 
+    /**
+     * Where the on-device server is listening, or null when none is.
+     *
+     * **Not a setting.** Nobody types this: the port is chosen when the server
+     * starts, so whatever starts it writes the address and clears it on stop.
+     * That makes it the readiness signal for [AiProviderType.LOCAL] -- a
+     * provider whose "credentials" are a running process.
+     *
+     * Stored in plain preferences rather than encrypted alongside the keys,
+     * because `http://127.0.0.1:41234` is not a secret and encrypting it would
+     * put a loopback port through the Keystore for no benefit.
+     */
+    fun localBaseUrl(): String? = preferences.getString(KEY_LOCAL_BASE_URL, null)
+
+    /** @see localBaseUrl */
+    fun saveLocalBaseUrl(url: String?) {
+        val editor = preferences.edit()
+        if (url.isNullOrBlank()) editor.remove(KEY_LOCAL_BASE_URL) else editor.putString(KEY_LOCAL_BASE_URL, url.trim())
+        editor.commit()
+    }
+
     // -- The endpoint the active provider is actually built with ------------
 
     /**
@@ -256,6 +290,7 @@ class ApiKeyStore(context: Context) {
         AiProviderType.ANTHROPIC -> baseUrl()
         AiProviderType.OPENAI -> openAiBaseUrl()
         AiProviderType.CUSTOM -> customBaseUrl()
+        AiProviderType.LOCAL -> localBaseUrl()
         AiProviderType.GEMINI -> null
     }
 
@@ -266,6 +301,8 @@ class ApiKeyStore(context: Context) {
             AiProviderType.ANTHROPIC -> saveBaseUrl(endpoint)
             AiProviderType.OPENAI -> saveOpenAiBaseUrl(url)
             AiProviderType.CUSTOM -> saveCustomBaseUrl(url)
+            // Written by whatever started the server, not typed by anyone.
+            AiProviderType.LOCAL -> saveLocalBaseUrl(url)
             AiProviderType.GEMINI -> Unit
         }
     }
@@ -302,6 +339,9 @@ class ApiKeyStore(context: Context) {
             AiProviderType.CUSTOM -> editor
                 .remove(KEY_CUSTOM_KEY_CIPHER)
                 .remove(KEY_CUSTOM_IV)
+            // No key to forget. The address is not a credential and is cleared
+            // when the server stops, not when a user asks to forget a secret.
+            AiProviderType.LOCAL -> editor
         }
         editor.commit()
     }
@@ -428,6 +468,7 @@ class ApiKeyStore(context: Context) {
         const val KEY_CUSTOM_KEY_CIPHER = "custom.apiKey.ciphertext"
         const val KEY_CUSTOM_IV = "custom.apiKey.iv"
         const val KEY_CUSTOM_BASE_URL = "custom.baseUrl"
+        const val KEY_LOCAL_BASE_URL = "local.baseUrl"
 
         fun modelKey(provider: AiProviderType): String = "model.${provider.id}"
     }

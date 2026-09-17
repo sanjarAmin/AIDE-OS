@@ -63,6 +63,22 @@ open class Assistant(
                 )
                 AiSession(client, toolset, approver, dispatchers)
             }
+            AiProviderType.LOCAL -> {
+                // **No server, no session.** The address is written by whatever
+                // started `llama-server` and cleared when it stops, so its
+                // absence means there is nothing listening -- not that the user
+                // forgot to configure something. See ApiKeyStore.localBaseUrl.
+                val address = keys.localBaseUrl()?.takeIf { it.isNotBlank() } ?: return null
+                val client = OpenAiClient(
+                    // No key: the peer is a process this app started on its own
+                    // loopback, and there is nobody to authenticate to.
+                    apiKey = null,
+                    customBaseUrl = address,
+                    model = keys.activeModel(AiProviderType.LOCAL),
+                    provider = AiProviderType.LOCAL,
+                )
+                AiSession(client, toolset, approver, dispatchers)
+            }
             AiProviderType.ANTHROPIC -> {
                 val key = keys.read() ?: return null
                 AiSession(
@@ -113,6 +129,16 @@ open class Assistant(
                     customBaseUrl = address,
                     model = keys.activeModel(AiProviderType.CUSTOM),
                     provider = AiProviderType.CUSTOM,
+                )
+                InlineCompleter(client, dispatchers)
+            }
+            AiProviderType.LOCAL -> {
+                val address = keys.localBaseUrl()?.takeIf { it.isNotBlank() } ?: return null
+                val client = OpenAiClient(
+                    apiKey = null,
+                    customBaseUrl = address,
+                    model = keys.activeModel(AiProviderType.LOCAL),
+                    provider = AiProviderType.LOCAL,
                 )
                 InlineCompleter(client, dispatchers)
             }
