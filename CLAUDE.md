@@ -254,3 +254,37 @@ failed to load still produces a clean compile.
   message asserting exactly that. Check one glob at a time, or use
   `setopt NO_NOMATCH` / `git ls-files`, and treat empty output from a globbing
   command as *unknown* rather than as *absent*.
+
+- **The palette gives Material's role names real colours, and two of them lie.**
+  `secondaryContainer` is **green** here. Reached for by name it made the user's
+  own chat message a success banner, and it put a green band in front of a
+  prompt asking permission to rewrite files — which reads as *approved* at a
+  glance. `outlineVariant` is `#1E2838` against a `#0B0E14` background:
+  intended as the quietest divider, at hairline widths on a real phone it does
+  not render at all, which is how the chat panel's entire structural device
+  came to be invisible. **Neither is visible in code review** — the names read
+  correctly and the code is right. Look at the screen. `ai/core/FINDINGS.md`
+  §14.
+
+- **A key that is process-local must never be persisted.** Chat entries carry
+  an id from a counter that restarts at zero each process, and that id is also
+  the `LazyColumn` key. Conversations were stored with their ids, so reopening
+  one restored ids 1 and 2 and the next message minted id 1 again — and
+  `LazyColumn` throws on a duplicate key, on the *next* interaction, nowhere
+  near the load. Re-derive such ids on the way in.
+
+  Worth knowing how it presented, because this phone gives you nothing:
+  `dumpsys activity exit-info` said `reason=4 (APP CRASH(EXCEPTION))` with
+  `trace=null`, `logcat -b crash` was **empty**, and there was no new tombstone.
+  A tombstone's *absence* plus `reason=4` is the tell for a Java exception, and
+  from there the diagnosis comes from the change set, confirmed by a test —
+  not from a stack trace. `ai/core/FINDINGS.md` §13.
+
+- **Driving is where the UI defects are, and blind taps are dangerous.** A
+  `KEYCODE_BACK` exited the app and the next scripted tap landed in the user's
+  own messaging app. Tap by *querying the tree*, not by remembered coordinates:
+  `uiautomator dump` and take the node's bounds — and filter by
+  `package="com.osamu.aide"`, because Gboard publishes a `content-desc="Send"`
+  of its own and it is the one a naive match finds first. Expect the first tap
+  after `input text` to be swallowed while the IME settles; send twice, or
+  verify with a dump that the turn started.

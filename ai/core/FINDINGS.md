@@ -705,3 +705,87 @@ one that matters most:
   apply there. Whether these providers offer anything equivalent, and what it
   would cost to use it, is unexamined. Today the generic loop pays full price
   every turn.
+
+## 12. Streaming: the deltas are not the answer
+
+Adding streaming to four providers took an afternoon; the parts worth writing
+down are all about the *relationship* between what streams and what is true.
+
+**`AiClient.send(request, onTextDelta)` defaults to the one-shot path.** A
+provider that cannot stream produces one delta containing the whole reply, so
+the panel has exactly one rendering path and a provider added later cannot
+introduce a second. That default is the reason the UI work did not have to
+branch on provider at all.
+
+**The response is authoritative and the deltas are decoration.** Two things
+force this, and both bit:
+
+- **A written-out tool call.** A local model that prints `{"name": "read_file",
+  ...}` into its prose has that object recovered and stripped (§4 of
+  `tools/localai/FINDINGS.md`), so the final text is *not* the concatenation of
+  the deltas. Rendering the deltas and stopping there leaves raw JSON on
+  screen -- which it did, permanently, because a tool card closes the bubble
+  before the end of the turn can correct it. `TurnListener.onTextSettled`
+  exists for exactly that: it fires after the response arrives and *before* any
+  tool runs.
+- **The guards.** The round cap and the repeat-call guard both return
+  explanatory text that was never streamed.
+
+**Tool-call reassembly is where the bugs are, and it needs no device.** The
+OpenAI wire format sends a call's arguments as a run of JSON fragments keyed by
+`index`, so two calls interleave and are told apart only by that field; a
+`finish_reason` can arrive on a chunk carrying nothing else; `"content": null`
+appended naively puts the literal string "null" in the reply. All of it is
+decided in pure functions in `Streaming.kt` with unit tests, because a device
+test cannot arrange the orderings and a scripted server only produces the
+orderings you thought of.
+
+**Gemini streams from a different route, not with a different body.**
+`:streamGenerateContent?alt=sse`, and without `alt=sse` the same route returns
+a JSON *array* of chunks -- a valid response that an SSE reader sees as one
+unparseable blob, so the reply arrives empty with no error anywhere.
+
+**Anthropic is accumulated by the SDK's own `MessageAccumulator`.** Not
+convenience: thinking blocks have to be replayed verbatim with their signatures
+(§2), and hand-reassembling `content_block_start` / `input_json_delta` /
+`content_block_stop` is precisely how that breaks. Only `text_delta` is
+forwarded; streaming `thinking_delta` into the bubble would render the model's
+reasoning as the answer and then replace it.
+
+## 13. A persisted list and a process-local key
+
+**This crashed the app, and the shape is general.** `ChatEntry` ids come from a
+counter that starts at zero in each process, and they are also the keys a
+`LazyColumn` uses. Conversations are stored on disk with their ids, so
+reopening one restored entries holding ids 1 and 2 -- and the next message
+minted id 1 again. `LazyColumn` throws on a duplicate key, and the crash lands
+on the *next* interaction, nowhere near the load.
+
+Ids are now minted fresh on load. The rule: **a key that is process-local must
+not be persisted, or must be re-derived on the way back in.** The field is
+still written to the file, because a record of the order it was saved in is
+useful when something goes wrong; it is simply not trusted when read.
+
+Worth knowing how it presented: `dumpsys activity exit-info` said
+`reason=4 (APP CRASH(EXCEPTION))` with `trace=null`, there was no new
+tombstone, and `logcat -b crash` was empty -- this phone returns nothing to
+logcat for app processes. So the diagnosis came from the change set and was
+confirmed by a unit test that plants a file "from a previous run", not from a
+stack trace.
+
+## 14. Two theme tokens that mean something other than what they say
+
+Both found by looking at the phone, and neither is visible in code review.
+
+**`secondaryContainer` is green in this theme.** Used for the user's own
+message it rendered the question as a success banner, louder than the answer it
+is meant to be quieter than; used for the approval prompt it put a green band
+in front of rewriting someone's files, which reads as "approved" at a glance.
+Both are neutral surfaces now. The general point: the Material role names
+describe *structure*, and this app's palette assigns real colours to them, so a
+token chosen for its name can carry a meaning nobody intended.
+
+**`outlineVariant` is #1E2838 against a #0B0E14 background.** Intended as the
+quietest divider, it is effectively invisible on this phone at hairline widths.
+The chat panel's turn rail -- its whole structural device -- used it and did not
+render. `outline` is still quiet and actually appears.

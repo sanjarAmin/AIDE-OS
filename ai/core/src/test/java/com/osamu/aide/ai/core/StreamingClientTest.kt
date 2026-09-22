@@ -148,6 +148,84 @@ class StreamingClientTest {
         assertEquals(mapOf("path" to "M.kt"), call.args)
     }
 
+    /**
+     * **A call whose opening brace never arrived.**
+     *
+     * Measured on the phone: asked to run a command, the 1.5B wrote
+     * ```` ```json ```` and then `"name": ..., "arguments": {...}` with a
+     * closing brace and no opening one. Recovery declined to guess, so no tool
+     * ran and the panel showed the markup. The name check still guards it --
+     * this only supplies the outer braces.
+     */
+    @Test
+    fun `a written call missing its outer brace is still recovered`() = runTest {
+        val tool = AideTool(
+            name = "list_files",
+            description = "list files",
+            risk = ToolRisk.READ_ONLY,
+            parameters = mapOf("path" to AideTool.Parameter("string", "the path")),
+            required = emptyList(),
+        ) { ProjectFiles.Outcome.Refused("not called in this test") }
+        server.enqueue(
+            sse(
+                """{"choices":[{"delta":{"content":"```json\n\"name\": \"list_files\",\n"}}]}""",
+                """{"choices":[{"delta":{"content":"\"arguments\": {\"path\": \"\"}\n}\n```"}}]}""",
+            ),
+        )
+
+        val response = openAi(AiProviderType.LOCAL).send(request(listOf(tool))) {}
+
+        val call = response.functionCalls.single()
+        assertEquals("list_files", call.name)
+        assertEquals(mapOf("path" to ""), call.args)
+    }
+
+    /** The exact shape the phone produced, fence and all. */
+    @Test
+    fun `the call the phone actually emitted is recovered`() = runTest {
+        val tool = AideTool(
+            name = "list_files",
+            description = "list files",
+            risk = ToolRisk.READ_ONLY,
+            parameters = mapOf("path" to AideTool.Parameter("string", "the path")),
+            required = emptyList(),
+        ) { ProjectFiles.Outcome.Refused("not called in this test") }
+        // ```json{ on one line -- the `{` is the object's, not part of the
+        // info string -- then the object, then the closing fence.
+        val emitted = "```json{\n  \"name\": \"list_files\",\n  \"arguments\": {\n    \"path\": \"\"\n  }\n}\n```"
+        server.enqueue(sse(JSONObject().put("choices", org.json.JSONArray().put(
+            JSONObject().put("delta", JSONObject().put("content", emitted)),
+        )).toString()))
+
+        val response = openAi(AiProviderType.LOCAL).send(request(listOf(tool))) {}
+
+        val call = response.functionCalls.singleOrNull()
+        assertEquals("recovered nothing from: $emitted", "list_files", call?.name)
+    }
+
+    @Test
+    fun `text that merely mentions a tool is not executed`() = runTest {
+        // The guard that makes the repair safe: an IDE assistant is asked about
+        // JSON all the time, and recovering "a reply containing an object"
+        // would run tools the user only asked to look at.
+        val tool = AideTool(
+            name = "list_files",
+            description = "list files",
+            risk = ToolRisk.READ_ONLY,
+            parameters = emptyMap(),
+            required = emptyList(),
+        ) { ProjectFiles.Outcome.Refused("not called in this test") }
+        server.enqueue(
+            sse(
+                """{"choices":[{"delta":{"content":"Your config reads:\n```json\n\"port\": 8080\n```"}}]}""",
+            ),
+        )
+
+        val response = openAi(AiProviderType.LOCAL).send(request(listOf(tool))) {}
+
+        assertTrue("a plain JSON snippet was executed", response.functionCalls.isEmpty())
+    }
+
     @Test
     fun `an http failure names the provider the user chose`() = runTest {
         server.enqueue(MockResponse().setResponseCode(429).setBody("slow down"))

@@ -93,12 +93,19 @@ internal fun parseMarkdownBlocks(markdown: String): List<MarkdownBlock> {
         // a line of dashes in a diff would otherwise become a rule.
         if (trimmed.startsWith("```") || trimmed.startsWith("~~~")) {
             val fence = trimmed.take(3)
-            // Only the leading word-ish characters: a 1.5B emitted ```json{ on
-            // the phone, and the label rendered as "json{".
-            val language = trimmed.drop(3).trim()
+            // **The info string is not always just a language.** A 1.5B on the
+            // phone opened a block with ```json{ -- and the `{` was the first
+            // character of the JSON it meant to write. Taking the whole info
+            // string as the language rendered the label as "json{"; taking only
+            // the word-ish prefix and discarding the rest *ate the brace*. So
+            // the remainder, if there is one, is the first line of the code.
+            val info = trimmed.drop(3).trim()
+            val language = info
                 .takeWhile { it.isLetterOrDigit() || it == '+' || it == '#' || it == '-' }
                 .ifBlank { null }
+            val strays = info.drop(language?.length ?: 0).trim()
             val body = mutableListOf<String>()
+            if (strays.isNotEmpty()) body += strays
             i++
             var closed = false
             while (i < lines.size) {

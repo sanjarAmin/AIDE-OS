@@ -366,10 +366,37 @@ class OpenAiClient(
 
         // Greedy from the first brace to the last: a call's arguments are
         // nested objects, and a lazy match stops at the first inner `}`.
-        val match = Regex("""\{[\s\S]*\}""").find(content) ?: return null
-        val parsed = runCatching { JSONObject(match.value) }.getOrNull() ?: return null
+        val match = Regex("""\{[\s\S]*\}""").find(content)
 
-        val name = parsed.optString("name").takeIf { it in names } ?: return null
+        // **Two candidates, and the first that names a tool wins.**
+        //
+        // The second exists because of a call whose opening brace never
+        // arrived, measured on the phone: the 1.5B emitted ```json and then
+        // `"name": "list_files", "arguments": {...}` with a closing brace and
+        // no opening one. Nothing was recovered, no tool ran, and the panel
+        // showed the markup.
+        //
+        // Trying it *second* is not enough on its own, which is the subtlety
+        // worth recording: `org.json` is lenient and parses `{"path": ""}`
+        // out of `{"path": ""}\n}` by ignoring the tail, so the first
+        // candidate succeeds, yields no `name`, and a `?:` chain would stop
+        // there. Both are parsed and judged by the same name check instead.
+        //
+        // That check is what makes the repair safe. An IDE assistant is asked
+        // about JSON constantly; recovering "a reply containing an object"
+        // would execute tools the user only asked to look at. Supplying the
+        // outer braces invents no name and no arguments.
+        val candidates = listOfNotNull(
+            match?.value,
+            "{" + fencedBody(content) + "}",
+        )
+
+        val parsed = candidates.firstNotNullOfOrNull { candidate ->
+            runCatching { JSONObject(candidate) }.getOrNull()
+                ?.takeIf { it.optString("name") in names }
+        } ?: return null
+
+        val name = parsed.optString("name")
         // Either shape: an object, or the string OpenAI's own wire format uses.
         val arguments = parsed.optJSONObject("arguments")
             ?: runCatching { JSONObject(parsed.optString("arguments")) }.getOrNull()
@@ -386,12 +413,30 @@ class OpenAiClient(
         // nothing for a `tool_call_id` to refer back to. The generic loop
         // matches results by name, which is the path Gemini already needs.
         val call = AiPart.FunctionCall(id = "", name = name, args = args)
-        val prose = (content.take(match.range.first) + content.drop(match.range.last + 1))
-            .replace("```json", "")
+        val prose = if (match != null) {
+            content.take(match.range.first) + content.drop(match.range.last + 1)
+        } else {
+            content
+        }
+            .replace(Regex("```[a-zA-Z0-9+#-]*"), "")
             .replace("```", "")
             .trim()
             .takeIf { it.isNotBlank() }
         return call to prose
+    }
+
+    /**
+     * The contents of the first fenced block, or the whole text.
+     *
+     * Trailing braces are trimmed because the case this exists for has the
+     * closing brace of the object it is missing an opener for; adding one at
+     * each end of a body that already has an unbalanced tail just moves the
+     * parse failure.
+     */
+    private fun fencedBody(content: String): String {
+        val fenced = Regex("""```[a-zA-Z0-9+#-]*\{?\s*([\s\S]*?)```""").find(content)
+        val body = (fenced?.groupValues?.get(1) ?: content).trim()
+        return body.trim().removeSurrounding("{", "}").trim().trimEnd('}').trim()
     }
 
     companion object {
