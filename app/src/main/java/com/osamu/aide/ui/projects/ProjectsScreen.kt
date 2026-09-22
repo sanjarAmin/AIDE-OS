@@ -80,6 +80,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.scale
@@ -104,6 +106,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.koin.androidx.compose.koinViewModel
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -139,29 +142,14 @@ fun ProjectsScreen(
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
                         )
-                        Spacer(Modifier.width(10.dp))
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)),
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(6.dp)
-                                        .background(MaterialTheme.colorScheme.secondary, CircleShape),
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                Text(
-                                    text = "v1.0 · Ready",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.primary,
-                                )
-                            }
-                        }
+                        // **The status pill is gone.** It read "v1.0 · Ready"
+                        // beside a green dot, and every part of that was a
+                        // constant: the version was hardcoded and drifted from
+                        // the installed one, and the dot could never be any
+                        // colour but green. A status light that cannot change
+                        // is worse than no light, because it teaches people to
+                        // ignore the ones that can. The real version is in
+                        // Settings > About, read from the installed package.
                     }
                 },
                 actions = {
@@ -445,7 +433,11 @@ private fun ProjectRow(
                             color = iconInfo.tint.copy(alpha = 0.12f),
                         ) {
                             Text(
-                                text = project.language.displayName.uppercase(),
+                                // Sentence case. A tracked-out uppercase label
+                                // is the commonest generated-UI tell, and the
+                                // language is a fact about the project rather
+                                // than a heading that needs shouting.
+                                text = project.language.displayName,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = iconInfo.tint,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
@@ -458,7 +450,7 @@ private fun ProjectRow(
                                 color = MaterialTheme.colorScheme.surfaceVariant,
                             ) {
                                 Text(
-                                    text = project.engine.displayName.uppercase(),
+                                    text = project.engine.displayName,
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
@@ -470,16 +462,20 @@ private fun ProjectRow(
                     Spacer(Modifier.height(4.dp))
 
                     Text(
-                        text = if (project.language in RUN_ONLY) {
-                            val runtime = when (project.language) {
-                                SourceLanguage.JAVASCRIPT -> "Node"
-                                SourceLanguage.PYTHON -> "Python"
-                                else -> "Mono"
-                            }
-                            "Runs on $runtime"
-                        } else {
-                            project.applicationId
-                        },
+                        // **The same fact on every card.** This slot held two
+                        // different kinds of thing depending on the language --
+                        // "Runs on Mono" for a C# project and an application id
+                        // for an Android one -- so two cards side by side
+                        // answered two different questions and neither
+                        // consistently. Both were also redundant: the runtime
+                        // is what the language badge above already says, and
+                        // the application id is in the project's own settings.
+                        //
+                        // When you last opened it is the fact a list of
+                        // projects exists to serve: the list is ordered by it,
+                        // and "the one I was in yesterday" is how people find
+                        // their way back.
+                        text = lastOpenedLabel(project.lastOpenedAt),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -524,6 +520,33 @@ private fun ProjectRow(
                 }
             }
         }
+    }
+}
+
+/**
+ * When a project was last opened, coarsely.
+ *
+ * Coarse on purpose: nobody needs "43 minutes ago", they need to know whether
+ * it was today. Coarse buckets also mean the string does not change while the
+ * list is on screen.
+ */
+internal fun lastOpenedLabel(millis: Long, now: Long = System.currentTimeMillis()): String {
+    if (millis <= 0L) return "Not opened yet"
+    val elapsed = now - millis
+    val minutes = TimeUnit.MILLISECONDS.toMinutes(elapsed)
+    val hours = TimeUnit.MILLISECONDS.toHours(elapsed)
+    val days = TimeUnit.MILLISECONDS.toDays(elapsed)
+    return when {
+        // A clock that has gone backwards -- a restored backup, a timezone
+        // change -- should not produce "opened in -3 days".
+        elapsed < 0L -> "Opened just now"
+        minutes < 1 -> "Opened just now"
+        minutes < 60 -> "Opened ${minutes}m ago"
+        hours < 24 -> "Opened ${hours}h ago"
+        days == 1L -> "Opened yesterday"
+        days < 7 -> "Opened ${days}d ago"
+        days < 365 -> "Opened ${days / 7}w ago"
+        else -> "Opened over a year ago"
     }
 }
 
@@ -669,19 +692,24 @@ internal fun CreateProjectDialog(
 
                 Spacer(Modifier.height(16.dp))
 
-                // **Says how many there are, because the list does not.**
-                // Four chips used to show every choice at once; fifteen rows
-                // cannot, and the first screenful ends tidily after the last
-                // Kotlin template with clear space beneath it -- so it reads as
-                // a complete list of four rather than the top of a list of
-                // fifteen. There is no scrollbar in a dialog to say otherwise.
-                // Counting from the catalog, so it cannot drift from it.
+                // How many there are. Counted from the catalog so it cannot
+                // drift from it.
+                //
+                // **The instruction that used to follow is gone.** It read
+                // "15 templates — scroll for the rest", which is a sentence
+                // apologising for a missing affordance: the first screenful
+                // ended tidily under the last Kotlin template, so it looked
+                // like a complete list of four. The fade at the foot of the
+                // list now says that, in the place where the question arises
+                // and without words.
                 Text(
-                    text = "${ProjectTemplate.ALL.size} templates — scroll for the rest",
+                    text = "${ProjectTemplate.ALL.size} templates",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
 
+                val templateScroll = rememberScrollState()
+                Box {
                 // **A scrolling Column, not a LazyColumn.** An AlertDialog
                 // measures its body with unbounded height, and a lazy list
                 // given no height at all composes one item and reports itself
@@ -691,7 +719,7 @@ internal fun CreateProjectDialog(
                 Column(
                     modifier = Modifier
                         .heightIn(max = 320.dp)
-                        .verticalScroll(rememberScrollState()),
+                        .verticalScroll(templateScroll),
                 ) {
                     // **`groupBy`, not "a heading when the language changes".**
                     // The latter is the same thing only while the catalog is
@@ -704,10 +732,13 @@ internal fun CreateProjectDialog(
                     // template added in the wrong place cannot split a group.
                     ProjectTemplate.ALL.groupBy { it.language }.forEach { (language, options) ->
                         Text(
-                            text = language.displayName.uppercase(),
-                            style = MaterialTheme.typography.labelSmall,
+                            // Sentence case: an all-caps eyebrow above every
+                            // group is the shape a generated screen takes, and
+                            // "Java" is a name rather than a shout.
+                            text = language.displayName,
+                            style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
+                            modifier = Modifier.padding(top = 14.dp, bottom = 4.dp),
                         )
                         options.forEach { option ->
                             TemplateRow(
@@ -722,6 +753,29 @@ internal fun CreateProjectDialog(
                                 files = if (template == option) preview else emptyList(),
                             )
                         }
+                    }
+                }
+
+                    // **The cue that replaced a sentence.** Shown only while
+                    // there is more below, so a list that ends does not wear a
+                    // permanent shadow suggesting otherwise. The colour is the
+                    // dialog's own container, which is what makes it read as
+                    // the list passing under an edge rather than as a grey bar.
+                    if (templateScroll.canScrollForward) {
+                        Box(
+                            Modifier
+                                .align(Alignment.BottomCenter)
+                                .fillMaxWidth()
+                                .height(28.dp)
+                                .background(
+                                    Brush.verticalGradient(
+                                        listOf(
+                                            Color.Transparent,
+                                            MaterialTheme.colorScheme.surfaceContainerHigh,
+                                        ),
+                                    ),
+                                ),
+                        )
                     }
                 }
             }

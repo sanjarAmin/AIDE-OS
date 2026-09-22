@@ -95,6 +95,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -999,7 +1000,13 @@ private fun EditorArea(
 
                 else -> CentredMessage(
                     title = "No file open",
-                    detail = "Select a file from the project tree.",
+                    // **Names the control that is actually on screen.** "Select
+                    // a file from the project tree" pointed at a tree that is a
+                    // drawer on a phone and not visible while this message is:
+                    // it told the user to use something they could not see. The
+                    // tab it now names is the button sitting at the bottom-left
+                    // corner of this very screen.
+                    detail = "Open Project files, bottom left, and pick something to edit.",
                 )
             }
 
@@ -1262,15 +1269,25 @@ private fun EditorTabs(
     }
 }
 
+/**
+ * The editor with nothing in it.
+ *
+ * **The detail line is prose, so it is set in the prose face.** It was drawn in
+ * `CodeTextStyle`, and monospace in this app means "this is literally a thing
+ * on your disk" -- a path, a command, compiler output. Using it for a sentence
+ * makes the sentence look like data and weakens the signal everywhere it is
+ * used properly.
+ */
 @Composable
 private fun CentredMessage(title: String, detail: String) {
-    Box(Modifier.fillMaxSize().padding(20.dp), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(title, style = MaterialTheme.typography.titleMedium)
             Text(
                 text = detail,
-                style = CodeTextStyle,
+                style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
                 modifier = Modifier.padding(top = 8.dp),
             )
         }

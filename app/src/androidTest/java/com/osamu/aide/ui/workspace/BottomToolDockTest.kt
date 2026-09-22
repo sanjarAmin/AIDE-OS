@@ -3,6 +3,8 @@ package com.osamu.aide.ui.workspace
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -95,6 +97,37 @@ class BottomToolDockTest {
             heights.max(),
             TOLERANCE,
         )
+    }
+
+    /**
+     * **An empty panel says what fills it, not merely that it is empty.**
+     *
+     * Both of these were one grey sentence in 500 dp of blank space -- "Build
+     * output appears here." tells a person a thing they can already see, and
+     * not what to do about it. The Git tab two along has always named the
+     * situation, explained it and offered the action; these now follow it.
+     *
+     * Asserted on the explanation rather than the heading, because a heading
+     * alone is what the old version effectively was.
+     */
+    @Test
+    fun an_empty_build_panel_names_the_control_that_fills_it() {
+        dockAt(360)
+
+        compose.onNodeWithText("Not built yet").assertIsDisplayed()
+        compose.onNodeWithText("Press Run in the toolbar above. Compiler output and any errors show up here.")
+            .assertIsDisplayed()
+    }
+
+    @Test
+    fun an_empty_problems_panel_says_when_problems_turn_up() {
+        dockAt(360)
+        compose.onNodeWithText("Problems").performClick()
+
+        compose.onNodeWithText("Nothing to fix").assertIsDisplayed()
+        compose.onNodeWithText(
+            "Errors and warnings appear here as you type, and again when a build finishes.",
+        ).assertIsDisplayed()
     }
 
     @Test

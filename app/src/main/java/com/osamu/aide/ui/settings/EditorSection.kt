@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -51,11 +52,26 @@ fun EditorSection(preferences: EditorPreferences, modifier: Modifier = Modifier)
             TextButton(onClick = preferences::reset) { Text("Reset to defaults") }
         }
 
-        Text(
-            text = "Text size — ${settings.fontSizeSp.roundToInt()} sp",
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.padding(top = 8.dp),
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Text size",
+                style = MaterialTheme.typography.bodyMedium,
+                // The label takes what the value leaves, never the reverse.
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                // Beside the control rather than in a heading joined by an em
+                // dash: "Text size — 14 sp" is the meta-string shape that reads
+                // as generated, and it puts the number furthest from the thing
+                // that changes it.
+                text = "${settings.fontSizeSp.roundToInt()} sp",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
         Text(
             // Real code, and a line with indentation in it, so the tab width
             // below is visible in the same preview.
@@ -65,16 +81,32 @@ fun EditorSection(preferences: EditorPreferences, modifier: Modifier = Modifier)
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(vertical = 4.dp),
+            modifier = Modifier.padding(vertical = 6.dp),
         )
         Slider(
             value = settings.fontSizeSp,
-            onValueChange = { size -> preferences.update { it.copy(fontSizeSp = size) } },
+            // **Snapped here, not by `steps`.** A step per whole sp is right
+            // for the value and wrong for the drawing: Material puts a tick on
+            // every stop, and seventeen sizes across a 360 dp screen rendered
+            // as two rows of dots with a bar between them -- a control that
+            // reads as a broken progress meter rather than something to drag.
+            // Rounding in the callback keeps the size a whole number, which is
+            // what the label and the editor both need.
+            onValueChange = { size ->
+                val whole = size.roundToInt().toFloat()
+                if (whole != settings.fontSizeSp) {
+                    preferences.update { it.copy(fontSizeSp = whole) }
+                }
+            },
             valueRange = EditorSettings.FONT_SIZE_RANGE,
-            // One stop per whole sp: a code font at 14.37 sp is not a size
-            // anyone chose, and the label would have to lie about it.
-            steps = (EditorSettings.FONT_SIZE_RANGE.endInclusive -
-                EditorSettings.FONT_SIZE_RANGE.start).toInt() - 1,
+            // **The inactive track, said explicitly.** Material 3 now defaults
+            // it to `secondaryContainer`, which is green in this palette, so
+            // the control drew a blue filled half against a green empty half
+            // and read as a rendering fault rather than one slider. The track a
+            // value has not reached is a surface, not an accent.
+            colors = SliderDefaults.colors(
+                inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant,
+            ),
             modifier = Modifier.semantics { contentDescription = "Text size" },
         )
 

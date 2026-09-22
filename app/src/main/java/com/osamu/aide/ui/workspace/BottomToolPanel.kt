@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.CheckCircleOutline
 import androidx.compose.material.icons.filled.PlayCircleOutline
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.CircularProgressIndicator
@@ -61,6 +62,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import com.osamu.aide.core.fs.BuildEngine
+import com.osamu.aide.core.ui.EmptyState
 import com.osamu.aide.core.ui.theme.CodeTextStyle
 import com.osamu.aide.engine.api.Diagnostic
 import com.osamu.aide.engine.api.DiagnosticSeverity
@@ -358,14 +360,33 @@ fun BottomToolDock(
                                 ) { Text("Build release APK") }
                             }
                             if (buildState.log.isEmpty() && buildState.install == null) {
-                                Text(
-                                    text = when {
-                                        buildState.isRun -> "Output from the program appears here."
-                                        buildState.isSync -> "The modules Gradle reads appear here."
-                                        else -> "Build output appears here."
+                                // **Names the control that fills it.** The old
+                                // line said output "appears here" and stopped,
+                                // which tells someone that a panel is empty --
+                                // a thing they can already see -- and not what
+                                // to do about it. The button it points at is
+                                // the play control in the toolbar above, which
+                                // is the one piece of this screen a newcomer
+                                // has no reason to connect with this panel.
+                                EmptyState(
+                                    icon = Icons.Default.PlayCircleOutline,
+                                    title = when {
+                                        buildState.isRun -> "Not run yet"
+                                        buildState.isSync -> "Not synced yet"
+                                        else -> "Not built yet"
                                     },
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    explanation = when {
+                                        buildState.isRun ->
+                                            "Press Run in the toolbar above. Whatever the program " +
+                                                "prints shows up here."
+                                        buildState.isSync ->
+                                            "Press Sync in the toolbar above. The modules Gradle " +
+                                                "finds show up here."
+                                        else ->
+                                            "Press Run in the toolbar above. Compiler output and " +
+                                                "any errors show up here."
+                                    },
+                                    modifier = Modifier.padding(horizontal = 0.dp),
                                 )
                             }
                             LazyColumn(Modifier.fillMaxWidth()) {
@@ -467,11 +488,13 @@ internal fun ProblemsList(
     onFixDiagnostic: (Diagnostic) -> Unit,
 ) {
     if (problems.isEmpty()) {
-        Text(
-            text = "No problems found in project.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(8.dp),
+        // No action: this panel fills itself from work done elsewhere, and a
+        // button here would only restate the sentence above it.
+        EmptyState(
+            icon = Icons.Default.CheckCircleOutline,
+            title = "Nothing to fix",
+            explanation = "Errors and warnings appear here as you type, and " +
+                "again when a build finishes.",
         )
         return
     }

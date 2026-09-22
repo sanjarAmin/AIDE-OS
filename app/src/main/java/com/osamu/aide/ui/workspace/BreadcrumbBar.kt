@@ -31,7 +31,16 @@ import java.io.File
  * on screen that says where the file *is*, and the fastest way to its
  * neighbours.
  *
- * The last segment is the file itself, and reveals the directory holding it.
+ * **It shows the directories, not the file.** The tab strip directly above it
+ * already carries the file name, and a phone screen cannot afford to say the
+ * same word twice in two rows -- for a file at the project root the bar had
+ * nothing else to say at all, so it drew a second copy of the tab and took
+ * 34 dp to do it. Now it draws the path that leads to the file and nothing
+ * else, and it disappears entirely when there is no path.
+ *
+ * The cost is that opening a root-level file after a nested one shifts the
+ * editor up by the height of this bar. That is a real cost and smaller than a
+ * permanent duplicate row.
  */
 @Composable
 fun BreadcrumbBar(
@@ -47,16 +56,18 @@ fun BreadcrumbBar(
         file.name
     }
 
-    val names = relativePath.split(File.separatorChar).filter { it.isNotEmpty() }
+    // The trailing element is the file, and the tab above owns that.
+    val names = relativePath.split(File.separatorChar).filter { it.isNotEmpty() }.dropLast(1)
+    if (names.isEmpty()) return
+
     // Each segment paired with the directory a tap on it should reveal, walked
     // down from the root rather than up from the file: the path is relative, so
     // the root is the only absolute thing here.
     val segments = buildList {
         var current: File? = projectRoot ?: file.parentFile
-        names.forEachIndexed { index, name ->
+        names.forEach { name ->
             current = current?.let { File(it, name) }
-            val isLast = index == names.lastIndex
-            add(name to if (isLast) current?.parentFile else current)
+            add(name to current)
         }
     }
     val iconInfo = FileIcons.infoFor(file, isDirectory = false)
@@ -84,6 +95,8 @@ fun BreadcrumbBar(
                 Text(
                     text = name,
                     style = MaterialTheme.typography.labelSmall,
+                    // The directory holding the file is the one worth reading
+                    // at a glance; the ones above it are context.
                     color = if (isLast) {
                         MaterialTheme.colorScheme.onSurface
                     } else {

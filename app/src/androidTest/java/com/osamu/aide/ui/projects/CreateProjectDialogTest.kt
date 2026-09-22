@@ -159,7 +159,9 @@ class CreateProjectDialogTest {
 
         val languages = ProjectTemplate.ALL.map { it.language }.distinct()
         languages.forEach { language ->
-            val heading = language.displayName.uppercase()
+            // Sentence case since the headings stopped shouting; the rule this
+            // guards is about *how many* there are, not how they are cased.
+            val heading = language.displayName
             val found = compose.onAllNodesWithText(heading).fetchSemanticsNodes().size
             assertEquals(
                 "the picker heads $heading $found times; a language is one section, " +

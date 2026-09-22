@@ -34,7 +34,15 @@ val DarkSurfaceLow = Color(0xFF0E131C)
 val DarkSurfaceHigh = Color(0xFF202B3F)
 val DarkSurfaceHighest = Color(0xFF29374F)
 val DarkOutline = Color(0xFF2D3B52)
-val DarkOutlineVariant = Color(0xFF1E2838)
+/**
+ * Raised from `#1E2838`, which did not render.
+ *
+ * Measured on the phone: at hairline widths against `DarkBackground`
+ * (`#0B0E14`) a divider in the old value was invisible, which is how the chat
+ * panel's turn rail -- its whole structural device -- came to draw nothing.
+ * `ai/core/FINDINGS.md` §14.
+ */
+val DarkOutlineVariant = Color(0xFF283449)
 val DarkOnSurface = Color(0xFFF1F5F9)
 val DarkOnSurfaceVariant = Color(0xFF94A3B8)
 
@@ -52,16 +60,30 @@ val AideOnAccent = DarkBackground
 
 // -- Light scheme -----------------------------------------------------------
 
-val LightBackground = Color(0xFFF8FAFC)
+/**
+ * **The container ramp has to step, and this one did not.**
+ *
+ * `LightSurfaceLow` was `#F8FAFC` -- byte-identical to `LightBackground`. Every
+ * surface drawn on `surfaceContainerLow` over the page therefore had *zero*
+ * contrast in light mode: the settings sections, the chat panel's header, the
+ * tool dock's tab strip and every tool-result box rendered as one flat sheet.
+ * In dark mode the same components look correct, which is why it survived --
+ * the app is used dark and was only ever checked dark.
+ *
+ * Each level now differs from its neighbours by enough to see, keeping
+ * Material's convention that a higher container is *darker* in a light scheme.
+ * The page sits one step below white so a card can read as paper on it.
+ */
+val LightBackground = Color(0xFFF7F9FC)
 val LightSurface = Color(0xFFFFFFFF)
-val LightSurfaceVariant = Color(0xFFF1F5F9)
+val LightSurfaceVariant = Color(0xFFE9EEF5)
 val LightSurfaceLowest = Color(0xFFFFFFFF)
-val LightSurfaceLow = Color(0xFFF8FAFC)
-val LightSurfaceContainer = Color(0xFFF1F5F9)
-val LightSurfaceHigh = Color(0xFFE2E8F0)
-val LightSurfaceHighest = Color(0xFFCBD5E1)
-val LightOutline = Color(0xFFCBD5E1)
-val LightOutlineVariant = Color(0xFFE2E8F0)
+val LightSurfaceLow = Color(0xFFEFF3F8)
+val LightSurfaceContainer = Color(0xFFE9EEF5)
+val LightSurfaceHigh = Color(0xFFE1E8F1)
+val LightSurfaceHighest = Color(0xFFD6DFEA)
+val LightOutline = Color(0xFFB9C4D2)
+val LightOutlineVariant = Color(0xFFDCE3EC)
 val LightOnSurface = Color(0xFF0F172A)
 val LightOnSurfaceVariant = Color(0xFF475569)
 

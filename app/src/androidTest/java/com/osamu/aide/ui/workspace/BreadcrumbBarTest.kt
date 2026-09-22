@@ -51,16 +51,37 @@ class BreadcrumbBarTest {
         assertEquals(File(root, "src/main/java/com/example"), revealed)
     }
 
+    /**
+     * **The bar shows the path, and the tab above shows the file.**
+     *
+     * It used to end with the file name, which the tab strip directly above it
+     * already carries -- two rows saying the same word on a 360 dp screen. The
+     * last segment is now the directory holding the file, which is both the
+     * thing the tab cannot tell you and the tap people actually want.
+     */
     @Test
-    fun the_file_segment_reveals_the_directory_holding_it() {
+    fun the_file_name_is_not_repeated_under_its_own_tab() {
         var revealed: File? = null
         show { revealed = it }
 
-        compose.onNodeWithText("App.java").performClick()
+        compose.onNodeWithText("App.java").assertDoesNotExist()
 
-        // Expanding a file is meaningless; what the user wants from the last
-        // segment is the file's neighbours.
+        compose.onNodeWithText("example").performClick()
         assertEquals(file.parentFile, revealed)
+    }
+
+    /**
+     * A file at the project root has no path to draw, so the bar does not
+     * draw -- rather than rendering one segment that duplicates the tab.
+     */
+    @Test
+    fun a_file_at_the_root_gets_no_bar_at_all() {
+        val rootFile = File(root, "aide.json")
+        compose.setContent {
+            BreadcrumbBar(file = rootFile, projectRoot = root, onSegmentClick = {})
+        }
+
+        compose.onNodeWithText("aide.json").assertDoesNotExist()
     }
 
     @Test

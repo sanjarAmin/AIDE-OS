@@ -260,11 +260,15 @@ private fun FileTreeHeader(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
-                    text = "EXPLORER",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.2.sp,
-                    color = MaterialTheme.colorScheme.primary,
+                    // **Sentence case, and the project's own word for itself.**
+                    // A tracked-out uppercase eyebrow is the commonest tell of
+                    // a generated screen, and "EXPLORER" is an IDE's word, not
+                    // a person's -- the tab that opens this pane already says
+                    // "Project files", and two names for one thing is one too
+                    // many.
+                    text = "Project files",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
                 if (itemCount > 0) {
                     Text(
