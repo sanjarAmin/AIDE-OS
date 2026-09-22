@@ -1,5 +1,6 @@
 package com.osamu.aide.ui.workspace
 
+import com.osamu.aide.core.ui.fadingEdges
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -116,10 +117,12 @@ fun LogcatPanel(
         }
 
         // Quick log level filter chips
+        val levelScroll = rememberScrollState()
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
+                .fadingEdges(levelScroll)
+                .horizontalScroll(levelScroll)
                 .padding(horizontal = 8.dp, vertical = 2.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,

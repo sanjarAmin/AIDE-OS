@@ -1,5 +1,6 @@
 package com.osamu.aide.ui.projects
 
+import com.osamu.aide.core.ui.fadingEdges
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -243,10 +244,18 @@ fun ProjectsScreen(
 
                         Spacer(Modifier.height(8.dp))
 
+                        val languageScroll = rememberScrollState()
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
+                                // Before the scroll, not after: a draw
+                                // modifier placed after it renders inside the
+                                // scrolling content, so the gradient lands at
+                                // the ends of the row rather than at the edges
+                                // of the window onto it -- off screen, which is
+                                // exactly where it cannot be seen.
+                                .fadingEdges(languageScroll)
+                                .horizontalScroll(languageScroll),
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {

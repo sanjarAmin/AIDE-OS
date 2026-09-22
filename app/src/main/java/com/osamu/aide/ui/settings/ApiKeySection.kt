@@ -374,7 +374,20 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                                 .semantics { contentDescription = "API key" },
                             label = { Text(if (saved) "Replace key" else "API key") },
                             placeholder = { Text(keyPlaceholder(activeProvider)) },
-                            supportingText = { Text(whereToGetAKey(activeProvider)) },
+                            // **Only when there is no button to say it.** This
+                            // read "Create one at aistudio.google.com/apikey"
+                            // directly beneath a button that opens exactly that
+                            // page: the same instruction twice, once tappable
+                            // and once as an address to copy by hand. Custom
+                            // and On device have no such button, and for them
+                            // the line says something a button could not
+                            // ("Any OpenAI-compatible service"), so it stays
+                            // where it is still the only voice.
+                            supportingText = if (providerConsoleUrl(activeProvider) == null) {
+                                { Text(whereToGetAKey(activeProvider)) }
+                            } else {
+                                null
+                            },
                             singleLine = true,
                             visualTransformation = if (revealed) {
                                 VisualTransformation.None

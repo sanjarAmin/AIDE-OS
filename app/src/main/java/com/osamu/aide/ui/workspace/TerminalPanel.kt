@@ -2,6 +2,8 @@ package com.osamu.aide.ui.workspace
 
 import android.view.KeyEvent
 import android.widget.Toast
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.rememberTextFieldState
@@ -35,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
@@ -126,6 +130,23 @@ fun TerminalPanel(
             Modifier
                 .fillMaxWidth()
                 .weight(1f)
+                // **A console is something you look into.** The output was a
+                // bare Text on the panel's own background, so in light mode the
+                // shell's lines floated on the same white as the chrome around
+                // them with no edge anywhere -- it did not read as a terminal,
+                // it read as text that had escaped. `surfaceContainerLowest`
+                // with an outline gives it a boundary in both themes: white
+                // against the grey page in light, and a well darker than the
+                // page in dark.
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+                .border(
+                    1.dp,
+                    MaterialTheme.colorScheme.outlineVariant,
+                    RoundedCornerShape(8.dp),
+                )
+                .padding(8.dp)
                 .onSizeChanged { size ->
                     val (advance, lineHeight) = cell
                     if (advance > 0f && lineHeight > 0) {
@@ -235,7 +256,11 @@ fun TerminalPanel(
                     Box(Modifier.weight(1f)) {
                         field()
                         Text(
-                            text = "type here",
+                            // Sentence case, and a verb: every other field in
+                            // the app says what to do here ("Ask a question",
+                            // "Search projects"), and "type here" alone said
+                            // neither what nor why.
+                            text = "Type a command",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

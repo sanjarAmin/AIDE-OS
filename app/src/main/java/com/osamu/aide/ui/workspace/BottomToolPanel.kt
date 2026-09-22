@@ -1,5 +1,6 @@
 package com.osamu.aide.ui.workspace
 
+import com.osamu.aide.core.ui.fadingEdges
 import android.content.Intent
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.RepeatMode
@@ -173,10 +174,12 @@ fun BottomToolDock(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
+                val tabScroll = rememberScrollState()
                 Row(
                     modifier = Modifier
                         .weight(1f)
-                        .horizontalScroll(rememberScrollState()),
+                        .fadingEdges(tabScroll)
+                        .horizontalScroll(tabScroll),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
