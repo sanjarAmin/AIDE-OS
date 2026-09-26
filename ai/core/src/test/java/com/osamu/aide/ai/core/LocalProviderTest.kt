@@ -44,10 +44,16 @@ class LocalProviderTest {
     fun its_models_are_the_sizes_that_are_pinned_for_download() {
         val models = AiProviderType.LOCAL.availableModels
 
-        assertEquals(4, models.size)
+        // **Every pinned size is offered, rather than a count.** A fixed 4 was
+        // right while there was one model per size and wrong the moment a
+        // second 1.5B arrived -- the abliterated pair are two more entries at
+        // sizes that already existed. `LocalModelPickerTest` is the one that
+        // asserts the two lists agree exactly; this one only cares that no size
+        // is missing.
         for (size in listOf("0.5b", "1.5b", "3b", "7b")) {
             assertTrue("no model for $size in $models", models.any { it.contains(size) })
         }
+        assertTrue("fewer models than the sizes pinned for download", models.size >= 4)
     }
 
     /**
