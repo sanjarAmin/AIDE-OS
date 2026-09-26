@@ -922,6 +922,16 @@ class WorkspaceViewModelTest {
             ).value
         assertTrue("the template wrote no Program.cs", File(console.rootDir, "Program.cs").isFile)
         stageMono()
+        // **Skip with a reason, like its siblings.** `stage()` returns quietly
+        // when the archive is not on the device, so without this the test ran
+        // with no mono at all and failed thirty seconds later with "timed out
+        // waiting for the program's output" -- which names the symptom and
+        // hides the cause. It was the only genuine-looking failure in a full
+        // sweep that was not genuine, and it cost a diagnosis to find that out.
+        assumeTrue(
+            "no mono staged; there is nothing to compile the assembly with",
+            ToolchainManager(context, dispatchers).monoRoot() != null,
+        )
 
         onMain { viewModel.open(console.rootDir) }
         awaitState("the descriptor to be read") { it.projectName == "Hello Sharp" }
