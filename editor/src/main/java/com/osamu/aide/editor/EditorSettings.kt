@@ -48,20 +48,32 @@ data class EditorSettings(
  * between the other two is the feature.
  */
 enum class EditorColorTheme(val displayName: String) {
-    FOLLOW_SYSTEM("System"),
+    /**
+     * **"Match app", and it means the app rather than the system.**
+     *
+     * The constant keeps its old name because it is what is written into
+     * preferences; renaming it would reset everyone's choice. What changed is
+     * what it follows. The editor used to read `isSystemInDarkTheme()` for
+     * itself while the app resolved its own scheme separately -- two
+     * independent answers to one question, agreeing only because both happened
+     * to ask the OS. The app's theme is a parameter with a default, so the
+     * moment anything sets it the editor would have kept following the OS and
+     * drawn a light slab inside a dark app, or the reverse.
+     */
+    FOLLOW_SYSTEM("Match app"),
     LIGHT("Light"),
     DARK("Dark"),
     ;
 
     /**
-     * Whether to draw dark, given what the system is doing.
+     * Whether to draw dark, given what the app is drawing.
      *
      * A function rather than an `if` at the call site because the call site is
      * inside an `AndroidView` update block, where nothing can be tested: this
      * is the whole decision, and [EditorColorThemeTest] is three lines.
      */
-    fun isDark(systemIsDark: Boolean): Boolean = when (this) {
-        FOLLOW_SYSTEM -> systemIsDark
+    fun isDark(appIsDark: Boolean): Boolean = when (this) {
+        FOLLOW_SYSTEM -> appIsDark
         DARK -> true
         LIGHT -> false
     }

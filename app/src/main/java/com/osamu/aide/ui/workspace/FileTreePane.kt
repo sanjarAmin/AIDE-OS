@@ -307,7 +307,8 @@ private fun FileTreeHeader(
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
                     ) {
                         Text(
-                            text = lang.displayName.uppercase(),
+                            // Sentence case, like the badge on the project card.
+                            text = lang.displayName,
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary,
                             fontWeight = FontWeight.Medium,

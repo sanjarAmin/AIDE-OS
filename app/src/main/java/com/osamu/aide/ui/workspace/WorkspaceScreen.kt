@@ -450,7 +450,8 @@ fun WorkspaceScreen(
                                         color = MaterialTheme.colorScheme.surfaceVariant,
                                     ) {
                                         Text(
-                                            text = lang.displayName.uppercase(),
+                                            // Sentence case, like the badge on the project card.
+                                            text = lang.displayName,
                                             maxLines = 1,
                                             softWrap = false,
                                             style = MaterialTheme.typography.labelSmall,

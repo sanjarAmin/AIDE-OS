@@ -4,9 +4,10 @@ import android.graphics.Typeface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.viewinterop.AndroidView
 import com.osamu.aide.engine.api.Diagnostic
 import io.github.rosemoe.sora.event.ClickEvent
@@ -85,11 +86,21 @@ fun CodeEditorView(
     // recomposition. See the tooltip note in the update block.
     val shownDiagnostics = remember { mutableStateOf<List<Diagnostic>>(emptyList()) }
 
-    // Resolved here because isSystemInDarkTheme is a composable read, and the
-    // update block below is not one. It also means a change of system theme
-    // recomposes and repaints the editor, which is the behaviour that was
-    // missing entirely: the chrome went dark and the code stayed white.
-    val wantsDark = settings.theme.isDark(isSystemInDarkTheme())
+    // **Read from the app's own colours, not from the OS.** Both used to ask
+    // `isSystemInDarkTheme()` separately, which agreed only because the app's
+    // `darkTheme` happens to default to the same call -- it is a parameter, so
+    // anything that sets it would have left the editor following the OS and
+    // drawing a white slab inside a dark app, which is the exact bug this enum
+    // was added to fix, returning by a different door.
+    //
+    // Luminance rather than a flag, because Material's colour scheme does not
+    // carry one: the background is near-black in the dark scheme and near-white
+    // in the light one, so the midpoint separates them with a wide margin.
+    //
+    // Resolved here because it is a composable read and the update block below
+    // is not one. It also means a theme change recomposes and repaints the
+    // editor, which is the behaviour that was missing entirely.
+    val wantsDark = settings.theme.isDark(MaterialTheme.colorScheme.background.luminance() < 0.5f)
 
     AndroidView(
         modifier = modifier,
