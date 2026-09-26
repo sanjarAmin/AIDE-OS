@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -50,6 +51,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -139,7 +142,31 @@ fun ChatPanel(
     var draft by rememberSaveable { mutableStateOf("") }
     var editing by remember { mutableStateOf<ChatEntry.FromUser?>(null) }
 
-    Column(modifier.fillMaxWidth()) {
+    // **An approval takes the keyboard away.** The prompt is blocking and needs
+    // no typing, and with the IME up the panel's lower half -- which is exactly
+    // where Allow, Allow in this chat and Don't are -- is simply covered. Found
+    // by driving: a prompt appeared while the keyboard was open and the gate
+    // that authorises writing to someone's files could not be answered at all.
+    //
+    // Hiding the IME rather than padding around it, because padding still has
+    // to fit a diff, three buttons and a composer into what is left, and the
+    // honest answer is that the question on screen is not one you type at.
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focus = LocalFocusManager.current
+    LaunchedEffect(state.pendingApproval != null) {
+        if (state.pendingApproval != null) {
+            focus.clearFocus(force = true)
+            keyboard?.hide()
+        }
+    }
+
+    // **Lifted above the keyboard.** Found by driving: with the IME open the
+    // panel's bottom is simply covered, and the bottom is where the approval
+    // prompt's buttons are -- so the gate that authorises writing to someone's
+    // files could not be answered while they were typing. The composer alone
+    // stayed visible because it is shorter than the prompt, which is why this
+    // went unnoticed until a prompt appeared with the keyboard up.
+    Column(modifier.fillMaxWidth().imePadding()) {
         AgentHeader(
             state = state,
             onSwitchProvider = onSwitchProvider,

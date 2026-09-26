@@ -2,9 +2,13 @@ package com.osamu.aide.editor
 
 import android.graphics.Typeface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import kotlinx.coroutines.delay
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
@@ -66,12 +70,30 @@ fun CodeEditorView(
      * doing what sora does with it, which is to move the caret.
      */
     onLineNumberTap: ((Int) -> Unit)? = null,
+    /**
+     * 1-based lines a write from outside just changed, painted and then faded.
+     *
+     * The identity of the set is the trigger: pass a new set to start a new
+     * fade, and `emptySet()` for an ordinary edit by the person typing -- their
+     * own keystrokes need no announcing.
+     */
+    changedLines: Set<Int> = emptySet(),
+    /**
+     * Bumped by the caller when [document] holds genuinely new text for the
+     * same file -- a reload from disk. Typing does not change it.
+     */
+    reloadToken: Int = 0,
 ) {
     // Identity, not contents. Recomposition must not push text back into the
     // widget: setText resets the cursor, the scroll position and the undo
     // stack, so doing it on every keystroke makes the editor unusable in a way
     // that reads as an input bug.
-    val documentKey = document.file.absolutePath
+    // **Identity plus a reload count.** The path alone answered "is this a
+    // different tab", which is the right question for a tab switch and the
+    // wrong one for a file rewritten under the editor: the assistant could
+    // change the open file and the widget would keep showing the old text --
+    // and then save over the edit on the next keystroke.
+    val documentKey = document.file.absolutePath + "#" + reloadToken
 
     // The subscription is made once, in the factory, and outlives every
     // recomposition -- so it has to read the *current* callback rather than the
@@ -101,6 +123,23 @@ fun CodeEditorView(
     // is not one. It also means a theme change recomposes and repaints the
     // editor, which is the behaviour that was missing entirely.
     val wantsDark = settings.theme.isDark(MaterialTheme.colorScheme.background.luminance() < 0.5f)
+
+    // **One orchestrated fade, started by a new set arriving.** Held as an
+    // `Animatable` rather than a `tween` on a state read, because the highlight
+    // has to survive recomposition -- the buffer it is painting was just
+    // replaced, so recomposition is exactly what is happening around it.
+    val changedFade = remember { Animatable(0f) }
+    LaunchedEffect(changedLines) {
+        if (changedLines.isEmpty()) {
+            changedFade.snapTo(0f)
+            return@LaunchedEffect
+        }
+        // Held at full strength first: a fade that begins immediately is half
+        // over before the eye finds the line it is meant to draw attention to.
+        changedFade.snapTo(1f)
+        delay(CHANGED_HOLD_MS)
+        changedFade.animateTo(0f, tween(CHANGED_FADE_MS))
+    }
 
     AndroidView(
         modifier = modifier,
@@ -140,6 +179,12 @@ fun CodeEditorView(
             (editor as? DebugGutterEditor)?.let {
                 it.breakpointLines = breakpointLines
                 it.executionLine = executionLine
+                it.changedLines = changedLines
+                // Read here so every animation frame reaches the widget: the
+                // update block re-runs on each recomposition, and an
+                // `Animatable`'s value is a state read, so this is what
+                // subscribes it.
+                it.changedFade = changedFade.value
             }
             // Set here rather than in the factory: these are the four things a
             // user can change while a file is open, and a widget built before
@@ -170,7 +215,7 @@ fun CodeEditorView(
                 // reuseContentObject: this tab's undo history and cursor come
                 // back with it. Passing the raw String instead would build a
                 // fresh Content and throw both away.
-                editor.setText(buffers.bufferFor(document), true, null)
+                editor.setText(buffers.bufferFor(document, reloadToken), true, null)
             }
 
             // Rebuilt whenever the set changes -- including on a tab switch,
@@ -212,4 +257,11 @@ fun CodeEditorView(
     )
 }
 
-
+/**
+ * Long enough to find the line before it starts leaving.
+ *
+ * A fade that begins the instant the file changes is half gone before the eye
+ * has arrived, which reads as a flicker rather than as a mark.
+ */
+private const val CHANGED_HOLD_MS = 900L
+private const val CHANGED_FADE_MS = 1_400

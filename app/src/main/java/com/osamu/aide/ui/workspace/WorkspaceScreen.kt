@@ -344,6 +344,14 @@ fun WorkspaceScreen(
         ActivityResultContracts.StartActivityForResult(),
     ) { }
 
+    // **The editor follows the assistant's edits.** A tool writes through
+    // `ProjectFiles`, which knows nothing of open buffers, so before this an
+    // approved edit to the file on screen left the old text showing -- and the
+    // next save wrote it back over the change the user had just approved.
+    LaunchedEffect(assistant, viewModel) {
+        assistant.filesWritten.collect(viewModel::reloadFromDisk)
+    }
+
     LaunchedEffect(assistant) {
         assistant.notices.collect { snackbarHostState.showSnackbar(it) }
     }
@@ -987,6 +995,8 @@ private fun EditorArea(
                     } else {
                         null
                     },
+                    changedLines = state.changedLines,
+                    reloadToken = state.reloadToken,
                 )
 
                 state.documentError != null -> CentredMessage(

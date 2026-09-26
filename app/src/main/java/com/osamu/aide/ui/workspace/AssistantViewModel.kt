@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
@@ -108,6 +109,18 @@ class AssistantViewModel(
             openProject = (projects.openProject(projectDir) as? AppResult.Success)?.value
         }
     }
+
+    /**
+     * Files the assistant has changed, as absolute paths.
+     *
+     * Resolved against the project here rather than in `:ai:core`, which deals
+     * in paths relative to the project root and has no business knowing where
+     * that root is mounted.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val filesWritten: Flow<File> = controller
+        .flatMapLatest { active -> active?.filesWritten ?: flowOf() }
+        .map { relative -> File(controller.value?.projectDir, relative) }
 
     fun send(text: String) = controller.value?.send(text) ?: Unit
 

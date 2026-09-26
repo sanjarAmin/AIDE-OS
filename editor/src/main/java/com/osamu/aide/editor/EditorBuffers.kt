@@ -20,8 +20,27 @@ class EditorBuffers {
 
     private val buffers = mutableMapOf<String, Content>()
 
-    fun bufferFor(document: SourceDocument): Content =
-        buffers.getOrPut(document.file.absolutePath) { Content(document.text) }
+    /** The reload token each buffer was built from; see [bufferFor]. */
+    private val tokens = mutableMapOf<String, Int>()
+
+    /**
+     * The live buffer for [document], rebuilt when [reloadToken] changes.
+     *
+     * **The cache is what makes a tab switch keep its undo history**, and it is
+     * also what made a file changed on disk invisible: a document re-read with
+     * new text returned the Content built from the old text, so the assistant
+     * could rewrite a file the user was looking at and the screen would not
+     * move. The token is the caller saying "this is genuinely new content",
+     * which only a reload does -- typing does not.
+     */
+    fun bufferFor(document: SourceDocument, reloadToken: Int = 0): Content {
+        val key = document.file.absolutePath
+        if (tokens[key] != reloadToken) {
+            buffers.remove(key)
+            tokens[key] = reloadToken
+        }
+        return buffers.getOrPut(key) { Content(document.text) }
+    }
 
     /**
      * Drops the buffers of files that are no longer open.
@@ -33,9 +52,13 @@ class EditorBuffers {
     fun retainOnly(documents: List<SourceDocument>) {
         val open = documents.mapTo(mutableSetOf()) { it.file.absolutePath }
         buffers.keys.retainAll(open)
+        tokens.keys.retainAll(open)
     }
 
     fun isOpen(file: File): Boolean = file.absolutePath in buffers
 
-    fun clear() = buffers.clear()
+    fun clear() {
+        buffers.clear()
+        tokens.clear()
+    }
 }

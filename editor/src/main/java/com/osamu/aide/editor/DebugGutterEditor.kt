@@ -45,6 +45,39 @@ class DebugGutterEditor(context: Context) : CodeEditor(context) {
             reapply()
         }
 
+    /**
+     * Lines a write from outside the editor just changed, 1-based.
+     *
+     * The assistant edits files behind an approval gate, and until now the
+     * reloaded buffer simply appeared with nothing saying which part of it
+     * moved. These are painted and then faded out by [changedFade].
+     */
+    var changedLines: Set<Int> = emptySet()
+        set(value) {
+            if (field == value) return
+            field = value
+            reapply()
+        }
+
+    /**
+     * How strongly to paint [changedLines]: 1 at the moment of the edit, 0 once
+     * the highlight has faded.
+     *
+     * Driven from Compose rather than by a timer in here, so the animation
+     * obeys the platform's animator scale -- a device with animations turned
+     * off gets no fade rather than a fade nobody asked for.
+     */
+    var changedFade: Float = 0f
+        set(value) {
+            val clamped = value.coerceIn(0f, 1f)
+            // Quantised: this is set on every animation frame, and a repaint of
+            // the whole document sixty times a second for a colour change the
+            // eye cannot resolve is wasted work on a phone.
+            if (kotlin.math.abs(clamped - field) < FADE_STEP && clamped != 0f && clamped != 1f) return
+            field = clamped
+            reapply()
+        }
+
     /** Lines (0-based) this has marked in the current styles, so they can be unmarked. */
     private val marked = mutableSetOf<Int>()
 
@@ -78,6 +111,19 @@ class DebugGutterEditor(context: Context) : CodeEditor(context) {
             styles.addLineStyle(LineGutterBackground(index, ConstColor(BREAKPOINT_GUTTER)))
             marked += index
         }
+        if (changedFade > 0f) {
+            val alpha = (CHANGED_MAX_ALPHA * changedFade).toInt().coerceIn(0, 255)
+            changedLines.forEach { line ->
+                val index = line - 1
+                if (index < 0) return@forEach
+                // Under the debugger's marks on purpose: where execution is
+                // stopped outranks what an edit touched a moment ago.
+                if (index in marked) return@forEach
+                styles.addLineStyle(LineBackground(index, ConstColor((alpha shl 24) or CHANGED_RGB)))
+                marked += index
+            }
+        }
+
         executionLine?.let { line ->
             val index = line - 1
             if (index < 0) return@let
@@ -98,5 +144,18 @@ class DebugGutterEditor(context: Context) : CodeEditor(context) {
         const val BREAKPOINT_GUTTER = 0x99E53935.toInt()
         const val EXECUTION_LINE = 0x40FFB300
         const val EXECUTION_GUTTER = 0xCCFFB300.toInt()
+
+        /**
+         * Green, and quiet at full strength.
+         *
+         * A changed line is information, not an alarm: it has to be visible
+         * over both colour schemes without competing with a selection or with
+         * the amber of a stopped line. 0x4D is about 30%.
+         */
+        const val CHANGED_RGB = 0x34D399
+        const val CHANGED_MAX_ALPHA = 0x4D
+
+        /** Repaint only when the fade has moved enough to see. */
+        const val FADE_STEP = 0.04f
     }
 }

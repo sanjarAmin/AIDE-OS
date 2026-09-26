@@ -4,6 +4,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -230,6 +233,22 @@ class ChatController(
     /** The conversation being written to, created lazily on the first message. */
     private var conversationId: String? = null
 
+    private val written = Channel<String>(Channel.BUFFERED)
+
+    /**
+     * Project-relative paths the assistant has just changed.
+     *
+     * **Because a tool writing a file is invisible to the editor.** The toolset
+     * writes through `ProjectFiles`, which knows nothing of open buffers, so an
+     * approved `edit_file` on the file you are looking at left the old text on
+     * screen -- and the next keystroke would have saved it back over the
+     * assistant's work. The workspace listens here and re-reads.
+     *
+     * A channel rather than state: this is an event, and a state field would
+     * replay the last write to every new collector.
+     */
+    val filesWritten: Flow<String> = written.receiveAsFlow()
+
     /**
      * Loads the history list. Cheap enough to call when the panel opens.
      */
@@ -413,6 +432,15 @@ class ChatController(
         }
 
         override fun onToolRun(run: ToolRun) {
+            // Only a change that actually landed: a declined call and a refused
+            // one both leave the file as it was, and re-reading for them would
+            // flash a highlight over nothing.
+            if (run.risk == ToolRisk.MUTATING &&
+                run.approved &&
+                run.outcome is ProjectFiles.Outcome.Ok
+            ) {
+                run.input["path"]?.takeIf { it.isNotBlank() }?.let(written::trySend)
+            }
             // The open bubble is closed first: prose that came before a tool
             // call belongs above the card, and anything after it starts a new
             // bubble. Without this the answer grows around the card.

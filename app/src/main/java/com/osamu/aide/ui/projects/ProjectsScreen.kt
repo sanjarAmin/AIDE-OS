@@ -80,6 +80,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -686,7 +691,20 @@ internal fun CreateProjectDialog(
         }
     }
 
+    // **How much room the keyboard has left.** The activity is edge to edge,
+    // which makes the manifest's `adjustResize` a no-op: nothing resizes the
+    // window any more, so a dialog that does not read the IME inset itself is
+    // simply covered by it. Driving this at 360 dp, the Create button sat under
+    // the keyboard and a tap on it landed on the letter above -- typing into
+    // the name field instead of creating anything, with no hint why.
+    val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
+    val keyboardIsUp = imeBottom > 0
+
     AlertDialog(
+        // Padded by the IME, and told not to fit system windows itself, which
+        // is the pair that lets the surface move rather than be overlapped.
+        modifier = Modifier.imePadding(),
+        properties = DialogProperties(decorFitsSystemWindows = false),
         onDismissRequest = onDismiss,
         title = { Text("New project") },
         text = {
@@ -727,7 +745,13 @@ internal fun CreateProjectDialog(
                 // the list is eleven items, so nothing is saved by laziness.
                 Column(
                     modifier = Modifier
-                        .heightIn(max = 320.dp)
+                        // **Shorter while the keyboard is up.** Moving the
+                        // dialog is not enough on a short screen: fifteen
+                        // templates plus a name field plus the actions do not
+                        // fit in what is left, and the half that gets clipped
+                        // is the half with the buttons. The list is the part
+                        // that can afford to shrink -- it already scrolls.
+                        .heightIn(max = if (keyboardIsUp) 150.dp else 320.dp)
                         .verticalScroll(templateScroll),
                 ) {
                     // **`groupBy`, not "a heading when the language changes".**

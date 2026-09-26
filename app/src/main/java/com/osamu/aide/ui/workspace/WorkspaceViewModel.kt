@@ -15,6 +15,7 @@ import com.osamu.aide.core.fs.ProjectRepository
 import com.osamu.aide.editor.DocumentStore
 import com.osamu.aide.editor.EditorLanguages
 import com.osamu.aide.editor.SourceDocument
+import com.osamu.aide.editor.changedLines
 import com.osamu.aide.core.fs.ProjectLayout
 import com.osamu.aide.core.fs.SourceLanguage
 import com.osamu.aide.engine.api.BuildEvent
@@ -247,6 +248,18 @@ data class WorkspaceUiState(
     val activeFile: File? = null,
     /** Set while a file is being read, so the pane can say so. */
     val openingFile: File? = null,
+    /**
+     * 1-based lines the assistant last rewrote in [activeFile], for the editor
+     * to paint and fade.
+     */
+    val changedLines: Set<Int> = emptySet(),
+    /**
+     * Bumped whenever an open file is re-read from disk.
+     *
+     * The editor swaps buffers on document *identity*, which a reload does not
+     * change -- so without this the new text never reaches the widget.
+     */
+    val reloadToken: Int = 0,
     val documentError: String? = null,
     val isSearchOpen: Boolean = false,
     val build: BuildUiState = BuildUiState(),
@@ -540,6 +553,51 @@ class WorkspaceViewModel(
     }
 
     /** Opens [file] in a tab, or brings its tab to the front if it is open. */
+    /**
+     * Re-reads [file] if it is open, and marks what changed.
+     *
+     * **The assistant writes through `ProjectFiles`, which knows nothing about
+     * open buffers.** So an approved `edit_file` on the file on screen left the
+     * old text there, and the next save would have written it back over the
+     * assistant's work -- a silent revert of a change the user had just
+     * approved. `openDocument` could not help: it returns early for a file that
+     * is already open, which is right for a tab switch and wrong for this.
+     *
+     * A file that is not open needs nothing: it will be read fresh when it is
+     * opened.
+     */
+    fun reloadFromDisk(file: File) {
+        val open = _state.value.openFiles.firstOrNull { it.file == file } ?: return
+        viewModelScope.launch {
+            when (val result = documents.open(file)) {
+                is AppResult.Success -> {
+                    val changed = changedLines(open.document.text, result.value.text)
+                    if (changed.isEmpty() && open.document.text == result.value.text) return@launch
+                    _state.update { state ->
+                        state.copy(
+                            openFiles = state.openFiles.map {
+                                if (it.file == file) {
+                                    // Not dirty: what is in the buffer is now
+                                    // exactly what is on disk.
+                                    OpenFile(result.value, isDirty = false)
+                                } else {
+                                    it
+                                }
+                            },
+                            changedLines = if (state.activeFile == file) changed else state.changedLines,
+                            reloadToken = state.reloadToken + 1,
+                        )
+                    }
+                    analyse(file, result.value.text)
+                }
+                // A file the assistant deleted, or one that is no longer
+                // readable: leaving the buffer alone is better than emptying
+                // the tab, and the user still has their text.
+                is AppResult.Failure -> Unit
+            }
+        }
+    }
+
     fun openDocument(file: File) {
         // On opening, not on selecting: a tab switch back to a file already
         // open is not the moment to ask for a download.

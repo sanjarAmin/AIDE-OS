@@ -298,6 +298,61 @@ class WorkspaceViewModelTest {
      * also what every Java file did on a device with no `android.jar`, so the
      * first thing a new user tried did nothing and explained nothing.
      */
+    /**
+     * **A file rewritten under the editor reaches the editor.**
+     *
+     * The assistant writes through `ProjectFiles`, which knows nothing about
+     * open buffers, and `openDocument` returns early for a file that is already
+     * open -- right for a tab switch, wrong for this. So an approved edit to
+     * the file on screen left the old text there, and the next save would have
+     * written it back over the change the user had just approved: a silent
+     * revert of something they explicitly allowed.
+     */
+    @Test
+    fun a_file_changed_on_disk_is_re_read_into_its_open_tab() {
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(mainActivitySource) }
+        awaitState("the source to load") { it.active?.file == mainActivitySource }
+        val before = viewModel.state.value.active!!.document.text
+
+        val after = before.replace("onCreate", "onResume")
+        assertTrue("the fixture did not change, so this asserts nothing", after != before)
+        mainActivitySource.writeText(after)
+        onMain { viewModel.reloadFromDisk(mainActivitySource) }
+
+        awaitState("the tab to pick up the new text") { it.active?.document?.text == after }
+        val state = viewModel.state.value
+        assertFalse("a file matching disk was left marked dirty", state.active!!.isDirty)
+        assertTrue("nothing was marked as changed", state.changedLines.isNotEmpty())
+    }
+
+    @Test
+    fun a_reload_that_changes_nothing_marks_nothing() {
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(mainActivitySource) }
+        awaitState("the source to load") { it.active?.file == mainActivitySource }
+
+        // A tool that rewrote a file with identical content should not flash
+        // the whole document at the user.
+        onMain { viewModel.reloadFromDisk(mainActivitySource) }
+        Thread.sleep(500)
+
+        assertTrue(
+            "an unchanged reload highlighted lines",
+            viewModel.state.value.changedLines.isEmpty(),
+        )
+    }
+
+    @Test
+    fun reloading_a_file_that_is_not_open_does_nothing() {
+        onMain { viewModel.open(project.rootDir) }
+
+        onMain { viewModel.reloadFromDisk(manifest) }
+        Thread.sleep(300)
+
+        assertTrue(viewModel.state.value.openFiles.isEmpty())
+    }
+
     @Test
     fun go_to_definition_says_why_when_nothing_can_answer() {
         onMain { viewModel.open(project.rootDir) }
