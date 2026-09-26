@@ -3,6 +3,8 @@ package com.osamu.aide.ai.core
 import com.anthropic.client.AnthropicClient
 import com.anthropic.client.okhttp.AnthropicOkHttpClient
 import okhttp3.mockwebserver.Dispatcher
+import org.json.JSONArray
+import org.json.JSONObject
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
@@ -33,9 +35,30 @@ internal class ScriptedApi(responses: List<String>) {
                 // should fail on the assertion that says so, not on a transport
                 // error from inside the SDK.
                 val body = if (queued.size > 1) queued.removeFirst() else queued.first()
-                return MockResponse()
-                    .setHeader("Content-Type", "application/json")
-                    .setBody(body)
+
+                // **A streaming request gets a stream.** The session streams
+                // whenever the panel is listening, and the SDK's streaming call
+                // reads an event stream -- handed a plain JSON body it yields
+                // no events at all, so the turn came back empty: no answer, no
+                // tool call, no approval, and nothing anywhere saying why. Six
+                // tests failed that way at once, which is what a full sweep is
+                // for.
+                //
+                // Converted from the same fixture rather than scripted
+                // separately, so a test writes one message and both transports
+                // serve it.
+                val streaming = runCatching { request.body.peek().readUtf8() }
+                    .getOrDefault("")
+                    .contains("\"stream\":true")
+                return if (streaming) {
+                    MockResponse()
+                        .setHeader("Content-Type", "text/event-stream")
+                        .setBody(asEvents(body))
+                } else {
+                    MockResponse()
+                        .setHeader("Content-Type", "application/json")
+                        .setBody(body)
+                }
             }
         }
         server.start()
@@ -100,6 +123,114 @@ internal class ScriptedApi(responses: List<String>) {
         )
 
         data class Call(val id: String, val name: String, val inputJson: String)
+
+        /**
+         * One scripted message, as the events the Messages API would send.
+         *
+         * Only the events `MessageAccumulator` needs to rebuild the message:
+         * a start carrying everything but the content, a start/delta/stop per
+         * content block, and a delta carrying the stop reason. Text arrives as
+         * one `text_delta` and a tool call's input as one `input_json_delta` --
+         * real traffic splits both across many, and splitting them here would
+         * test the SDK's reassembly rather than ours.
+         */
+        internal fun asEvents(messageJson: String): String {
+            val message = JSONObject(messageJson)
+            val content = message.optJSONArray("content") ?: JSONArray()
+            val stopReason = message.optString("stop_reason")
+
+            val shell = JSONObject(messageJson).put("content", JSONArray())
+            val out = StringBuilder()
+            fun event(type: String, payload: JSONObject) {
+                payload.put("type", type)
+                out.append("event: ").append(type).append('\n')
+                    .append("data: ").append(payload).append("\n\n")
+            }
+
+            event("message_start", JSONObject().put("message", shell))
+            for (index in 0 until content.length()) {
+                val block = content.getJSONObject(index)
+                when (block.optString("type")) {
+                    "text" -> {
+                        event(
+                            "content_block_start",
+                            JSONObject().put("index", index).put(
+                                "content_block",
+                                JSONObject().put("type", "text").put("text", ""),
+                            ),
+                        )
+                        event(
+                            "content_block_delta",
+                            JSONObject().put("index", index).put(
+                                "delta",
+                                JSONObject().put("type", "text_delta")
+                                    .put("text", block.optString("text")),
+                            ),
+                        )
+                    }
+
+                    "thinking" -> {
+                        event(
+                            "content_block_start",
+                            JSONObject().put("index", index).put(
+                                "content_block",
+                                JSONObject().put("type", "thinking")
+                                    .put("thinking", "").put("signature", ""),
+                            ),
+                        )
+                        event(
+                            "content_block_delta",
+                            JSONObject().put("index", index).put(
+                                "delta",
+                                JSONObject().put("type", "thinking_delta")
+                                    .put("thinking", block.optString("thinking")),
+                            ),
+                        )
+                        // The signature arrives as its own delta, and the loop
+                        // has to replay it: a fixture that dropped it would let
+                        // a session that loses signatures pass.
+                        event(
+                            "content_block_delta",
+                            JSONObject().put("index", index).put(
+                                "delta",
+                                JSONObject().put("type", "signature_delta")
+                                    .put("signature", block.optString("signature")),
+                            ),
+                        )
+                    }
+
+                    "tool_use" -> {
+                        event(
+                            "content_block_start",
+                            JSONObject().put("index", index).put(
+                                "content_block",
+                                JSONObject().put("type", "tool_use")
+                                    .put("id", block.optString("id"))
+                                    .put("name", block.optString("name"))
+                                    .put("input", JSONObject()),
+                            ),
+                        )
+                        event(
+                            "content_block_delta",
+                            JSONObject().put("index", index).put(
+                                "delta",
+                                JSONObject().put("type", "input_json_delta")
+                                    .put("partial_json", block.optJSONObject("input").toString()),
+                            ),
+                        )
+                    }
+                }
+                event("content_block_stop", JSONObject().put("index", index))
+            }
+            event(
+                "message_delta",
+                JSONObject()
+                    .put("delta", JSONObject().put("stop_reason", stopReason).put("stop_sequence", JSONObject.NULL))
+                    .put("usage", JSONObject(USAGE)),
+            )
+            event("message_stop", JSONObject())
+            return out.toString()
+        }
 
         private fun quote(value: String) = "\"" + value
             .replace("\\", "\\\\")

@@ -611,3 +611,65 @@ Still open, and reordered by what the device actually did:
   freezer or lmkd did it is still unmeasured.
 - **The 3B**, unmeasured and not on any disk here.
 - **The Vulkan backend on a phone's GPU**, untried.
+
+## 11. Which models to offer: licence first, refusals second
+
+Asked to find the freest and least restricted models for the on-device
+provider. Both halves were checked against Hugging Face's API rather than
+recalled, on 2026-09-26.
+
+### "Free" is a licence question, and this family is not uniform
+
+`Qwen2.5-Coder` **is Apache-2.0 at 0.5B, 1.5B and 7B — and `license:other` at
+3B.** The 3B is under Qwen's research licence, which does not permit commercial
+use. That is already why the picker labels it, and it is worth restating because
+the trap repeats one level down: `bartowski`'s *abliterated* 3B is also
+`license:other`, because an abliteration is a derivative and inherits the base's
+terms. A model's freedom is not a property of the person who quantised it.
+
+For comparison, all Apache-2.0 and all with GGUF builds: `Qwen3` at 1.7B/4B/8B
+(the 4B is 2.5 GB at Q4_K_M, so it fits a phone), IBM's `granite-3.3-2b` and
+`granite-8b-code`, `SmolLM3-3B`, and AI2's `OLMo-2` — the last being the freest
+in the strongest sense, with open data and training code as well as weights,
+though it is not a coding model. None of these has been measured here.
+
+Not free, whatever else they are: Llama (community licence, with an acceptable
+use policy and a 700M-MAU clause), Gemma (its own terms plus a prohibited use
+policy), and most recent Mistral releases (research licence).
+
+### Refusals: what abliteration is, and what it costs
+
+The two offered now are `bartowski/Qwen2.5-Coder-{1.5B,7B}-Instruct-abliterated`,
+**Apache-2.0**, same base and same Q4_K_M quantisation as the stock pair. Same
+base on purpose: §9 measured the stock 1.5B on this phone, so the abliterated one
+has a number to be judged against rather than being a change of everything at
+once.
+
+Abliteration suppresses the direction in the residual stream that produces a
+refusal. It does not make a model better, and the published evidence is that it
+costs some instruction-following. **That matters more here than it would
+elsewhere**: §9's entire difficulty was a 1.5B that would not stop calling
+tools, and the fix was half prompt and half a structural guard. The honest
+expectation is fewer refusals and somewhat worse loop behaviour — the guard
+holds either way, and `LocalModelTerminationTest` is the measurement to re-run
+before believing otherwise.
+
+**Worth saying plainly: a coding assistant's refusals are mostly not a safety
+problem.** The refusal §9 actually hit was "the code is not provided ... so I
+cannot read the file", from a model holding a `read_file` tool — caused by a
+prompt that listed only prohibitions, and fixed by reordering it. Reaching for
+an uncensored model to solve that class of problem would have changed the model
+and left the bug.
+
+### The picker could not have shown them
+
+Adding a second 1.5B exposed a latent bug. The picker matched a stored model
+name to a downloadable component **by finding the same size in both ids**, with
+a comment explaining that a new model would then need no edit. That held exactly
+until two models shared a size: the abliterated 1.5B rendered as a second chip
+also reading "1.5B", and the lookup returned the stock component for both, so
+one of the two could never be selected. Nothing failed and nothing said so.
+
+The mapping is exact in both directions now, and `LocalModelPickerTest` asserts
+that every downloadable model is selectable and round-trips — it fails against
+the old heuristic.

@@ -571,6 +571,24 @@ data class ToolchainComponent(
                 bytes = 4_683_073_536L,
                 sha256 = "509287f78cb4d4cf6b3843734733b914b2c158e43e22a7f4bf5e963800894d3c",
             ),
+            abliterated(
+                size = "1.5b",
+                label = "Qwen2.5-Coder 1.5B (no refusals)",
+                repo = "bartowski/Qwen2.5-Coder-1.5B-Instruct-abliterated-GGUF",
+                file = "Qwen2.5-Coder-1.5B-Instruct-abliterated-Q4_K_M.gguf",
+                revision = "823ab8183896816dec7d29899310b556e655ad73",
+                bytes = 1_117_321_696L,
+                sha256 = "389b8172028c874b79a11358d258222dbce272b56ab3512ccc743893a25e06b4",
+            ),
+            abliterated(
+                size = "7b",
+                label = "Qwen2.5-Coder 7B (no refusals)",
+                repo = "bartowski/Qwen2.5-Coder-7B-Instruct-abliterated-GGUF",
+                file = "Qwen2.5-Coder-7B-Instruct-abliterated-Q4_K_M.gguf",
+                revision = "a416f57ecabe9841551055493e6945895e54e135",
+                bytes = 4_683_074_400L,
+                sha256 = "fdf02c16fb654ff60b2c30f1e91573ebc603a7084df3449df89120dca2b18170",
+            ),
         )
 
         private fun model(size: String, label: String, revision: String, bytes: Long, sha256: String): ToolchainComponent {
@@ -588,6 +606,52 @@ data class ToolchainComponent(
                 requiresSdkLicense = false,
             )
         }
+
+        /**
+         * The same models with their refusal behaviour removed.
+         *
+         * **Why these two and not something more exotic.** They are *the same
+         * base and the same quantisation* as the two above, so switching is a
+         * like-for-like comparison rather than a change of everything at once --
+         * and §9 of `tools/localai/FINDINGS.md` measured the stock 1.5B on this
+         * hardware, which gives the abliterated one a number to be judged
+         * against.
+         *
+         * **Both are Apache-2.0, and that is not automatic.** Abliteration is a
+         * derivative, so it inherits the base's terms: the 3B of this family is
+         * under Qwen's research licence, and `bartowski`'s abliterated 3B is
+         * correspondingly `license:other`. It is deliberately not offered here
+         * for the same reason the stock 3B is labelled -- a model a user cannot
+         * use commercially does not belong in a picker without saying so.
+         *
+         * **What "abliterated" does and does not do.** It suppresses the
+         * direction in the residual stream that produces a refusal. It does not
+         * make the model better, and the published evidence is that it costs
+         * some instruction-following -- which matters here more than it would
+         * elsewhere, because §9's whole difficulty was a 1.5B that would not
+         * stop calling tools. The honest expectation is fewer refusals and
+         * somewhat worse loop behaviour; the app has the guard for the second
+         * either way.
+         */
+        private fun abliterated(
+            size: String,
+            label: String,
+            repo: String,
+            file: String,
+            revision: String,
+            bytes: Long,
+            sha256: String,
+        ) = ToolchainComponent(
+            id = "model-qwen2.5-coder-$size-abliterated-q4km",
+            displayName = label,
+            archiveUrl = "https://huggingface.co/$repo/resolve/$revision/$file",
+            archiveSha1 = "",
+            archiveSha256 = sha256,
+            archiveBytes = bytes,
+            archive = ComponentArchive.SingleFile(file),
+            installedBytes = bytes,
+            requiresSdkLicense = false,
+        )
 
         private val ABIS = listOf("arm64-v8a", "x86_64")
 

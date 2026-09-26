@@ -193,30 +193,40 @@ internal fun LocalServerControl(
 /**
  * The model id this provider stores for [component], and back again.
  *
- * `AiProviderType.LOCAL.availableModels` holds short names and
- * `ToolchainComponent.LOCAL_MODELS` holds component ids; this is the one place
- * the two are matched, by the size in both. Matching on the size rather than a
- * table means adding a fifth model needs no edit here -- and a size present in
- * one list and absent from the other simply does not select, rather than
- * selecting the wrong file.
+ * **Matched on the whole name, not on the size in it.** This used to find the
+ * first component whose id contained the same `1.5b`, on the reasoning that a
+ * new model would then need no edit here. That held exactly until two models
+ * shared a size: adding the abliterated 1.5B produced a second chip also
+ * labelled "1.5B", and `modelFor` returned the stock one for both -- so one of
+ * the two could never be selected, and nothing said so. The mapping is now
+ * exact in both directions, and `localModelsAreSelectable` asserts it.
  */
-private fun modelIdFor(component: ToolchainComponent): String =
-    AiProviderType.LOCAL.availableModels.firstOrNull { name ->
-        sizeOf(name) != null && sizeOf(name) == sizeOf(component.id)
-    } ?: AiProviderType.LOCAL.defaultModel
+internal fun modelIdFor(component: ToolchainComponent): String =
+    component.id.removePrefix(MODEL_PREFIX).removeSuffix(MODEL_SUFFIX)
 
-private fun modelFor(storedModelId: String?): ToolchainComponent? {
-    val size = sizeOf(storedModelId.orEmpty()) ?: return null
-    return ToolchainComponent.LOCAL_MODELS.firstOrNull { sizeOf(it.id) == size }
+internal fun modelFor(storedModelId: String?): ToolchainComponent? {
+    val id = storedModelId?.takeIf { it.isNotBlank() } ?: return null
+    return ToolchainComponent.LOCAL_MODELS.firstOrNull { modelIdFor(it) == id }
 }
 
 /** `0.5b`, `1.5b`, `3b`, `7b` — whichever of those appears in [text]. */
 private fun sizeOf(text: String): String? =
     Regex("""(\d+(?:\.\d+)?b)""").find(text.lowercase())?.groupValues?.get(1)
 
-/** "1.5B", from a display name that also carries the licence and the family. */
-private fun shortLabel(component: ToolchainComponent): String =
-    sizeOf(component.id)?.uppercase() ?: component.displayName
+/**
+ * What a chip says: the size, plus a mark when refusals have been removed.
+ *
+ * Two chips reading "1.5B" would be a coin toss, and the difference between
+ * them is the whole reason the second one is offered.
+ */
+private fun shortLabel(component: ToolchainComponent): String {
+    val size = sizeOf(component.id)?.uppercase() ?: return component.displayName
+    return if (ABLITERATED in component.id) "$size free" else size
+}
+
+private const val MODEL_PREFIX = "model-"
+private const val MODEL_SUFFIX = "-q4km"
+private const val ABLITERATED = "abliterated"
 
 internal const val LOCAL_SERVER_STATUS_TAG = "local-server-status"
 internal const val LOCAL_SERVER_START_TAG = "local-server-start"

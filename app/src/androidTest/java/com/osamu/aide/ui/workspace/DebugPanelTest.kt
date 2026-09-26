@@ -151,13 +151,18 @@ class DebugPanelTest {
                 DebugPanel(state = state, actions = NO_DEBUG_ACTIONS, projectRoot = root, unavailableReason = null)
             }
         }
-        compose.onNodeWithText("Step over").assertIsNotEnabled()
+        // **"Over", not "Step over".** The buttons were relabelled and given
+        // icons so three of them fit across 360 dp; this assertion was not
+        // updated, so it has been failing since 2026-09-16 -- invisible because
+        // nothing ran the whole suite. The rule it guards is unchanged: a step
+        // control is dead while the program is running.
+        compose.onNodeWithText("Over").assertIsNotEnabled()
         compose.onNodeWithText("Resume").assertIsNotEnabled()
         compose.onNodeWithContentDescription("Stop debugging").assertIsEnabled()
 
         state = stopped()
         compose.waitForIdle()
-        compose.onNodeWithText("Step over").assertIsEnabled()
+        compose.onNodeWithText("Over").assertIsEnabled()
     }
 
     @Test

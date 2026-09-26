@@ -86,6 +86,12 @@ enum class AiProviderType(
             "qwen2.5-coder-3b",
             "qwen2.5-coder-0.5b",
             "qwen2.5-coder-7b",
+            // Same base and quantisation, refusal behaviour removed. Named by
+            // what they are rather than by size alone, because there are now
+            // two models of each size and a picker that shows "1.5B" twice
+            // tells the user nothing about which is which.
+            "qwen2.5-coder-1.5b-abliterated",
+            "qwen2.5-coder-7b-abliterated",
         ),
     ),
     CUSTOM(

@@ -332,7 +332,12 @@ class ApiKeySectionTest {
             .performTextInput("http://gateway.internal")
 
         compose.onNodeWithText("Save endpoint").performScrollTo().assertIsNotEnabled()
-        compose.onNodeWithText("https is required.", substring = true).assertExists()
+        // Matched on the stem, not on a full stop. The message gained a clause
+        // when loopback became an exception -- "https is required *for anything
+        // but 127.0.0.1*" -- and the old substring ended at a period that no
+        // longer follows "required", so this asserted nothing and failed for a
+        // reason unrelated to what it tests.
+        compose.onNodeWithText("https is required", substring = true).assertExists()
         compose.onNodeWithText("Save key").performScrollTo().assertIsEnabled()
     }
 
