@@ -1,0 +1,164 @@
+package com.osamu.aide.ai.core
+
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import com.osamu.aide.core.common.DefaultDispatcherProvider
+import kotlinx.coroutines.test.runTest
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import java.io.File
+
+@RunWith(AndroidJUnit4::class)
+class AssistantTest {
+
+    private lateinit var keys: ApiKeyStore
+    private lateinit var root: File
+    private var api: ScriptedApi? = null
+
+    @Before
+    fun setUp() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        keys = ApiKeyStore(context)
+        keys.clear()
+        // clear() deliberately spares the endpoint -- it is a separate,
+        // visible setting -- so a test that sets one would otherwise leak it
+        // into whatever runs next on the same device.
+        keys.saveBaseUrl(Endpoint.Default)
+        root = File(context.cacheDir, "assistant-${System.nanoTime()}").apply { mkdirs() }
+        File(root, "src/Main.kt").apply { parentFile?.mkdirs() }.writeText("fun main() = Unit")
+        File(root, "build/generated/Junk.kt").apply { parentFile?.mkdirs() }.writeText("x")
+    }
+
+    @After
+    fun tearDown() {
+        api?.stop()
+        keys.clear()
+        keys.saveBaseUrl(Endpoint.Default)
+        // Spared by clear() as well, and the Custom tests set both.
+        keys.saveCustomBaseUrl(null)
+        keys.setActiveProvider(AiProviderType.ANTHROPIC)
+        root.deleteRecursively()
+    }
+
+    private fun assistant() = Assistant(
+        keys = keys,
+        dispatchers = DefaultDispatcherProvider(),
+        clientFactory = { _, _ -> ScriptedApi(listOf(ScriptedApi.text("hi"))).also { api = it }.client() },
+    )
+
+    /** No key is the state every user starts in, so it must not be an error. */
+    /**
+     * Custom with a key but no address has no session and no completer.
+     *
+     * It had both, built on an `OpenAiClient` that fell back to api.openai.com
+     * -- so the key saved under Custom went to OpenAI. Found on a phone as
+     * OpenAI's 404 for `llama3.3:70b`, a model it has never served.
+     */
+    @Test
+    fun custom_with_a_key_but_no_address_gets_no_session() {
+        keys.setActiveProvider(AiProviderType.CUSTOM)
+        keys.saveCustomApiKey("gsk-a-key-for-some-other-service")
+        keys.saveCustomBaseUrl(null)
+
+        assertNull("a session was built with nowhere to send it", assistant().session(root, Approver { _, _ -> true }))
+        assertNull("a completer was built with nowhere to send it", assistant().completer())
+    }
+
+    /** The address is what makes Custom usable; its key is optional, as Ollama's is. */
+    @Test
+    fun custom_with_an_address_and_no_key_gets_a_session() {
+        keys.setActiveProvider(AiProviderType.CUSTOM)
+        keys.saveCustomBaseUrl("https://ollama.local")
+
+        assertNotNull(assistant().session(root, Approver { _, _ -> true }))
+    }
+
+    @Test
+    fun there_is_no_session_without_a_key() {
+        assertNull(assistant().session(root, Approver { _, _ -> true }))
+    }
+
+    @Test
+    fun a_stored_key_produces_a_working_session() = runTest {
+        keys.save("sk-ant-test")
+        val session = assistant().session(root, Approver { _, _ -> true })
+
+        assertNotNull(session)
+        assertEquals("hi", session!!.send(projectContext(ProjectFiles(root)), "hello").text)
+    }
+
+    /**
+     * The key is read per session rather than cached.
+     *
+     * A user who fixes a wrong key in settings and gets a 401 anyway has no way
+     * to tell that the app is still holding the old one.
+     */
+    @Test
+    fun a_replaced_key_is_picked_up_by_the_next_session() {
+        val seen = mutableListOf<String>()
+        val assistant = Assistant(
+            keys = keys,
+            dispatchers = DefaultDispatcherProvider(),
+            clientFactory = { key, _ ->
+                seen += key
+                ScriptedApi(listOf(ScriptedApi.text("hi"))).also { api?.stop(); api = it }.client()
+            },
+        )
+
+        keys.save("sk-ant-first")
+        assistant.session(root, Approver { _, _ -> true })
+        keys.save("sk-ant-second")
+        assistant.session(root, Approver { _, _ -> true })
+
+        assertEquals(listOf("sk-ant-first", "sk-ant-second"), seen)
+    }
+
+    /**
+     * The endpoint is read per session too, for the same reason the key is.
+     *
+     * Passing null when none is set matters as much as passing the value: the
+     * SDK's own default URL is only used when `baseUrl` is left unset, so a
+     * store returning "" here would point every request at a relative address.
+     */
+    @Test
+    fun the_stored_endpoint_reaches_the_client_and_null_means_the_default() {
+        val seen = mutableListOf<String?>()
+        val assistant = Assistant(
+            keys = keys,
+            dispatchers = DefaultDispatcherProvider(),
+            clientFactory = { _, baseUrl ->
+                seen += baseUrl
+                ScriptedApi(listOf(ScriptedApi.text("hi"))).also { api?.stop(); api = it }.client()
+            },
+        )
+
+        keys.save("sk-ant-test")
+        assistant.session(root, Approver { _, _ -> true })
+        keys.saveBaseUrl(Endpoint.Custom("https://gateway.internal"))
+        assistant.session(root, Approver { _, _ -> true })
+        assistant.completer()
+
+        assertEquals(listOf(null, "https://gateway.internal", "https://gateway.internal"), seen)
+    }
+
+    /** The context is the project and only the project — see PromptAssembler. */
+    @Test
+    fun the_project_context_is_the_file_tree_without_build_output() {
+        val context = projectContext(ProjectFiles(root))
+
+        assertTrue("the source file is missing from the context:\n$context", "src/Main.kt" in context)
+        assertTrue("build output leaked into the cached prefix:\n$context", "Junk.kt" !in context)
+    }
+
+    /** Twice in a row, because the prefix has to be byte-stable to cache. */
+    @Test
+    fun the_project_context_does_not_vary_between_calls() {
+        assertEquals(projectContext(ProjectFiles(root)), projectContext(ProjectFiles(root)))
+    }
+}
