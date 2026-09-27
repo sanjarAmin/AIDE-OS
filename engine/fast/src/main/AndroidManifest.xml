@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        Without this the system silently refuses to open an install session at
+        all. It is a "special" permission: it is not requested at run time but
+        toggled by the user in Settings, and any app installed outside a store
+        starts without it. ApkInstaller therefore has to check canRequestPackageInstalls()
+        and send the user there, rather than treat the refusal as an error.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+</manifest>
