@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- The tool loop is exercised against a MockWebServer on loopback. Android
+         has blocked cleartext by default since API 28, and the failure presents
+         as `AnthropicIoException: Request failed` from inside the SDK, which
+         reads like an SDK fault three frames above the real cause.
+         tools/ai/FINDINGS.md section 2. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application android:networkSecurityConfig="@xml/network_security_config" />
+
+</manifest>
