@@ -1,0 +1,156 @@
+pluginManagement {
+    repositories {
+        google {
+            content {
+                includeGroupByRegex("com\\.android.*")
+                includeGroupByRegex("com\\.google.*")
+                includeGroupByRegex("androidx.*")
+            }
+        }
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+plugins {
+    id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "AIDE-OS"
+
+include(":app")
+
+// Core infrastructure shared by every feature module.
+include(":core:common")
+include(":core:fs")
+include(":core:ui")
+
+// The code editor: sora-editor wrapped for Compose, plus tree-sitter grammars.
+include(":editor")
+
+// The build engine. Named :engine rather than the plan's :build because a
+// source directory called build/ is the root project's Gradle output directory:
+// gradlew clean would delete it and .gitignore would hide it.
+include(":engine:api")
+include(":engine:fast")
+
+// The other engine: Gradle, driven on the device's own JVM. Spike R11 removed
+// the rootfs this was planned to bridge into -- there is no guest, only a JDK.
+include(":engine:gradle")
+include(":engine:node")
+include(":engine:mono")
+include(":engine:python")
+
+// Maven resolution and AAR extraction. Spike R4 (tools/deps/FINDINGS.md) is
+// the design input; the resolver needs four workarounds to run on ART.
+include(":engine:deps")
+
+// Bundled native executables (aapt2 today, clang later) and the exec harness.
+include(":toolchain:native")
+
+// Components too large to bundle: downloaded, verified, installed on device.
+include(":toolchain:manager")
+
+// The AI layer: Anthropic client, session state, tool definitions, context
+// assembly. Bring-your-own-key; see tools/ai/FINDINGS.md for spike R5.
+include(":ai:core")
+
+// The AI layer's Compose surface. Thin on purpose -- the decisions live in
+// :ai:core so they can be tested without a composition.
+include(":ai:ui")
+
+// Java language intelligence: completion, diagnostics, go-to-definition. In
+// process, not over a socket -- see :lsp:client for the transports the C++ and
+// Kotlin servers will need. Spike R3 in tools/javals/FINDINGS.md is the design
+// input; the short version is that a compiler has to stay warm between
+// keystrokes or nothing here meets its latency budget.
+// The contract the editor talks to, and the models both language services
+// return. Separate from either implementation for the reason :engine:api is
+// separate from :engine:fast: the editor must not know whether an answer came
+// from a compiler in this process or a clangd subprocess.
+include(":lsp:api")
+
+include(":lsp:java")
+
+// C and C++ intelligence, which is clangd over stdio rather than a compiler in
+// this process. It arrives with M7, which is the milestone that needs it.
+include(":lsp:native")
+include(":lsp:node")
+
+// Kotlin intelligence, which is neither of the shapes above: the Analysis API
+// runs in this process like javac, but in its own dex archive behind a
+// classloader nothing here can name. Spike R12 established it answers, and what
+// it costs; tools/analysisapi/FINDINGS.md is the account.
+include(":lsp:kotlin")
+
+// Spike R3 -- a Java language-intelligence core on ART. Not part of the app.
+include(":spike:javals")
+
+// Spike R4 -- Maven resolution on ART, which M4 is designed around. Not part
+// of the app.
+include(":spike:deps")
+
+// Spike R5 -- the Anthropic SDK on ART, which M5 is designed around. Not part
+// of the app.
+include(":spike:ai")
+
+// Spike R10 -- clang on a device. It runs, and the .so it builds loads: the
+// tests here are what says so, and they are also where the two rules M7 has
+// to obey are pinned. Kept rather than retired, because a toolchain update
+// is exactly when they need re-checking. Not part of the app.
+include(":spike:clang")
+
+// Spike R11 -- PRoot and a Linux rootfs on a current Android, which is what
+// risk R4 is about and what M9 rests on. Not part of the app.
+include(":spike:rootfs")
+include(":spike:nodejs")
+include(":spike:mono")
+
+// Spike R12: can the Kotlin Analysis API answer on ART? The compiler already
+// runs there (R2); this asks whether the API that reads code rather than
+// compiling it will load beside it, once relocated onto the compiler's own
+// shaded namespace. tools/analysisapi/FINDINGS.md.
+include(":spike:kotlinls")
+
+// Spike R9 -- executing a downloaded native binary, which M7 is designed
+// around and which docs/PLAN.md is currently inconsistent about. Not part of
+// the app.
+include(":spike:nativeexec")
+
+// A pseudoterminal and the shell in it. Spike R7 answered the platform
+// questions; the terminal *emulator* is a separate decision and is not here.
+include(":terminal")
+
+// Version control. JGit, which spike R6 found needs no workarounds on ART --
+// but which gets no global config or credential helper there, so identity and
+// tokens are this module's to store.
+include(":vcs:git")
+
+// Spike R6 -- JGit on ART, which M8 is designed around. Not part of the app.
+include(":spike:git")
+
+// The debugger. Spike R15 asks the permission question first: whether an
+// unprivileged app may attach to another app's JDWP at all, which decides
+// whether :debugger is a JDWP client or something else entirely.
+include(":spike:jdwp")
+
+// The debugger. Spike R15 answered the permission question first, and the
+// answer moved the module: it is a JDWP *client*, and the debuggee is a debug
+// build we produced, which attaches the platform's own agent to itself.
+include(":debugger")
+
+// Spike R16: a coding model on the phone itself, through Termux's llama.cpp
+// and the OpenAI-compatible API the Custom provider already speaks.
+include(":spike:localai")
+
+// The app R15 debugs. A second package on purpose: whether one app may reach
+// another's loopback JDWP port is the question that decides the debugger's
+// shape, and one process talking to itself cannot answer it.
+include(":spike:jdwpdebuggee")
+

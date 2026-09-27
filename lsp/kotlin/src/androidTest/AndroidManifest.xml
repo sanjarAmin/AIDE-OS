@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        Test-only, and never merged into the app.
+
+        A resident Analysis API session is a symbol table's worth of the Kotlin
+        front end, and with android.jar on the classpath it does not fit the
+        default 192 MB heap. The suite died with
+
+            Failed to allocate a 672244 byte allocation ...
+            growth limit 201326592; giving up on allocation
+
+        and the damage read as something else entirely. The tests that ran out
+        of memory were not the ones that allocated; they were the *next* ones,
+        whose sessions then failed to open and answered every query with an
+        empty list. Empty is a legitimate answer here, because LanguageService
+        says nothing is an ordinary answer, so nothing threw and it looked
+        instead as though extensions had stopped working.
+
+        :app sets largeHeap and always has, so the shipped IDE was never
+        affected. Only this harness was, by being quietly stricter than the
+        environment the service actually runs in. The test manifest of
+        :engine:fast carries the same fix for the same reason, found the same
+        way.
+    -->
+    <application android:largeHeap="true" />
+
+</manifest>
