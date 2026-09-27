@@ -124,6 +124,8 @@ tree-sitter-kotlin = { group = "com.itsaky.androidide.treesitter", name = "tree-
 tree-sitter-xml = { group = "com.itsaky.androidide.treesitter", name = "tree-sitter-xml", version.ref = "treeSitter" }
 tree-sitter-json = { group = "com.itsaky.androidide.treesitter", name = "tree-sitter-json", version.ref = "treeSitter" }
 tree-sitter-python = { group = "com.itsaky.androidide.treesitter", name = "tree-sitter-python", version.ref = "treeSitter" }
+tree-sitter-c = { group = "com.itsaky.androidide.treesitter", name = "tree-sitter-c", version.ref = "treeSitter" }
+tree-sitter-cpp = { group = "com.itsaky.androidide.treesitter", name = "tree-sitter-cpp", version.ref = "treeSitter" }
 
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 

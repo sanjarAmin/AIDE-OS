@@ -196,17 +196,9 @@ class EditorHighlightTest {
             appendLine("    return greeting + name;")
             appendLine("}")
         }
-        instrumentation.runOnMainSync {
-            editor.setEditorLanguage(languages.languageFor(File("index.js")))
-            editor.setText(script)
-        }
-
         // Line 1 is `const greeting = ...`, which carries both a keyword and a
         // string: two different capture families from one line.
-        val deadline = System.currentTimeMillis() + ANALYSIS_TIMEOUT_MILLIS
-        while (System.currentTimeMillis() < deadline && colorsOn(1).size <= 1) {
-            Thread.sleep(POLL_INTERVAL_MILLIS)
-        }
+        analyseAs("index.js", script, line = 1)
 
         assertTrue(
             "`const` is not coloured as a keyword: ${colorsOn(1)}",
@@ -240,16 +232,8 @@ class EditorHighlightTest {
             appendLine("    return <section className=\"box\">{hello}</section>;")
             appendLine("}")
         }
-        instrumentation.runOnMainSync {
-            editor.setEditorLanguage(languages.languageFor(File("App.jsx")))
-            editor.setText(component)
-        }
-
         val tagLine = 3
-        val deadline = System.currentTimeMillis() + ANALYSIS_TIMEOUT_MILLIS
-        while (System.currentTimeMillis() < deadline && colorsOn(tagLine).size <= 1) {
-            Thread.sleep(POLL_INTERVAL_MILLIS)
-        }
+        analyseAs("App.jsx", component, line = tagLine)
 
         // `section` is captured as @tag, which the theme colours as an
         // identifier; `"box"` is a string. Both on one line means the JSX half
@@ -265,6 +249,136 @@ class EditorHighlightTest {
         assertTrue(
             "a comment is not coloured as one: ${colorsOn(0)}",
             EditorColorScheme.COMMENT in colorsOn(0),
+        )
+    }
+
+    /**
+     * Opens [text] as [fileName] and waits until [line] carries more than one
+     * colour -- one colour is what an unhighlighted line has.
+     *
+     * Throws on timeout rather than returning, as [analyse] does: otherwise a
+     * grammar that never produced a span fails as "`return` is not coloured",
+     * which reads as a wrong colour rather than as no highlighting at all.
+     */
+    private fun analyseAs(fileName: String, text: String, line: Int) {
+        instrumentation.runOnMainSync {
+            editor.setEditorLanguage(languages.languageFor(File(fileName)))
+            editor.setText(text)
+        }
+        val deadline = System.currentTimeMillis() + ANALYSIS_TIMEOUT_MILLIS
+        while (System.currentTimeMillis() < deadline) {
+            if (colorsOn(line).size > 1) return
+            Thread.sleep(POLL_INTERVAL_MILLIS)
+        }
+        throw AssertionError(
+            "$fileName: line $line still has one colour after ${ANALYSIS_TIMEOUT_MILLIS}ms: ${colorsOn(line)}",
+        )
+    }
+
+    /**
+     * The JNI template's own file, which opened entirely uncoloured: C and C++
+     * had no grammar, so they fell through to plain text with nothing to say so.
+     */
+    @Test
+    fun a_cpp_file_is_highlighted() {
+        val native = buildString {
+            appendLine("#include <jni.h>")                                    // 0
+            appendLine("// The name is the contract.")                        // 1
+            appendLine("extern \"C\" JNIEXPORT jstring JNICALL")                // 2
+            appendLine("Java_com_example_c_MainActivity_describe(JNIEnv *env) {") // 3
+            appendLine("    std::string message = \"C++ squared \";")          // 4
+            appendLine("    int squared = square(3);")                         // 5
+            appendLine("    return env->NewStringUTF(message.c_str());")       // 6
+            appendLine("}")
+        }
+        analyseAs("native.cpp", native, line = 4)
+
+        assertTrue(
+            "`#include` is not coloured as a keyword: ${colorsOn(0)}",
+            EditorColorScheme.KEYWORD in colorsOn(0),
+        )
+        assertTrue(
+            "a comment is not coloured as one: ${colorsOn(1)}",
+            EditorColorScheme.COMMENT in colorsOn(1),
+        )
+        // The `extern "C"` string only exists in C++'s grammar -- C's reads it
+        // as an error -- and `std::string` is a C++ type, so these two lines
+        // prove the C++ half of the concatenated query ran and not only C's.
+        assertTrue(
+            "`extern \"C\"` is not coloured: ${colorsOn(2)}",
+            EditorColorScheme.LITERAL in colorsOn(2),
+        )
+        assertTrue(
+            "`std::string` is not coloured as a type: ${colorsOn(4)}",
+            EditorColorScheme.IDENTIFIER_NAME in colorsOn(4),
+        )
+        assertTrue(
+            "a string literal is not coloured: ${colorsOn(4)}",
+            EditorColorScheme.LITERAL in colorsOn(4),
+        )
+        // The query's first pattern colours every identifier as a variable,
+        // and sora keeps whichever capture of a node it meets first -- so a
+        // call is only coloured as one if the more specific pattern wins.
+        assertTrue(
+            "a function call is not coloured as one: ${colorsOn(5)}",
+            EditorColorScheme.FUNCTION_NAME in colorsOn(5),
+        )
+        assertTrue(
+            "`return` is not coloured as a keyword: ${colorsOn(6)}",
+            EditorColorScheme.KEYWORD in colorsOn(6),
+        )
+    }
+
+    @Test
+    fun a_c_file_is_highlighted_by_the_c_grammar() {
+        val program = buildString {
+            appendLine("/* A C file. */")                         // 0
+            appendLine("int main(void) {")                        // 1
+            // `new` is an ordinary identifier in C and a keyword in C++: the
+            // reason `.c` has a grammar of its own.
+            appendLine("    int new = 1;")                        // 2
+            appendLine("    printf(\"%d\\n\", new);")             // 3
+            appendLine("    return 0;")                           // 4
+            appendLine("}")
+        }
+        analyseAs("main.c", program, line = 3)
+
+        assertEquals(EditorLanguage.C, EditorLanguage.of(File("main.c")))
+
+        assertTrue(
+            "a comment is not coloured as one: ${colorsOn(0)}",
+            EditorColorScheme.COMMENT in colorsOn(0),
+        )
+        assertTrue(
+            "`int` is not coloured as a type: ${colorsOn(1)}",
+            EditorColorScheme.IDENTIFIER_NAME in colorsOn(1),
+        )
+        assertTrue(
+            "a string literal is not coloured: ${colorsOn(3)}",
+            EditorColorScheme.LITERAL in colorsOn(3),
+        )
+        assertTrue(
+            "`return` is not coloured as a keyword: ${colorsOn(4)}",
+            EditorColorScheme.KEYWORD in colorsOn(4),
+        )
+    }
+
+    /** A header is claimed by C++, and a class in one is coloured as C++. */
+    @Test
+    fun a_header_is_read_as_cpp() {
+        val header = buildString {
+            appendLine("#pragma once")               // 0
+            appendLine("namespace demo {")           // 1
+            appendLine("class Greeter {")            // 2
+            appendLine("};")
+            appendLine("}")
+        }
+        analyseAs("greeter.h", header, line = 2)
+
+        assertEquals(EditorLanguage.CPP, EditorLanguage.of(File("greeter.h")))
+        assertTrue(
+            "`class` in a header is not coloured as a keyword: ${colorsOn(2)}",
+            EditorColorScheme.KEYWORD in colorsOn(2),
         )
     }
 

@@ -2,6 +2,8 @@ package com.osamu.aide.editor
 
 import android.content.Context
 import com.itsaky.androidide.treesitter.TSLanguage
+import com.itsaky.androidide.treesitter.c.TSLanguageC
+import com.itsaky.androidide.treesitter.cpp.TSLanguageCpp
 import com.itsaky.androidide.treesitter.java.TSLanguageJava
 import com.itsaky.androidide.treesitter.json.TSLanguageJson
 import com.itsaky.androidide.treesitter.kotlin.TSLanguageKotlin
@@ -42,6 +44,36 @@ enum class EditorLanguage(
      * it is Python syntax with the bodies elided.
      */
     PYTHON("Python", setOf("py", "pyw", "pyi"), "python", { TSLanguagePython.getInstance() }),
+
+    /**
+     * C, for `src/main/cpp` and anything cloned that holds it.
+     *
+     * Missing until the grammar was added, and what that looked like was not an
+     * error: every C and C++ file opened as plain text, in an app whose native
+     * templates exist to show them off.
+     */
+    C("C", setOf("c"), "c", { TSLanguageC.getInstance() }),
+
+    /**
+     * C++, and **every `.h`**.
+     *
+     * A header does not say which language it is, and the two grammars fail in
+     * opposite directions: C++'s parses nearly all C, while C's stops at the
+     * first `class`, `namespace` or `template` and leaves the rest of the
+     * declaration uncoloured. The JNI template's headers are C++, and a C
+     * header read as C++ loses almost nothing.
+     *
+     * The query is upstream's `highlights.scm` concatenated **after** C's,
+     * because tree-sitter-cpp's own `tree-sitter.json` declares its highlights
+     * as both files: its query only adds C++ on top and says nothing about
+     * comments, strings or most keywords.
+     */
+    CPP(
+        "C++",
+        setOf("cpp", "cc", "cxx", "c++", "h", "hh", "hpp", "hxx", "inl"),
+        "cpp",
+        { TSLanguageCpp.getInstance() },
+    ),
 
     /**
      * The one grammar this project builds itself; see [JavaScriptGrammar].

@@ -74,6 +74,12 @@ dependencies {
     // Python's grammar is published; JavaScript's is not, which is why one of
     // these is a dependency and the other is tools/treesitter/build-grammars.sh.
     implementation(libs.tree.sitter.python)
+    // C and C++ are separate grammars even though C++'s parses most C: a C
+    // file may name a variable `new` or `class`, and the C++ grammar reads
+    // that as a syntax error and stops colouring the rest of the statement.
+    // C's library is a fifth the size of C++'s, so keeping both is cheap.
+    implementation(libs.tree.sitter.c)
+    implementation(libs.tree.sitter.cpp)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

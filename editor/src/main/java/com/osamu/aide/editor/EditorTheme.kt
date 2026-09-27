@@ -29,16 +29,22 @@ object EditorTheme {
         "escape", "character", "number", "float", "constant", "constant.builtin",
     )
 
-    private val FUNCTIONS =
-        arrayOf("function", "function.method", "function.builtin", "constructor")
+    /**
+     * `function.special` is C's name for a function-like macro -- the `MAX` in
+     * `#define MAX(a, b)` -- which reads as a function at every call site.
+     */
+    private val FUNCTIONS = arrayOf(
+        "function", "function.method", "function.builtin", "function.special", "constructor",
+    )
 
     /** Types read as the structure of a file, so they carry extra emphasis. */
     private val TYPES = arrayOf("type", "type.builtin", "namespace", "tag")
 
     private val VARIABLES = arrayOf("variable", "variable.builtin", "parameter", "property")
 
+    /** `delimiter` is C's spelling of `punctuation.delimiter`: `;`, `.`, `,`. */
     private val PUNCTUATION =
-        arrayOf("operator", "punctuation.delimiter", "punctuation.bracket")
+        arrayOf("operator", "punctuation.delimiter", "punctuation.bracket", "delimiter")
 
     fun applyTo(builder: TsThemeBuilder): Unit = with(builder) {
         style(EditorColorScheme.KEYWORD, bold = true).applyTo(KEYWORDS)

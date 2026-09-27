@@ -13,6 +13,8 @@ vendored unmodified:
 | `python/` | [tree-sitter/tree-sitter-python](https://github.com/tree-sitter/tree-sitter-python) v0.23.6 | MIT |
 | `javascript/` | [tree-sitter/tree-sitter-javascript](https://github.com/tree-sitter/tree-sitter-javascript) v0.23.1 | MIT |
 | `javascriptx/` | the same, `highlights.scm` + `highlights-jsx.scm` concatenated | MIT |
+| `c/` | [tree-sitter/tree-sitter-c](https://github.com/tree-sitter/tree-sitter-c) v0.23.4 | MIT |
+| `cpp/` | tree-sitter-c v0.23.4 + [tree-sitter/tree-sitter-cpp](https://github.com/tree-sitter/tree-sitter-cpp) v0.23.4, concatenated in that order | MIT |
 
 ## The Kotlin query is edited; the rest are not
 
@@ -45,3 +47,26 @@ tree-sitter reports it as an offset into the query with no other context.
 `TreeSitterQueryTest` compiles every one of these against the grammar it belongs
 to on a device, so that mismatch is a test failure rather than a language that
 silently renders as plain text.
+
+## C++'s query is two files, C's first
+
+tree-sitter-cpp's `highlights.scm` is not a complete query. Its
+`tree-sitter.json` lists its highlights as tree-sitter-c's file **and then**
+its own, and on its own it colours no comments, no strings and almost no
+keywords -- a C++ file would have compiled, passed the capture test, and looked
+nearly plain. `cpp/highlights.scm` is the two concatenated in that order, the
+same move as `javascriptx/`.
+
+The grammars are `com.itsaky.androidide.treesitter`'s 4.3.2 builds, and the
+queries were matched to them before anything ran on a device: every node name,
+field name and literal in a candidate query was looked up in the grammar's
+`.so`, where the symbol table stores them as NUL-terminated strings. Every C
+query from v0.21.0 to v0.24.2 matches the prebuilt C grammar; every C++ query
+from v0.20.2 to v0.23.4 matches the C++ one when layered on C's. v0.23.4 was
+taken for both, to match the Python and JavaScript pins. Run the C++ query
+against the C grammar and the same check reports 33 names missing, which is
+what says the check can fail.
+
+`.h` belongs to C++: C's grammar stops colouring at the first `class` or
+`namespace`, while C++'s reads a C header with almost no loss.
+
