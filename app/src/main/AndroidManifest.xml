@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+        Downloading is not incidental to this app: the Android platform is a
+        63 MB component fetched on first build, and M4 resolves dependencies
+        straight from Google's and Maven Central's repositories. Without this
+        the failure surfaces from inside a DNS lookup as a SecurityException,
+        which reads as a bug in the resolver rather than a missing permission.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!--
+      The Logcat tab. An app sees only its own lines without this, so the tab
+      could not show the log of the app the user just built, which runs under a
+      different uid. With it declared, Android itself asks the user, one read
+      at a time: "Allow AIDE-OS to access all device logs?" with "Allow
+      one-time access" as the only yes. No root, no adb, no desktop.
+
+      The cost is that every install carries an app that can ask, and the
+      system dialog tells the user to allow it "only [for] apps you trust".
+      That is why it sat out of the manifest for a milestone, with
+      tools/logcat/FINDINGS.md as the deliverable instead. It is in now as a
+      deliberate product decision, not because it became technically easier.
+    -->
+    <uses-permission android:name="android.permission.READ_LOGS" />
+
+    <!--
+      The last step of the loop this app exists for: build, install, run.
+
+      ApkInstaller has always handled the refusal properly, checking
+      canRequestPackageInstalls() and offering the user
+      ACTION_MANAGE_UNKNOWN_APP_SOURCES. That offer was a dead end, because an
+      app that has not declared this does not appear on that Settings page at
+      all: the build produced a signed APK and then stopped, with a remedy that
+      could not work.
+
+      It went unnoticed because the install step has only ever been proven with
+      privileges the app does not have. ApkInstallerTest flips appops to make
+      canInstall() true, and the milestone's own acceptance test installs
+      through shell `pm install` and says so in a comment: "what is being tested
+      here is the APK, not the class."
+
+      This is the permission R5 in docs/PLAN.md is about. Play scrutinises it,
+      and the plan already treats F-Droid and a direct APK as the primary
+      channels. The argument for declaring it is the one the project rests on:
+      an IDE that cannot install what it compiles is not one.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!--
+        D8 dexes a whole project's classes in this process, and the Kotlin front
+        end will want considerably more when M4 wires it in. A default heap is
+        sized for an app, not for a compiler holding a program's type graph.
+
+        This is headroom, not isolation: an OOM here still takes the editor down
+        with the build, and the unsaved buffers with it. The fix docs/PLAN.md
+        asks for is a separate :build process behind a bound service, which this
+        does not replace.
+    -->
+    <!--
+        To launch the app a debug session just installed. Package visibility
+        hides other apps from this one on API 30 and up, so without this
+        getLaunchIntentForPackage answers null for a package that is plainly
+        installed. Launcher activities only: that is all Debug ever starts.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
+    <!--
+      networkSecurityConfig permits cleartext to 127.0.0.1 only, for a
+      llama-server this app starts itself. Scoped in that file rather than
+      android:usesCleartextTraffic, which would open plaintext to the remote
+      providers too, and their API key travels in a request header.
+      See tools/localai/FINDINGS.md section 5.
+    -->
+    <application
+        android:name=".AideApplication"
+        android:allowBackup="true"
+        android:largeHeap="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.AIDEOS">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.AIDEOS"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <!--
+                    Google's reverse-client-id scheme, not one we chose: an
+                    Android OAuth client accepts only this form. Matched on
+                    scheme alone because the redirect has no authority
+                    (`scheme:/oauth2redirect`), and an intent filter cannot
+                    match a path without a host.
+                -->
+                <data android:scheme="com.googleusercontent.apps.787312694223-4bhh6bk282u07553nc3iq1m7fuok6anh" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            Builds run here, not in the UI process. The Kotlin compiler's heap
+            is the reason (risk R3): held in the app's process it competes with
+            the editor and every open buffer, and an out-of-memory kill takes
+            the user's unsaved work with a build they could have retried.
+        -->
+        <!--
+            Asked by a debug build at startup whether a debugger is coming, so
+            a breakpoint in onCreate is placed before onCreate runs. Exported
+            because the asker is the user's app, in its own package; it answers
+            only about the calling package. In the main process, where the
+            debug session that sets the expectation lives.
+        -->
+        <provider
+            android:name=".debug.DebugHandshakeProvider"
+            android:authorities="${applicationId}.debug-handshake"
+            android:exported="true" />
+
+        <!--
+            Bound by an app under debug so the IDE is not frozen while that app
+            is in front. Exported because the binder is another package; it
+            returns an empty binder and does nothing else.
+        -->
+        <service
+            android:name=".debug.DebugSessionService"
+            android:exported="true" />
+
+        <service
+            android:name=".build.BuildService"
+            android:process=":build"
+            android:exported="false" />
+    </application>
+
+</manifest>
