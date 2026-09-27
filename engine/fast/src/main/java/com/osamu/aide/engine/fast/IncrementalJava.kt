@@ -99,6 +99,13 @@ internal class IncrementalJava(private val cacheDir: File) {
                 )
             }
         }
+        // **Every class it lists, or it is not a state.** This lives in
+        // `cacheDir`, which Android trims a file at a time under storage
+        // pressure. A kept class that had gone was skipped by `prepare` --
+        // leaving it out of the APK -- or thrown out of the build as a
+        // FileNotFoundException when its source changed. A stat each is cheap
+        // beside what the cache saves, and a miss costs one full compile.
+        if (classFiles.values.any { files -> files.any { !File(classes, it).isFile } }) return null
         State(
             settings,
             hashes.mapValues { (path, f) ->
@@ -107,6 +114,17 @@ internal class IncrementalJava(private val cacheDir: File) {
             savedAt,
         )
     }.getOrNull()
+
+    /**
+     * Forgets the state but keeps the classes, before they are changed.
+     *
+     * A partial save rewrites classes in place and then the state. Killed in
+     * between, the old state would describe classes that were no longer its
+     * own; with no state, the next build simply compiles in full.
+     */
+    fun invalidate() {
+        stateFile.delete()
+    }
 
     /**
      * Written to a sibling and renamed, so a build killed half way leaves the
@@ -185,10 +203,21 @@ internal class IncrementalJava(private val cacheDir: File) {
         /**
          * Which source each class file under [dir] came from, by source key.
          *
-         * By name first: `p/Outer$Inner.class` is from `p/Outer.java` whenever
-         * such a source exists, which it does for everything but a second
-         * top-level class in a file named for another. Only those are opened,
-         * for their `SourceFile` attribute.
+         * By name where the language guarantees it, and by the class file's
+         * `SourceFile` attribute everywhere else. Java requires a public
+         * top-level class to live in the file of its name, so `p/Outer$Inner`
+         * is from `p/Outer.java` whenever that exists. Kotlin's file facade
+         * `p/MainKt` is from `p/Main.kt`.
+         *
+         * **Kotlin requires nothing else**, and guessing cost an edit. A
+         * `data class User` in `Models.kt` beside a `User.kt` of extension
+         * functions was filed under `User.kt` by name. Editing `Models.kt` then
+         * reused the old `User.class` as if it were another file's, left the
+         * new one out of the ABI comparison -- so callers were not recompiled
+         * against a changed constructor -- and never saved it, so the next build
+         * linked the old class back and silently reverted the change. Every
+         * other Kotlin class is opened; a full compile pays for that, a partial
+         * one reads only what it just produced.
          */
         fun classFilesBySource(dir: File, keys: Set<String>, excluding: Set<String> = emptySet()): Map<String, List<String>> =
             dir.walkTopDown()
@@ -198,11 +227,10 @@ internal class IncrementalJava(private val cacheDir: File) {
                     if (relative in excluding) return@mapNotNull null
                     val pkg = relative.substringBeforeLast('/', "")
                     val top = relative.substringAfterLast('/').removeSuffix(".class").substringBefore('$')
-                    // `Main.java`, or for Kotlin `Main.kt` -- which also
-                    // compiles its top-level declarations into `MainKt`.
-                    val byName = listOf("$top.java", "$top.kt", "${top.removeSuffix("Kt")}.kt")
-                        .map { "$pkg/$it" }
-                        .firstOrNull { it in keys }
+                    val byName = "$pkg/$top.java".takeIf { it in keys }
+                        ?: top.takeIf { it.endsWith("Kt") }
+                            ?.let { "$pkg/${it.removeSuffix("Kt")}.kt" }
+                            ?.takeIf { it in keys }
                     val key = byName ?: runCatching { sourceKey(ClassAbi.read(file)) }.getOrNull()
                     key?.let { it to relative }
                 }

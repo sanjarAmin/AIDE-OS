@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Where the install got to.
@@ -82,9 +84,21 @@ class ApkInstaller(
             return@callbackFlow
         }
 
-        val action = "${context.packageName}.INSTALL_RESULT.${apk.absolutePath.hashCode()}"
+        // **One action per install, not per APK path.** The path is the same
+        // every build, so every session shared an action, and a receiver could
+        // not tell its own result from another's: tapping Run while the last
+        // install waited on its dialog abandoned that session, the system
+        // reported it aborted, and the *new* install's receiver took the
+        // report, said "Installation was cancelled" and abandoned its own
+        // healthy session. The session id is checked as well, belt and braces.
+        val action = "${context.packageName}.INSTALL_RESULT.${UUID.randomUUID()}"
+        // Written here, read on the main thread where the broadcast arrives.
+        val expectedSession = AtomicInteger(NO_SESSION)
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
+                val session = intent.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, NO_SESSION)
+                val expected = expectedSession.get()
+                if (session != NO_SESSION && expected != NO_SESSION && session != expected) return
                 when (val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -1)) {
                     PackageInstaller.STATUS_PENDING_USER_ACTION -> {
                         val confirmation = intent.confirmationIntent()
@@ -123,6 +137,7 @@ class ApkInstaller(
             // awaitClose still runs, so the receiver is unregistered.
             return@callbackFlow awaitClose { context.unregisterReceiver(receiver) }
         }
+        expectedSession.set(sessionId)
 
         installer.openSession(sessionId).use { session ->
             session.commit(
@@ -221,5 +236,8 @@ class ApkInstaller(
     private companion object {
         /** The name a full-install session expects its only APK under. */
         const val APK_ENTRY = "base.apk"
+
+        /** `PackageInstaller` session ids are positive; this is none of them. */
+        const val NO_SESSION = -1
     }
 }

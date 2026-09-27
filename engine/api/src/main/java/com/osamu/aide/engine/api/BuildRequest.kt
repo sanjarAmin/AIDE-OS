@@ -62,7 +62,8 @@ data class DependencyInputs(
      */
     val libraryPackages: List<String> = emptyList(),
     /**
-     * Each Android library's manifest, in resolution order.
+     * Each Android library's manifest, weakest first -- the order resources
+     * overlay in.
      *
      * Merged into the project's before anything is linked. A library's
      * components are not optional decoration: `androidx.startup` ships a
@@ -70,6 +71,13 @@ data class DependencyInputs(
      * without it they never run and nothing reports it.
      */
     val libraryManifests: List<File> = emptyList(),
+    /**
+     * Each library's `jni/` directory, holding one directory of `.so` files
+     * per ABI. Packaged for the device's ABI beside the project's own.
+     */
+    val nativeLibraryDirectories: List<File> = emptyList(),
+    /** Each library's `assets/`, weakest first; the project's own win. */
+    val assetDirectories: List<File> = emptyList(),
 ) {
     val isEmpty: Boolean get() = classpath.isEmpty() && resourceDirectories.isEmpty()
 }

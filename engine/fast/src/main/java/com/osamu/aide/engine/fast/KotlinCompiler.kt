@@ -57,7 +57,7 @@ class KotlinCompiler(private val toolchain: KotlinToolchain, cacheDir: File) {
      * the compiler's stdlib and its synthetics consistent with each other.
      */
     private val loader: ClassLoader by lazy {
-        if (!stagedStdlib.isFile) toolchain.stdlib.copyTo(stagedStdlib, overwrite = true)
+        stage(toolchain.stdlib, stagedStdlib)
         PathClassLoader(readOnlyArchive().absolutePath, Any::class.java.classLoader)
     }
 
@@ -81,13 +81,37 @@ class KotlinCompiler(private val toolchain: KotlinToolchain, cacheDir: File) {
     private fun readOnlyArchive(): File {
         val source = toolchain.archive
         val target = File(kotlinHome.parentFile, "kotlinc-readonly/${source.name}")
-        if (!target.isFile || target.length() != source.length()) {
-            target.parentFile?.mkdirs()
-            target.delete()
-            source.copyTo(target, overwrite = true)
-        }
+        stage(source, target)
         target.setWritable(false, false)
         return target
+    }
+
+    /**
+     * Keeps [target] a whole, current copy of [source].
+     *
+     * **The staged stdlib was copied once and never again.** It keeps its name
+     * across a compiler update, so after one kotlinc went on compiling against
+     * the old stdlib while the app packaged the new -- new APIs that would not
+     * resolve, or a metadata version kotlinc refused. And a copy cut short by
+     * process death passed the `isFile` check forever after, failing every
+     * Kotlin build until the cache was wiped.
+     *
+     * So: copied again when the source is newer or a different size, and
+     * always into a sibling that is renamed over the target, so the name only
+     * ever holds a finished copy. A copy is stamped "now", which is after the
+     * source it came from, so an unchanged source is never copied twice.
+     */
+    private fun stage(source: File, target: File) {
+        val current = target.isFile &&
+            target.length() == source.length() &&
+            target.lastModified() >= source.lastModified()
+        if (current) return
+        target.parentFile?.mkdirs()
+        val partial = File(target.parentFile, "${target.name}.partial")
+        partial.delete()
+        source.copyTo(partial, overwrite = true)
+        target.delete()
+        check(partial.renameTo(target)) { "could not stage ${source.name}" }
     }
 
     /** What the compiler said, and whether it succeeded. */

@@ -32,10 +32,13 @@ import javax.xml.transform.stream.StreamResult
  * with node markers, selectors, priorities and a full `tools:` namespace. This
  * implements the part every ordinary Android build depends on:
  *
- * - `<uses-permission>` and `<uses-feature>` are unioned by name;
+ * - `<uses-permission>`, `<uses-feature>` and `<permission>` are unioned by
+ *   name;
  * - the `<application>` element's children -- `<provider>`, `<receiver>`,
- *   `<service>`, `<activity>`, `<meta-data>` and the rest -- are added if the
- *   project does not already declare one with the same `android:name`;
+ *   `<service>`, `<activity>`, `<meta-data>` and the rest -- are added if
+ *   nothing merged so far declares one with the same `android:name`, and when
+ *   something does, **their named children are merged into it** (see
+ *   [mergeChildren]);
  * - `${applicationId}` is substituted, because a library authority is written
  *   as `${applicationId}.androidx-startup` and an unsubstituted one installs as
  *   a literal and collides with every other app that did the same.
@@ -44,7 +47,9 @@ import javax.xml.transform.stream.StreamResult
  * replaced, which is the one merge rule a user can reason about without reading
  * a specification.
  *
- * Of the `tools:` namespace, only `tools:node="remove"` is honoured. The other
+ * Of the `tools:` namespace, only `tools:node="remove"` is honoured -- on a
+ * library's element, which is then not merged, and on the project's, which
+ * keeps every library's same-named element out and is itself dropped. The other
  * markers describe how to combine an element with a same-named one, and the
  * project already wins that comparison here. They are stripped from the output
  * rather than passed through, because aapt2 refuses an unbound prefix -- and
@@ -63,20 +68,31 @@ internal object ManifestMerger {
      * Elements merged by union at the manifest's top level.
      *
      * Deliberately a list rather than "everything that is not `<application>`".
-     * `<uses-sdk>`, `<queries>` and `<permission>` all have merge rules of their
-     * own -- lowest wins, union with dedup by a different key, outright
-     * conflict -- and quietly unioning them would produce a manifest that
-     * differs from AGP's in ways nothing here would catch.
+     * `<uses-sdk>` and `<queries>` have merge rules of their own -- lowest wins,
+     * union with dedup by a different key -- and quietly unioning them would
+     * produce a manifest that differs from AGP's in ways nothing here would
+     * catch.
+     *
+     * **`<permission>` is here because leaving it out broke apps.** It was
+     * excluded for its conflict rule, while the `<uses-permission>` beside it
+     * was merged -- so `androidx.core`'s
+     * `${'$'}{applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` was
+     * requested and never defined, and `ContextCompat.registerReceiver` with
+     * `RECEIVER_NOT_EXPORTED` threw on API 30 to 32 because the app did not hold
+     * it. A conflict -- two declarations of one name -- keeps the stronger one,
+     * like every other element here.
      */
-    private val UNIONED = setOf("uses-permission", "uses-feature")
+    private val UNIONED = setOf("uses-permission", "uses-feature", "permission")
 
     /**
      * Merges [libraries] into [projectManifest], writing the result to [output].
      *
-     * Libraries are applied in order, so an earlier one is overridden by a
-     * later one where both declare the same component -- matching the overlay
-     * order `ResourceStage` uses for resources, so the two halves of a build
-     * do not disagree about which library came first.
+     * [libraries] arrive in overlay order, weakest first -- the order
+     * `ResourceStage` links resources in, where the last one wins -- so they are
+     * applied **last to first** here, where the first element of a name is the
+     * one kept. The two halves of a build then agree about which library is the
+     * stronger, which the previous version of this comment claimed and the
+     * code did not do.
      *
      * Returns [output] on success. On any failure the **project's own manifest
      * is returned unchanged**: a build that links the app's manifest alone is
@@ -104,11 +120,14 @@ internal object ManifestMerger {
             val declaredTop = root.childElements()
                 .filter { it.tagName in UNIONED }
                 .mapNotNullTo(mutableSetOf()) { it.key() }
-            val declaredComponents = application?.childElements()
-                ?.mapNotNullTo(mutableSetOf()) { it.key() }
-                ?: mutableSetOf()
+            // By key, to the element in the merged document: a later library's
+            // same-named component is merged into this one, not dropped.
+            val components = application?.childElements()
+                ?.mapNotNull { element -> element.key()?.let { it to element } }
+                ?.toMap(HashMap())
+                ?: HashMap()
 
-            libraries.filter { it.isFile }.forEach { library ->
+            libraries.filter { it.isFile }.asReversed().forEach { library ->
                 val source = runCatching { parse(library) }.getOrNull()
                     ?: return@forEach
 
@@ -124,14 +143,23 @@ internal object ManifestMerger {
                         element.tagName == APPLICATION && application != null -> {
                             element.childElements().forEach { component ->
                                 val key = component.key() ?: return@forEach
-                                if (declaredComponents.add(key)) {
+                                val existing = components[key]
+                                if (existing == null) {
                                     application.appendImported(merged, component, applicationId)
+                                        ?.let { components[key] = it }
+                                } else {
+                                    existing.mergeChildren(merged, component, applicationId)
                                 }
                             }
                         }
                     }
                 }
             }
+
+            // The project's own removals, now that nothing is left to keep out.
+            // Left in, a component the project asked to drop was linked as an
+            // ordinary one: aapt2 ignores the `tools:` attribute, not the element.
+            root.removeMarked()
 
             output.parentFile?.mkdirs()
             merged.writeTo(output)
@@ -158,12 +186,47 @@ internal object ManifestMerger {
      * aapt2 rejects an unbound prefix, and binding the namespace would let a
      * marker this does not implement look as though it had been honoured.
      */
-    private fun Node.appendImported(document: Document, element: Element, applicationId: String) {
-        if (element.isRemoved()) return
+    private fun Node.appendImported(document: Document, element: Element, applicationId: String): Element? {
+        if (element.isRemoved()) return null
         val imported = document.importNode(element, true) as Element
         imported.substitute(applicationId)
         imported.stripTools()
         appendChild(imported)
+        return imported
+    }
+
+    /**
+     * Adds [incoming]'s named children that this element does not have yet.
+     *
+     * **A same-named component is how libraries cooperate, not a duplicate.**
+     * `androidx.startup`'s `InitializationProvider` is declared by every library
+     * that uses it -- emoji2, lifecycle-process, profileinstaller -- each with
+     * `tools:node="merge"` and one `<meta-data>` naming its own initialiser.
+     * Keeping only the first element, as this did, kept only the first
+     * library's initialiser: `ProcessLifecycleOwner` was never set up, with
+     * nothing anywhere to say so. AGP merges the children; so does this, by
+     * `android:name`.
+     *
+     * The element's own attributes are left alone -- the stronger declaration
+     * keeps them -- and so are children with no name, which cannot be matched
+     * to anything. A child this element marks `tools:node="remove"` keeps the
+     * incoming one out: that is how a project turns off one library's
+     * initialiser.
+     */
+    private fun Element.mergeChildren(document: Document, incoming: Element, applicationId: String) {
+        if (isRemoved()) return
+        val present = childElements().mapNotNullTo(HashSet()) { it.key() }
+        incoming.childElements().forEach { child ->
+            val key = child.key() ?: return@forEach
+            if (present.add(key)) appendImported(document, child, applicationId)
+        }
+    }
+
+    /** Drops every element marked `tools:node="remove"`, at any depth. */
+    private fun Element.removeMarked() {
+        childElements().forEach { child ->
+            if (child.isRemoved()) removeChild(child) else child.removeMarked()
+        }
     }
 
     /**

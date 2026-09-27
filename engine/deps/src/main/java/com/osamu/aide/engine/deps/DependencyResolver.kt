@@ -17,7 +17,6 @@ import org.eclipse.aether.artifact.DefaultArtifact
 import org.eclipse.aether.collection.CollectRequest
 import org.eclipse.aether.graph.Dependency
 import org.eclipse.aether.graph.DependencyNode
-import org.eclipse.aether.graph.DependencyVisitor
 import org.eclipse.aether.repository.LocalRepository
 import org.eclipse.aether.repository.RemoteRepository
 import org.eclipse.aether.resolution.ArtifactRequest
@@ -98,12 +97,23 @@ class DependencyResolver(
             // a cold repository.
             val metadata = metadataFor(system, session, collected, onProgress)
 
-            val wanted = withoutDuplicateKmpVariants(
-                withoutSupersededModules(
-                    aligned(system, session, coordinates, collected, metadata, onProgress),
-                ),
-                metadata,
+            val alignedArtifacts = withoutSupersededModules(
+                aligned(system, session, coordinates, collected, metadata, onProgress),
             )
+            // **Read again for every version alignment raised.** The metadata
+            // above is for the versions the first collect chose, and alignment
+            // then lifts Compose modules to where a `-android` variant lives:
+            // `ui-text` was read at an old version, a plain Android library
+            // with no redirect, and resolved at 1.12.0, a Multiplatform root
+            // that is nothing *but* a redirect. The redirect rule never saw it.
+            // A name-based guess used to cover for that, and the same guess
+            // dropped `dagger` beside `dagger-android` -- so the guess is
+            // gone and the rule is given the metadata it needs.
+            val readAt = collected.associate { it.module to it.version }
+            val raised = alignedArtifacts.filter { readAt[it.module] != it.version }
+            val current = metadata - raised.mapTo(HashSet()) { it.module } +
+                metadataFor(system, session, raised, onProgress)
+            val wanted = withoutDuplicateKmpVariants(alignedArtifacts, current)
             val resolved = mutableListOf<ResolvedDependency>()
             val unresolved = mutableListOf<String>()
 
@@ -188,23 +198,44 @@ class DependencyResolver(
         session: DefaultRepositorySystemSession,
         roots: List<Dependency>,
     ): List<Artifact> {
-        val collected = LinkedHashMap<String, Artifact>()
         val request = CollectRequest().setDependencies(roots).setRepositories(repositories)
+        return inOverlayOrder(system.collectDependencies(session, request).root)
+    }
 
-        system.collectDependencies(session, request).root.accept(
-            object : DependencyVisitor {
-                override fun visitEnter(node: DependencyNode): Boolean {
-                    // A version that lost its conflict is still in the graph.
-                    if (node.data[ConflictResolver.NODE_DATA_WINNER] != null) return true
-
-                    node.dependency?.artifact?.let { collected.keepHigher(it) }
-                    return true
-                }
-
-                override fun visitLeave(node: DependencyNode) = true
-            },
-        )
-        return collected.values.toList()
+    /**
+     * The graph's winning artifacts, **weakest first**: each library after
+     * everything it depends on, and of two siblings the one declared first last.
+     *
+     * The order is not cosmetic. It is the order resources are overlaid in --
+     * aapt2 lets the last archive win -- and the order the manifest merger reads
+     * backwards, so it decides whose `string/app_name` or whose style an app
+     * renders. AGP's rule is that a library beats its own dependencies, and an
+     * earlier-declared dependency beats a later one.
+     *
+     * This used to be a pre-order walk, which puts each library *before* its
+     * dependencies: under last-wins, a transitive dependency overrode the very
+     * library built on it, so a library that deliberately redefined one of its
+     * dependency's resources shipped the dependency's version instead, with
+     * nothing to say so.
+     *
+     * A post-order walk with siblings visited last-declared first gives both
+     * rules. A module reached twice keeps the position of its first finish,
+     * which is below everything that depends on it; [keepHigher] still decides
+     * its version. A node that lost its conflict is still in the graph and is
+     * walked through but not kept, as before.
+     */
+    private fun inOverlayOrder(root: DependencyNode): List<Artifact> {
+        val order = LinkedHashMap<String, Artifact>()
+        val seen = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<DependencyNode, Boolean>())
+        fun visit(node: DependencyNode) {
+            if (!seen.add(node)) return
+            node.children.asReversed().forEach(::visit)
+            if (node.data[ConflictResolver.NODE_DATA_WINNER] == null) {
+                node.dependency?.artifact?.let { order.keepHigher(it) }
+            }
+        }
+        visit(root)
+        return order.values.toList()
     }
 
     /**
@@ -347,19 +378,8 @@ class DependencyResolver(
             .setDependencies(roots)
             .setRepositories(repositories)
 
-        val aligned = LinkedHashMap<String, Artifact>()
-        system.collectDependencies(session, request).root.accept(
-            object : DependencyVisitor {
-                override fun visitEnter(node: DependencyNode): Boolean {
-                    if (node.data[ConflictResolver.NODE_DATA_WINNER] != null) return true
-                    node.dependency?.artifact?.let { aligned.keepHigher(it) }
-                    return true
-                }
-
-                override fun visitLeave(node: DependencyNode) = true
-            },
-        )
-        aligned.values.toList().takeIf { it.isNotEmpty() } ?: collected
+        inOverlayOrder(system.collectDependencies(session, request).root)
+            .takeIf { it.isNotEmpty() } ?: collected
     }.getOrDefault(collected)
 
     /**
@@ -408,13 +428,21 @@ class DependencyResolver(
             present.containsKey("${target.group}:${target.artifact}")
         }.map { it.module }.toSet()
 
+        // Only a suffixed artifact is grouped by its base name. A bare one is
+        // its own group: the rule above already collapsed every bare root whose
+        // metadata says it lives elsewhere, and one that says nothing is a
+        // module in its own right. Grouping it too -- which the code did while
+        // this comment said otherwise -- dropped `dagger` beside
+        // `dagger-android` and `sentry` beside `sentry-android`, both unrelated
+        // modules that merely share a stem, and the classpath lost dagger's
+        // core with nothing but unresolved symbols to show for it.
         fun base(artifact: Artifact): String {
             val suffix = KMP_PLATFORM_SUFFIXES.firstOrNull { artifact.artifactId.endsWith(it) }
-            return "${artifact.groupId}:${artifact.artifactId.removeSuffix(suffix.orEmpty())}"
+                ?: return "${artifact.module}#bare"
+            return "${artifact.groupId}:${artifact.artifactId.removeSuffix(suffix)}"
         }
 
-        // Lower is better; KMP_PLATFORM_SUFFIXES is in preference order and a
-        // bare name, matching nothing, sorts last.
+        // Lower is better; KMP_PLATFORM_SUFFIXES is in preference order.
         fun preference(artifact: Artifact): Int =
             KMP_PLATFORM_SUFFIXES.indexOfFirst { artifact.artifactId.endsWith(it) }
                 .takeIf { it >= 0 } ?: KMP_PLATFORM_SUFFIXES.size

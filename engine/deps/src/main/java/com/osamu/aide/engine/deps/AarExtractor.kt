@@ -11,11 +11,18 @@ import java.util.zip.ZipFile
  * the classpath, aapt2 wants a directory of resources, and the R class comes
  * from `R.txt`. So each is written out once, next to the archive, and reused.
  *
- * Extraction is cached by *existence plus mtime*, which is sound here in a way
- * it would not be for a build: these files come out of the local Maven
+ * Extraction is cached by *a completion marker plus mtime*, which is sound here
+ * in a way it would not be for a build: these files come out of the local Maven
  * repository, where an artifact at a fixed version is immutable by contract. A
  * snapshot would break that assumption, which is one more reason `:engine:deps`
  * does not support snapshots yet.
+ *
+ * **Unpacked beside the target and renamed into place.** It used to be written
+ * straight into its final directory and trusted whenever `classes.jar` existed
+ * -- so a process killed part way, with `classes.jar` written and `res/`,
+ * `R.txt` and the manifest not, left a directory that was reused on every build
+ * after. The library's resources, R class and components disappeared, or ECJ
+ * choked on a truncated jar, until someone cleared the cache.
  */
 internal object AarExtractor {
 
@@ -36,16 +43,22 @@ internal object AarExtractor {
         val target = unpackedDir(aar)
         val classes = File(target, "classes.jar")
 
-        if (!classes.isFile || target.lastModified() < aar.lastModified()) {
-            target.deleteRecursively()
-            target.mkdirs()
+        if (!File(target, COMPLETE).isFile || target.lastModified() < aar.lastModified()) {
+            val staging = File(aar.parentFile, "${aar.nameWithoutExtension}.partial")
+            staging.deleteRecursively()
+            staging.mkdirs()
             // A hostile or truncated archive is a bad dependency, not a crash.
             // It arrives over the network from a coordinate the user typed, so
             // failing the one artifact and letting the caller report it beats
             // taking the whole resolution down with a ZipException.
-            val unpacked = runCatching { unpack(aar, target) }.isSuccess
-            if (!unpacked) {
-                target.deleteRecursively()
+            val unpacked = runCatching {
+                unpack(aar, staging)
+                // Last, so its presence means everything before it was written.
+                File(staging, COMPLETE).writeText("")
+            }.isSuccess
+            target.deleteRecursively()
+            if (!unpacked || !staging.renameTo(target)) {
+                staging.deleteRecursively()
                 return null
             }
         }
@@ -62,8 +75,23 @@ internal object AarExtractor {
             rTxt,
             manifest,
             packageName = manifest?.let(::packageOf),
+            // **The rest of what an AAR can carry.** Only the four above used
+            // to be taken, so a library built with a local jar dependency --
+            // shipped under `libs/` -- compiled, and then threw
+            // NoClassDefFoundError the first time it touched that jar; one with
+            // native code failed `System.loadLibrary`; one with assets found
+            // none. The format is fixed by AGP: `libs/*.jar`, `jni/<abi>/*.so`,
+            // `assets/`.
+            extraJars = File(target, "libs").listFiles { file -> file.isFile && file.extension == "jar" }
+                ?.sortedBy { it.name }
+                .orEmpty(),
+            nativeLibraries = File(target, "jni").takeIf { it.isDirectory },
+            assets = File(target, "assets").takeIf { it.isDirectory && it.listFiles()?.isNotEmpty() == true },
         )
     }
+
+    /** Written last into a finished extraction; see the class comment. */
+    private const val COMPLETE = ".extracted"
 
     /**
      * The `package` an AAR's manifest declares, which is the package its

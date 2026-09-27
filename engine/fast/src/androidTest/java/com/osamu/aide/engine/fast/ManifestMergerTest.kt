@@ -160,6 +160,128 @@ class ManifestMergerTest {
         assertFalse("the library replaced the project's component", "theirs" in merged)
     }
 
+    /**
+     * `androidx.startup` as a Compose graph really ships it: one provider,
+     * declared by three libraries, each adding its own initialiser.
+     *
+     * Only the first library's `<meta-data>` used to survive, so
+     * `ProcessLifecycleOwner` and profile installation were never set up and
+     * the build said nothing.
+     */
+    @Test
+    fun every_library_initialiser_reaches_the_one_startup_provider() {
+        fun startup(file: String, initializer: String) = manifest(
+            file,
+            """
+            <application>
+                <provider android:name="androidx.startup.InitializationProvider"
+                    android:authorities="${'$'}{applicationId}.androidx-startup"
+                    android:exported="false" tools:node="merge">
+                    <meta-data android:name="$initializer" android:value="androidx.startup" />
+                </provider>
+            </application>
+            """.trimIndent(),
+        )
+        val project = manifest("app.xml", "<application />")
+
+        val merged = merge(
+            project,
+            startup("emoji2.xml", "androidx.emoji2.text.EmojiCompatInitializer"),
+            startup("lifecycle.xml", "androidx.lifecycle.ProcessLifecycleInitializer"),
+            startup("profile.xml", "androidx.profileinstaller.ProfileInstallerInitializer"),
+        )
+
+        assertEquals(
+            "the provider should be declared once",
+            1,
+            Regex("androidx.startup.InitializationProvider").findAll(merged).count(),
+        )
+        listOf("EmojiCompatInitializer", "ProcessLifecycleInitializer", "ProfileInstallerInitializer").forEach {
+            assertTrue("$it was dropped from the startup provider:\n$merged", it in merged)
+        }
+    }
+
+    /** What `androidx.core` 1.9 declares, and `registerReceiver` needs defined. */
+    @Test
+    fun a_library_permission_is_defined_not_only_requested() {
+        val project = manifest("app.xml", "<application />")
+        val library = manifest(
+            "core.xml",
+            """
+            <permission
+                android:name="${'$'}{applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+                android:protectionLevel="signature" />
+            <uses-permission android:name="${'$'}{applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
+            <application />
+            """.trimIndent(),
+        )
+
+        val merged = merge(project, library)
+
+        assertTrue(
+            "the permission is requested but never defined:\n$merged",
+            Regex("""<permission[^>]*$APPLICATION_ID\.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION""").containsMatchIn(merged),
+        )
+    }
+
+    /**
+     * A project turns off one library's initialiser the way AGP documents:
+     * its own provider, with that `<meta-data>` marked for removal.
+     */
+    @Test
+    fun the_project_can_remove_one_initialiser_and_keep_the_rest() {
+        val project = manifest(
+            "app.xml",
+            """
+            <application>
+                <provider android:name="androidx.startup.InitializationProvider"
+                    android:authorities="${'$'}{applicationId}.androidx-startup" tools:node="merge">
+                    <meta-data android:name="androidx.emoji2.text.EmojiCompatInitializer" tools:node="remove" />
+                </provider>
+            </application>
+            """.trimIndent(),
+        )
+        val library = manifest(
+            "libs.xml",
+            """
+            <application>
+                <provider android:name="androidx.startup.InitializationProvider"
+                    android:authorities="${'$'}{applicationId}.androidx-startup" tools:node="merge">
+                    <meta-data android:name="androidx.emoji2.text.EmojiCompatInitializer" android:value="androidx.startup" />
+                    <meta-data android:name="androidx.lifecycle.ProcessLifecycleInitializer" android:value="androidx.startup" />
+                </provider>
+            </application>
+            """.trimIndent(),
+        )
+
+        val merged = merge(project, library)
+
+        assertFalse("the removed initialiser was merged, or its marker linked:\n$merged", "EmojiCompatInitializer" in merged)
+        assertTrue("removing one took the others with it", "ProcessLifecycleInitializer" in merged)
+    }
+
+    /**
+     * Libraries arrive weakest first -- the order resources overlay in -- so
+     * the last one's declaration is the one kept.
+     */
+    @Test
+    fun the_stronger_library_keeps_its_declaration() {
+        val project = manifest("app.xml", "<application />")
+        fun declaring(file: String, authority: String) = manifest(
+            file,
+            """
+            <application>
+                <provider android:name="com.example.Shared" android:authorities="$authority" />
+            </application>
+            """.trimIndent(),
+        )
+
+        val merged = merge(project, declaring("weak.xml", "weaker"), declaring("strong.xml", "stronger"))
+
+        assertTrue("the stronger library lost its declaration:\n$merged", "stronger" in merged)
+        assertFalse("both declarations were kept", "weaker" in merged)
+    }
+
     /** The only `tools:node` value honoured, and it has to be. */
     @Test
     fun an_element_marked_for_removal_is_not_merged() {

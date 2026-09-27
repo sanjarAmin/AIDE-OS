@@ -68,7 +68,7 @@ object DebugAgentSource {
              */
             public static volatile boolean ${DebuggerRequest.RELEASE_FIELD};
 
-            /** Set by the debugger when a breakpoint is hit; see holdIfExpected. */
+            /** Set by the debugger when a breakpoint is hit; see keepTheIdeAwake. */
             public static volatile boolean ${DebuggerRequest.COME_FORWARD_FIELD};
 
             @Override
@@ -77,6 +77,15 @@ object DebugAgentSource {
                     android.util.Log.w(TAG, "this device is too old to attach a debugger");
                     return true;
                 }
+                // **Asked before the port opens, not after.** JDWP on this port
+                // takes no password: anything that connects can run code as
+                // this app, with its data and its permissions, and every app on
+                // the phone may open a socket to 127.0.0.1. Listening on every
+                // launch -- a debug build outlives its session -- handed that to
+                // any of them for as long as it stayed installed. Now the port
+                // exists only when the IDE has just said a debugger is coming.
+                android.os.Bundle answer = askTheIde();
+                if (answer == null) return true;
                 try {
                     android.os.Debug.attachJvmtiAgent(
                         "libjdwp.so",
@@ -89,35 +98,38 @@ object DebugAgentSource {
                     android.util.Log.w(TAG, "could not start the debugger", t);
                     return true;
                 }
-                holdIfExpected();
+                holdForTheDebugger(answer);
                 return true;
             }
 
             /**
-             * Waits for the debugger, but only if the IDE says one is coming.
+             * The IDE's answer when it expects a debugger for this launch, and
+             * null otherwise.
              *
              * Providers are created before Application.onCreate and before any
-             * activity, so holding here is what lets a breakpoint in onCreate
-             * be placed before onCreate runs. An app launched any other way --
-             * from the launcher, long after the IDE session -- is not expected
-             * and does not wait at all.
+             * activity, so asking here is what lets a breakpoint in onCreate be
+             * placed before onCreate runs. An app launched any other way -- from
+             * the launcher, long after the IDE session -- is not expected: it
+             * neither waits nor listens.
              */
-            private void holdIfExpected() {
-                if (HANDSHAKE_AUTHORITY == null) return;
-                boolean expected = false;
-                android.os.Bundle answer = null;
+            private android.os.Bundle askTheIde() {
+                if (HANDSHAKE_AUTHORITY == null) return null;
                 try {
-                    answer = getContext().getContentResolver().call(
+                    android.os.Bundle answer = getContext().getContentResolver().call(
                             android.net.Uri.parse("content://" + HANDSHAKE_AUTHORITY),
                             "${DebuggerRequest.HANDSHAKE_METHOD}",
                             getContext().getPackageName(),
                             null);
-                    expected = answer != null && answer.getBoolean("${DebuggerRequest.HANDSHAKE_EXPECTED}");
+                    if (answer != null && answer.getBoolean("${DebuggerRequest.HANDSHAKE_EXPECTED}")) return answer;
                 } catch (Throwable t) {
                     // The IDE is not installed, not running, or not answering:
                     // nobody is coming, so do not wait for anybody.
                 }
-                if (!expected) return;
+                return null;
+            }
+
+            /** Holds startup, bounded, until the debugger has placed its breakpoints. */
+            private void holdForTheDebugger(android.os.Bundle answer) {
                 keepTheIdeAwake(answer.getString("${DebuggerRequest.HANDSHAKE_IDE_SERVICE}"));
                 android.util.Log.i(TAG, "waiting for the debugger to place its breakpoints");
                 long deadline = android.os.SystemClock.uptimeMillis() + ${DebuggerRequest.STARTUP_HOLD_MS};

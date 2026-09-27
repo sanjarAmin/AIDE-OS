@@ -54,6 +54,8 @@ class ProjectDependencies(private val resolver: DependencyResolver) {
             // than trusting the call site.
             libraryPackages = resolved.libraryPackages,
             libraryManifests = resolved.libraryManifests,
+            nativeLibraryDirectories = resolved.nativeLibraryDirectories,
+            assetDirectories = resolved.assetDirectories,
         )
     }
 

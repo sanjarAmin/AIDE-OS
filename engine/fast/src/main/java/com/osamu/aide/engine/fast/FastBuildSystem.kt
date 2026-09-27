@@ -13,13 +13,17 @@ import com.osamu.aide.engine.api.Diagnostic
 import com.osamu.aide.toolchain.nativetools.ClangToolchain
 import com.osamu.aide.toolchain.nativetools.NativeToolRunner
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.ZipFile
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ProducerScope
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -85,6 +89,26 @@ class FastBuildSystem(
             return@channelFlow
         }
 
+        // **One build per output directory at a time, waited for.** A second
+        // Build cancels the first, but cancelling does not stop ECJ, D8 or
+        // kotlinc: they are blocking calls, and a coroutine is only told at a
+        // suspension point. So the new build wiped the workspace while the old
+        // compiler was still writing into it -- old classes landed in the new
+        // `classes/`, and two D8 runs shared one dex staging directory, whose
+        // mixed result could be renamed into the cache under a valid key.
+        // The lock is held until the old build has actually unwound.
+        workspaceLock(request.outputDir).withLock {
+            buildIn(request, layout, startedAt, diagnostics)
+        }
+    }
+
+    /** The build proper, once it holds its workspace; see [build]. */
+    private suspend fun ProducerScope<BuildEvent>.buildIn(
+        request: BuildRequest,
+        layout: ProjectLayout,
+        startedAt: Long,
+        diagnostics: MutableList<Diagnostic>,
+    ) {
         val workspace = BuildWorkspace(request.outputDir)
         withContext(dispatchers.io) { workspace.prepare() }
         val minSdk = ProjectManifest.minSdk(layout.manifestFile)
@@ -225,6 +249,8 @@ class FastBuildSystem(
                     workspace = workspace,
                     dexFiles = dexFiles.orEmpty(),
                     nativeLibraries = native?.all.orEmpty(),
+                    libraryNativeDirectories = request.dependencies.nativeLibraryDirectories,
+                    libraryAssets = request.dependencies.assetDirectories,
                 )
             }
 
@@ -253,7 +279,30 @@ class FastBuildSystem(
                     ),
                 ),
             )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            // **Every other failure is still a build that failed, and says so.**
+            // Only stage failures were caught, so ordinary user errors escaped
+            // as exceptions with no stage and no diagnostics: a manifest that
+            // does not parse, or has no <application>, threw out of the debug
+            // agent's injection; a release key whose alias or passphrase no
+            // longer opens it threw out of the sign step. `awaitResult()` got
+            // an exception instead of the result BuildSystem promises.
+            send(
+                BuildEvent.Finished(
+                    BuildResult.Failure(null, describe(failure), elapsed(startedAt), diagnostics),
+                ),
+            )
         }
+    }
+
+    /** What a failure outside any stage tells the person who built. */
+    private fun describe(failure: Exception): String = when (failure) {
+        // Already written to be read: "This release key's passphrase is not remembered."
+        is ReleaseKeyException -> failure.message ?: "The release key could not be used."
+        is org.xml.sax.SAXException -> "AndroidManifest.xml could not be read: ${failure.message}"
+        else -> "The build failed: ${failure::class.java.simpleName}" + (failure.message?.let { ": $it" } ?: "")
     }
 
     /**
@@ -612,6 +661,14 @@ class FastBuildSystem(
 
     private fun elapsed(sinceNanos: Long): Long =
         (System.nanoTime() - sinceNanos) / 1_000_000
+
+    private companion object {
+        /** Per output directory, for the whole process; see [build]. */
+        private val WORKSPACE_LOCKS = ConcurrentHashMap<String, Mutex>()
+
+        fun workspaceLock(outputDir: File): Mutex =
+            WORKSPACE_LOCKS.computeIfAbsent(outputDir.absoluteFile.path) { Mutex() }
+    }
 }
 
 /** The class compiled Kotlin reaches first; its presence means a stdlib is already on board. */

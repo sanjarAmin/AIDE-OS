@@ -654,3 +654,53 @@ when a `.kt` file was opened, so tapping Build -- or finishing the platform
 download a build asked for -- ended at "the Kotlin compiler is not installed"
 with nothing to tap. Build offers it now, as it offers clang and the Gradle
 components.
+
+## 19. What a code review of the engine found, and the one pattern behind most of it
+
+Fifteen findings, all confirmed, most of them silent: the build succeeded and
+the app was wrong. Worth reading as a group, because several share a cause.
+
+**`cacheDir` is trimmed a file at a time.** The dex and Java caches live under
+`cacheDir/builds`, which Android empties oldest-file-first under storage
+pressure. A dex shard's key is written after its dex, so the dex went first
+and the key stayed -- and a shard trusted on its key contributed nothing, and a
+package's classes were missing from an APK that built "successfully". A shard's
+stamp now lists every dex and its size (`DexStage.isIntact`); the Java cache is
+only loaded if every class it lists exists, and a partial save deletes the old
+state before rewriting classes, so a killed build leaves none rather than a
+wrong one. **Anything kept in `cacheDir` must be checked for completeness when
+read, not just for presence.**
+
+**Cancelling a build did not stop it.** ECJ, D8 and kotlinc are blocking
+calls; a cancelled coroutine only finds out at its next suspension point. A
+second Build therefore wiped the workspace while the first build's compiler
+was still writing into it. `FastBuildSystem` now holds a lock per output
+directory until the old build has unwound. `ai/core/FINDINGS.md` §15 is the
+same lesson from the chat's Stop button.
+
+**Kotlin does not tie a class to a file name.** The incremental cache filed
+classes by name when a same-named source existed, which Java guarantees and
+Kotlin does not: `data class User` in `Models.kt` beside `User.kt` was filed
+under `User.kt`, so editing `Models.kt` reused the old `User.class`, missed
+the ABI change, and the next build linked the old class back in.
+`IncrementalJava.classFilesBySource` now trusts names only for Java and for
+Kotlin's `FooKt` facades, and reads `SourceFile` for everything else.
+
+**A same-named manifest component is cooperation, not a duplicate.**
+`androidx.startup`'s provider is declared by every library that uses it, each
+adding one `<meta-data>`. Keeping only the first declaration kept only the
+first initialiser -- `ProcessLifecycleOwner` never set up, nothing reported.
+Same-named components now merge their named children. `<permission>` is
+unioned too: excluding it left `androidx.core`'s receiver permission requested
+and undefined, and `registerReceiver(..., RECEIVER_NOT_EXPORTED)` threw on API
+30 to 32. The order libraries are merged and overlaid in is
+`engine/deps/FINDINGS.md` §9.
+
+Smaller, each one line of cause: native objects were named by file name
+alone, so `util.c` and `util.cpp` wrote one `util.o`; install results were
+routed by an action built from the APK path, identical for every install, so a
+new install could take an old one's "aborted"; an imported keystore stored the
+first alias of any kind while checking the first *key*; the staged Kotlin
+stdlib was copied once and never refreshed; failures outside a stage escaped
+`build()` as exceptions. The debug agent's port is `debugger/FINDINGS.md` §16.
+

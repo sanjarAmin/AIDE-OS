@@ -118,7 +118,7 @@ internal class DexStage(private val dispatchers: DispatcherProvider) {
                 DexShards.key(shard, classesDir, minSdk, version, platform.androidJar)
             }
             val stamp = File(dir, KEY_FILE)
-            val current = withContext(dispatchers.io) { stamp.isFile && stamp.readText() == key }
+            val current = withContext(dispatchers.io) { isIntact(stamp, key) }
             if (!current) {
                 // Into a sibling first, and renamed with its key already inside:
                 // a build killed half way leaves either the old entry or no
@@ -135,7 +135,7 @@ internal class DexStage(private val dispatchers: DispatcherProvider) {
                     return StageResult.failed(summarise(diagnostics, thrown), diagnostics)
                 }
                 withContext(dispatchers.io) {
-                    File(staging, KEY_FILE).writeText(key)
+                    File(staging, KEY_FILE).writeText(stampFor(key, dexFiles(staging)))
                     dir.deleteRecursively()
                     check(staging.renameTo(dir)) { "could not keep the dex for ${shard.name}" }
                 }
@@ -208,6 +208,37 @@ internal class DexStage(private val dispatchers: DispatcherProvider) {
      * `classes10.dex` before `classes2.dex`, and the order a dex is packaged in
      * is the order the runtime searches it.
      */
+    /**
+     * A shard's stamp: its key, then every dex file it holds and that file's size.
+     *
+     * **The key alone is not enough to trust a shard**, because the cache is in
+     * `cacheDir`, and Android trims that under storage pressure a file at a
+     * time, oldest first. The dex is written before the key, so it is the
+     * older of the two and goes first: a shard with its key and no dex was
+     * taken as current, contributed nothing, and a package's classes were left
+     * out of an APK that built "successfully" and crashed at launch.
+     */
+    private fun stampFor(key: String, dex: List<File>): String = buildString {
+        appendLine(key)
+        // The count, so a shard that honestly produced no dex -- a jar of
+        // resources alone -- is not mistaken for one that lost its files.
+        appendLine(dex.size)
+        dex.forEach { append(it.name).append('\t').appendLine(it.length()) }
+    }
+
+    /** Whether [stamp] carries [key] and every dex it lists is still there, whole. */
+    private fun isIntact(stamp: File, key: String): Boolean {
+        if (!stamp.isFile) return false
+        val lines = stamp.readLines().filter { it.isNotEmpty() }
+        // A stamp from before the count was kept names no files, and is not trusted.
+        if (lines.firstOrNull() != key || lines.getOrNull(1)?.toIntOrNull() != lines.size - 2) return false
+        return lines.drop(2).all { line ->
+            val name = line.substringBefore('\t')
+            val size = line.substringAfter('\t').toLongOrNull() ?: return@all false
+            File(stamp.parentFile, name).let { it.isFile && it.length() == size }
+        }
+    }
+
     private fun dexFiles(dir: File): List<File> =
         dir.listFiles { file -> file.isFile && file.extension == "dex" }
             .orEmpty()

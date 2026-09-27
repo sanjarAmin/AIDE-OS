@@ -22,6 +22,10 @@ internal class PackageStage(private val dispatchers: DispatcherProvider) {
         workspace: BuildWorkspace,
         dexFiles: List<File>,
         nativeLibraries: List<File> = emptyList(),
+        /** Dependencies' `jni/` directories, one subdirectory per ABI. */
+        libraryNativeDirectories: List<File> = emptyList(),
+        /** Dependencies' `assets/`, weakest first. */
+        libraryAssets: List<File> = emptyList(),
         abi: String = android.os.Build.SUPPORTED_ABIS.first(),
     ): StageResult<File> = withContext(dispatchers.io) {
         if (!workspace.linkedApk.isFile) {
@@ -31,8 +35,13 @@ internal class PackageStage(private val dispatchers: DispatcherProvider) {
         runCatching {
             ZipFile(workspace.linkedApk).use { linked ->
                 ZipOutputStream(workspace.unsignedApk.outputStream().buffered()).use { out ->
+                    // A zip may not repeat a name, and the project's own entry
+                    // always comes first -- so the first writer of a name wins,
+                    // and the project's asset or library beats a dependency's.
+                    val written = HashSet<String>()
                     for (entry in linked.entries()) {
                         if (entry.isDirectory) continue
+                        written += entry.name
                         out.putNextEntry(copyOf(entry))
                         linked.getInputStream(entry).use { it.copyTo(out) }
                         out.closeEntry()
@@ -51,9 +60,37 @@ internal class PackageStage(private val dispatchers: DispatcherProvider) {
                         // stored and misaligned installs and then fails to load
                         // on devices with larger pages. Compressed costs
                         // install-time disk and nothing else.
-                        out.putNextEntry(entryFor("lib/$abi/${library.name}", ZipEntry.DEFLATED))
+                        val name = "lib/$abi/${library.name}"
+                        if (!written.add(name)) continue
+                        out.putNextEntry(entryFor(name, ZipEntry.DEFLATED))
                         library.inputStream().use { it.copyTo(out) }
                         out.closeEntry()
+                    }
+                    // A dependency's native code, for this device's ABI only:
+                    // an AAR with `jni/` used to reach the APK without it, and
+                    // its `System.loadLibrary` failed on first use. Deflated
+                    // for the reason given above.
+                    for (directory in libraryNativeDirectories) {
+                        File(directory, abi).listFiles { file -> file.isFile && file.extension == "so" }
+                            ?.sortedBy { it.name }
+                            ?.forEach { library ->
+                                val name = "lib/$abi/${library.name}"
+                                if (!written.add(name)) return@forEach
+                                out.putNextEntry(entryFor(name, ZipEntry.DEFLATED))
+                                library.inputStream().use { it.copyTo(out) }
+                                out.closeEntry()
+                            }
+                    }
+                    // Strongest first, so that under first-writer-wins the
+                    // library that depends on another keeps its own copy.
+                    for (directory in libraryAssets.asReversed()) {
+                        directory.walkTopDown().filter { it.isFile }.sortedBy { it.path }.forEach { asset ->
+                            val name = "assets/" + asset.relativeTo(directory).invariantSeparatorsPath
+                            if (!written.add(name)) return@forEach
+                            out.putNextEntry(entryFor(name, ZipEntry.DEFLATED))
+                            asset.inputStream().use { it.copyTo(out) }
+                            out.closeEntry()
+                        }
                     }
                 }
             }

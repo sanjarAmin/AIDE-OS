@@ -44,6 +44,12 @@ data class ResolvedDependency(
      * [ResolvedDependencies.libraryPackages].
      */
     val packageName: String? = null,
+    /** The jars in an AAR's `libs` directory, which the library was built with and ships inside itself. */
+    val extraJars: List<File> = emptyList(),
+    /** An AAR's `jni/`, holding one directory of `.so` files per ABI. */
+    val nativeLibraries: File? = null,
+    /** An AAR's `assets/`. */
+    val assets: File? = null,
 ) {
     val isAndroidLibrary: Boolean get() = resources != null || rTxt != null
 }
@@ -51,16 +57,29 @@ data class ResolvedDependency(
 /**
  * Everything a project's declared dependencies resolved to.
  *
- * [compileClasspath] is deliberately ordered as resolution produced it, nearest
- * first. Javac and ECJ both take the first definition of a duplicated class, so
- * the order is a correctness property rather than a presentation choice.
+ * **[dependencies] are weakest first**: each library after everything it
+ * depends on, and of two siblings the earlier-declared last. That is overlay
+ * order, where the last one wins -- how resources are linked and manifests
+ * merged -- and it is why the lists derived for those keep it.
+ *
+ * [compileClasspath] is the **reverse**, strongest first. Javac and ECJ take the
+ * first definition of a duplicated class, so a library must come before the
+ * dependencies it may shadow; both orders are correctness properties, and they
+ * are opposite ones.
  */
 data class ResolvedDependencies(
     val dependencies: List<ResolvedDependency> = emptyList(),
     /** Artifacts that resolved to no file at all; see [ResolutionReport]. */
     val unresolved: List<String> = emptyList(),
 ) {
-    val compileClasspath: List<File> get() = dependencies.map { it.classes }
+    val compileClasspath: List<File>
+        get() = dependencies.asReversed().flatMap { listOf(it.classes) + it.extraJars }
+
+    /** Each library's `jni/` directory, which holds one directory per ABI. */
+    val nativeLibraryDirectories: List<File> get() = dependencies.mapNotNull { it.nativeLibraries }
+
+    /** Each library's `assets/`, weakest first like resources. */
+    val assetDirectories: List<File> get() = dependencies.mapNotNull { it.assets }
 
     val resourceDirectories: List<File> get() = dependencies.mapNotNull { it.resources }
 
@@ -81,7 +100,7 @@ data class ResolvedDependencies(
         get() = dependencies.filter { it.isAndroidLibrary }.mapNotNull { it.packageName }.distinct()
 
     /**
-     * Each Android library's `AndroidManifest.xml`, in resolution order.
+     * Each Android library's `AndroidManifest.xml`, weakest first.
      *
      * Extracted since M4 and unread until M8: nothing merged them, so every
      * `<provider>` and `<uses-permission>` a library declared was absent from

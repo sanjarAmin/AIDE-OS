@@ -206,7 +206,38 @@ wrote the file, `\\bpackage` instead of `\bpackage`.
 anything. Neither is redundant: the first localises the fault, the second is the
 only one that would notice a break in the plumbing between them.
 
-## 9. Things known missing
+## 9. The order the graph comes out in is a build input
+
+Found by a code review, and invisible to every test here because every test
+asserted on *which* artifacts resolved, never in what order.
+
+The resolver's list is the order resources are overlaid in (aapt2 lets the
+last archive win) and the order manifests are merged in. It came out of a
+pre-order walk: each library, then its dependencies. Under last-wins that let
+a transitive dependency override the library built on it. AGP's rule is the
+opposite -- a library beats its own dependencies, an earlier-declared one beats
+a later one -- so a library that redefined a style or layout from one of its
+own dependencies shipped the dependency's version. `DependencyResolver.inOverlayOrder`
+is a post-order walk visiting siblings last-declared first, which gives both
+rules at once and keeps a shared dependency below everything that uses it.
+
+**The classpath wants the reverse**, and says so. ECJ and javac take the first
+definition of a duplicated class, so the strongest library must come *first*
+there. `ResolvedDependencies.compileClasspath` reverses the list, and the KDoc
+names both orders, because a single "resolution order" that one consumer reads
+forwards and another reads backwards is how this broke.
+
+Two smaller things from the same review. The `-android`/`-jvm` suffix fallback
+grouped bare names too, which the KDoc said it did not: `dagger` vanished beside
+`dagger-android`, `sentry` beside `sentry-android`. It now groups only suffixed
+variants; a bare root is collapsed only by its own metadata. And an AAR is
+unpacked beside its target and renamed into place with a marker written last.
+Unpacked in place and trusted on `classes.jar` alone, a process killed part way
+left a library with no resources, `R.txt` or manifest -- permanently. Its
+`libs/` jars, `jni/` libraries and `assets/` are now carried too; they used to
+be dropped, which fails at runtime, never at build time.
+
+## 10. Things known missing
 
 - **`.module` is read only for redirects and constraints.** Variant
   attributes, capabilities, per-variant dependency lists and file entries are
@@ -214,7 +245,7 @@ only one that would notice a break in the plumbing between them.
   resolution rather than Maven's. The gap that will bite first is **variant
   selection**: this always prefers `-android` then `-jvm` by name, where Gradle
   matches attributes.
-- **No snapshots.** `AarExtractor` caches extraction by existence plus mtime,
+- **No snapshots.** `AarExtractor` caches extraction by a completion marker plus mtime,
   which is sound only because a released artifact at a fixed version is
   immutable by contract. A snapshot breaks that assumption.
 - **No exclusions, no `dependencyManagement` from the consuming project.** A

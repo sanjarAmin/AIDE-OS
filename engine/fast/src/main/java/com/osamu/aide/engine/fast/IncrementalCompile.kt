@@ -154,6 +154,7 @@ internal class IncrementalCompile(
     ): List<Diagnostic> = withContext(dispatchers.io) {
         val produced = IncrementalJava.classFilesBySource(classes, plan.keys, excluding = prepared.reused)
         val next = checkNotNull(plan.previous).sources.toMutableMap()
+        cache.invalidate()
         plan.changed.orEmpty().forEach { source ->
             val r = plan.read.getValue(source)
             val files = produced[r.key].orEmpty()

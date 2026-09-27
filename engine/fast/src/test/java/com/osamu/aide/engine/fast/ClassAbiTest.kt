@@ -104,7 +104,9 @@ class ClassAbiTest {
     fun the_state_survives_a_round_trip() {
         val dir = temp.newFolder()
         val cache = IncrementalJava(dir)
-        File(dir, "classes").mkdirs()
+        // The classes the state names: a state whose classes are gone is not
+        // loaded, which the next test is about.
+        listOf("p/A.class", "p/A\$1.class").forEach { File(dir, "classes/$it").apply { parentFile.mkdirs(); writeText("") } }
         val state = IncrementalJava.State(
             settings = "s1",
             sources = mapOf(
@@ -125,6 +127,29 @@ class ClassAbiTest {
         val loaded = cache.load()!!
         assertEquals(state.settings, loaded.settings)
         assertEquals(state.sources, loaded.sources)
+    }
+
+    /**
+     * The cache lives in `cacheDir`, which Android trims a file at a time. A
+     * kept class that has gone makes the whole state unusable -- `prepare`
+     * would leave it out of the APK -- so the next build compiles in full.
+     */
+    @Test
+    fun a_state_whose_classes_were_trimmed_is_not_loaded() {
+        val dir = temp.newFolder()
+        val cache = IncrementalJava(dir)
+        File(dir, "classes/p").mkdirs()
+        File(dir, "classes/p/A.class").writeText("")
+        cache.save(
+            IncrementalJava.State(
+                settings = "s1",
+                sources = mapOf(
+                    "/p/A.java" to IncrementalJava.Source("h", listOf("p/A.class", "p/B.class"), emptyList()),
+                ),
+            ),
+        )
+
+        assertEquals(null, cache.load())
     }
 
     /**

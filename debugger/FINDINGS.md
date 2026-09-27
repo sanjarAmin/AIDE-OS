@@ -409,7 +409,21 @@ A breakpoint moved during a session is re-sent to the running app, whose code
 is the build's, not the buffer's; an edit mid-session puts a breakpoint where
 the new code is, which the old code may not reach until the next Debug.
 
-## 16. What is not built yet
+## 16. The agent's port is unauthenticated, so it opens only when expected
+
+JDWP has no password. Whatever connects to the agent's port can run code as
+the debugged app -- its data, its permissions -- and every app on a phone may
+open a socket to 127.0.0.1. The agent used to attach at every launch and only
+then ask the IDE whether a debugger was coming (§8), so a debug build left
+installed listened for anything, indefinitely.
+
+It now asks first and attaches only on "yes". The IDE says yes once, for the
+calling package, within a minute of launching it, so the port exists for the
+length of one debug session. The cost: an install confirmation left for more
+than that minute starts the app with no debugger, where before one attached
+without holding startup. `DebugAgentSourceTest` pins the order.
+
+## 17. What is not built yet
 - **Stopping inside an inline function's own body.** kotlinc maps it to lines
   past the end of the file through an SMAP (`SourceDebugExtension`), and lines
   are matched literally, so a breakpoint in a project's own inline function does

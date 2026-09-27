@@ -59,7 +59,13 @@ internal class NativeCompileStage(private val clang: ClangToolchain) {
         }
 
         for (source in sources) {
-            val objectFile = File(output, source.nameWithoutExtension + ".o")
+            // **Named by path, extension kept.** `util.o` from the file name
+            // alone was shared by `util.c` and `util.cpp`, or by `a/util.cpp`
+            // and `b/util.cpp`: the second compile overwrote the first, the
+            // link was handed one object twice, and it failed on duplicate
+            // symbols -- or on every symbol the lost file defined.
+            val objectFile = File(output, "obj/" + source.relativeTo(layout.root).invariantSeparatorsPath + ".o")
+            objectFile.parentFile?.mkdirs()
             val result = clang.compile(
                 source = source,
                 output = objectFile,

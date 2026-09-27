@@ -160,10 +160,19 @@ class ReleaseKeystoreStore(context: Context) {
         return ReleaseSigningKey.load(keystore, secret, alias())
     }
 
+    /**
+     * The alias [ReleaseSigningKey.load] picks when it is given none: the first
+     * **key** entry.
+     *
+     * It used to be the first alias of any kind, while the check above opened
+     * the first key -- so a PKCS#12 holding a trusted certificate that listed
+     * first imported cleanly, stored the certificate's alias, and then failed
+     * every release build with "is not a signing key", with Settings showing no
+     * key at all. What is stored has to be what was checked.
+     */
     private fun aliasOf(file: File, passphrase: CharArray): String? = runCatching {
-        KeyStore.getInstance("PKCS12")
-            .apply { file.inputStream().use { load(it, passphrase) } }
-            .aliases().toList().firstOrNull()
+        val store = KeyStore.getInstance("PKCS12").apply { file.inputStream().use { load(it, passphrase) } }
+        store.aliases().toList().firstOrNull { store.isKeyEntry(it) }
     }.getOrNull()
 
     private fun alias(): String? = preferences.getString(KEY_ALIAS, null)
