@@ -1,0 +1,390 @@
+package com.osamu.aide.ui.workspace
+
+import android.util.Log
+import com.osamu.aide.core.common.DispatcherProvider
+import com.osamu.aide.editor.CompletionSource
+import com.osamu.aide.editor.EditorCompletion
+import com.osamu.aide.editor.EditorCompletionKind
+import com.osamu.aide.engine.fast.NativeToolchainProvider
+import com.osamu.aide.lsp.api.CompletionKind
+import com.osamu.aide.lsp.api.LanguageService
+import com.osamu.aide.lsp.nativelsp.ClangdService
+import com.osamu.aide.lsp.java.JavaLanguageService
+import com.osamu.aide.lsp.kotlin.KotlinArchives
+import com.osamu.aide.lsp.kotlin.KotlinLanguageService
+import com.osamu.aide.lsp.node.NodeLanguageService
+import com.osamu.aide.toolchain.nativetools.LinkerLaunch
+import com.osamu.aide.toolchain.nativetools.NodeToolchain
+import kotlinx.coroutines.runBlocking
+import java.io.File
+
+/**
+ * Hands out the language service for a project, and keeps it.
+ *
+ * The keeping is the point. A [JavaLanguageService] holds a warm javac -- a
+ * file manager with `android.jar` indexed and a pooled compiler context -- and
+ * building a second one throws all of that away. Spike R3 measured the
+ * difference at 700--1100 ms versus 82 ms per request, so a service constructed
+ * per keystroke would be slower than having none at all.
+ *
+ * The same joining role as [ProjectBuilder], for the same reason: the service
+ * takes a platform rather than finding one, and the platform is a download that
+ * may not have happened yet.
+ */
+class LanguageServices(
+    private val native: NativeToolchainProvider,
+    private val toolchain: com.osamu.aide.toolchain.manager.ToolchainManager,
+    private val dispatchers: DispatcherProvider,
+    /**
+     * Where builds put their intermediates -- the same root [ProjectBuilder]
+     * writes to, because the generated `R.java` under it is an input here.
+     */
+    private val buildOutputRoot: File,
+) {
+
+    private var current: Pair<File, JavaLanguageService>? = null
+
+    /**
+     * What each project's services are built from, set once it is known.
+     *
+     * **Held here so every caller asks for the same service.** The classpath
+     * used to be an argument, and only completion passed it: diagnostics,
+     * signature hints and go-to-definition asked for the service without one.
+     * A service is rebuilt whenever the classpath differs, so in any project
+     * with dependencies each analysis threw away the warm compiler completion
+     * had just built, and completion threw away analysis's -- 700 ms and more a
+     * time, and every `androidx.*` in the diagnostics reported as unresolved.
+     */
+    private val contexts = HashMap<File, EditorContext>()
+
+    private var nativeCurrent: Pair<File, ClangdService>? = null
+
+    private var kotlinCurrent: Pair<File, KotlinLanguageService>? = null
+
+    private var nodeCurrent: Pair<File, NodeLanguageService>? = null
+
+    /**
+     * Null when there is nothing to analyse with.
+     *
+     * Java intelligence needs `android.jar` for the platform types, and without
+     * it every reference to `Activity` would come back unresolved -- a file of
+     * red squiggles blaming the user for the toolchain not being installed.
+     * Silence is the better failure.
+     */
+    @Synchronized
+    fun forProject(projectRoot: File, classpath: List<File>? = null): JavaLanguageService? {
+        val context = contextOf(projectRoot)
+        val wanted = classpath ?: context.classpath
+        val sourcePathWanted = listOf(File(projectRoot, "src/main/java")) + context.sourceRoots +
+            // aapt2 writes R.java here during a build, and nothing else
+            // ever writes it: `R` is not a file the user has. Without this
+            // every `R.string.x` in a freshly created project is reported
+            // as "package R does not exist" -- a real unresolved reference,
+            // but one that says nothing except that the project has not
+            // been built yet. After one build it resolves.
+            generatedJavaOf(projectRoot)
+        val sourcePath = sourcePathWanted.distinct()
+        current?.let { (root, service) ->
+            if (root == projectRoot && service.classpath == wanted && service.sourcePath == sourcePath) return service
+            // Replaced, so the old one has to go. It holds a file manager with
+            // open handles on android.jar and every AAR; dropping the reference
+            // alone leaked them, and opening a few projects in a session is
+            // enough to notice on a device.
+            service.close()
+        }
+
+        val androidJar = toolchain.androidJar() ?: return null
+        val service = JavaLanguageService(
+            platform = androidJar,
+            projectRoot = projectRoot,
+            dispatchers = dispatchers,
+            // The dependency jars, so completion and diagnostics see AndroidX
+            // rather than reporting every androidx.* reference as unresolved.
+            // A changed classpath builds a new service: the warm compiler holds
+            // a symbol table for the old one, and there is no way to add to it.
+            classpath = wanted,
+            sourcePath = sourcePath,
+        )
+        current = projectRoot to service
+        // What the editor is actually analysing against, which is the only way
+        // to tell "the project has no dependencies" from "the context never
+        // reached this service" -- they produce the same red underlines.
+        Log.i(TAG, "java service: ${wanted.size} jars, source path $sourcePath")
+        return service
+    }
+
+    /**
+     * Drops the warm Java service, so the next request builds a new one.
+     *
+     * **A build writes sources javac has already decided do not exist.**
+     * `aapt2` generates `R.java` under the build's `generated/java`, which is
+     * on this service's source path from the moment it is constructed -- but a
+     * `StandardJavaFileManager` caches what it finds at a location, so a
+     * service created before the first build has an empty listing for that
+     * directory and keeps it. The file appears on disk and `R` stays
+     * unresolved: a red underline on the template's own `R.string.greeting`,
+     * on a project that builds and installs perfectly well, for the life of
+     * the session.
+     *
+     * Bisected rather than guessed: with the build run in-process and the same
+     * output root, a service constructed *after* it resolves `R` and the warm
+     * one does not. `WorkspaceViewModelTest.a_build_clears_the_R_error_whose_source_it_generates`.
+     *
+     * **And the Kotlin session, for the same reason.** It reads `R.java` from
+     * the same directory, and a session opened before the first build -- or
+     * before a new string resource -- has the old answer. That comment used to
+     * say Kotlin needed nothing here, which was true only because the session
+     * was not given the directory at all, and every `R` in a Kotlin file stayed
+     * red after a clean build. clangd re-reads `compile_flags.txt` itself and
+     * Node shells out per request; neither holds a view of what a build wrote.
+     */
+    /**
+     * Sets what [projectRoot]'s services are built from. A service built from
+     * something else is replaced on its next use, not now: replacing it means
+     * a cold compiler, and nothing may be asking.
+     */
+    @Synchronized
+    fun setContext(projectRoot: File, context: EditorContext) {
+        contexts[projectRoot] = context
+    }
+
+    private fun contextOf(projectRoot: File): EditorContext = contexts[projectRoot] ?: EditorContext()
+
+    @Synchronized
+    fun invalidateAfterBuild() {
+        current?.second?.close()
+        current = null
+        kotlinCurrent?.second?.close()
+        kotlinCurrent = null
+    }
+
+    /**
+     * Where a build writes `R.java` for [projectRoot].
+     *
+     * Kept in step with ProjectBuilder.outputFor and BuildWorkspace.generatedJava
+     * by construction, not by comment: both derive from the project directory
+     * name under the same root, which is why that root is injected rather than
+     * guessed.
+     */
+    private fun generatedJavaOf(projectRoot: File) = File(buildOutputRoot, "${projectRoot.name}/generated/java")
+
+    /**
+     * The service that handles [file], or null if nothing here does.
+     *
+     * The editor asks this rather than choosing, so adding a language is a
+     * matter of adding a service that claims its files. Java's needs a
+     * classpath and rebuilds when it changes; clangd's needs neither, because
+     * it reads `compile_flags.txt` from the project and re-reads it itself.
+     */
+    @Synchronized
+    fun serviceFor(
+        file: File,
+        projectRoot: File,
+        /** Overrides the project's [EditorContext] classpath; for tests. */
+        classpath: List<File>? = null,
+    ): LanguageService? {
+        val java = forProject(projectRoot, classpath)
+        if (java != null && java.handles(file)) return java
+
+        val clangd = nativeFor(projectRoot)
+        if (clangd != null && clangd.handles(file)) return clangd
+
+        val kotlin = kotlinFor(projectRoot, classpath)
+        if (kotlin != null && kotlin.handles(file)) return kotlin
+
+        val node = nodeFor(projectRoot)
+        if (node != null && node.handles(file)) return node
+        return null
+    }
+
+    /**
+     * The Kotlin service for [projectRoot], or null when it cannot run here.
+     *
+     * Null is the ordinary state, and there are two ways to reach it: the
+     * archives are dexed at API 30 and the app supports 26, and they are a
+     * separate download most projects never need. The same shape as [nativeFor]
+     * -- silence rather than an error, because a device that cannot do this is
+     * not a device with a problem.
+     *
+     * **Null without `android.jar`, for the reason [forProject] gives.** A
+     * Kotlin session that cannot see the platform resolves `Activity` and
+     * `onCreate` to nothing and reports every line of a correct template as an
+     * error. Driving the app showed exactly that -- fifteen problems on a
+     * freshly created project -- and silence is the better failure.
+     */
+    private fun kotlinFor(
+        projectRoot: File,
+        classpath: List<File>?,
+    ): KotlinLanguageService? {
+        if (!KotlinArchives.isSupported) return null
+        val context = contextOf(projectRoot)
+        val wanted = classpath ?: context.classpath
+        val extraRoots = context.sourceRoots + generatedJavaOf(projectRoot)
+
+        kotlinCurrent?.let { (root, service) ->
+            // A changed classpath needs a new service, the same as javac: the
+            // session holds a resolved view of its libraries and cannot be
+            // added to.
+            if (root == projectRoot && service.classpath == kotlinClasspath(wanted) &&
+                service.extraSourceRoots == extraRoots
+            ) {
+                return service
+            }
+            // Holds the front end's whole object graph and the open jars it
+            // resolves against; dropping the reference alone leaks both.
+            service.close()
+            kotlinCurrent = null
+        }
+
+        val files = toolchain.kotlinAnalysisArchives() ?: return null
+        val resolved = kotlinClasspath(wanted)
+        if (resolved.isEmpty()) return null
+        val service = KotlinLanguageService(
+            archives = KotlinArchives(
+                compilerJar = files.compilerJar,
+                stdlibJar = files.stdlibJar,
+                analysisApiJar = files.analysisApiJar,
+                backendJar = files.backendJar,
+                workingDir = File(buildOutputRoot.parentFile, "kotlin-lsp"),
+            ),
+            projectRoot = projectRoot,
+            dispatchers = dispatchers,
+            classpath = resolved,
+            extraSourceRoots = extraRoots,
+        )
+        kotlinCurrent = projectRoot to service
+        return service
+    }
+
+    /**
+     * The platform first, then the project's dependencies.
+     *
+     * Empty when the platform is not installed, which the caller reads as "no
+     * Kotlin service" rather than "a service with nothing to resolve against".
+     */
+    private fun kotlinClasspath(classpath: List<File>): List<File> {
+        val platform = toolchain.androidJar() ?: return emptyList()
+        return listOf(platform) + classpath
+    }
+
+    /**
+     * The clangd service for [projectRoot], started at most once.
+     *
+     * Null when no C/C++ toolchain is installed, which is the usual state: it
+     * is a 152 MiB download and most projects have no native code. The service
+     * itself starts clangd lazily, so holding one costs nothing until a C file
+     * is opened.
+     */
+    private fun nativeFor(projectRoot: File): ClangdService? {
+        nativeCurrent?.let { (root, service) ->
+            if (root == projectRoot) return service
+            service.close()
+            nativeCurrent = null
+        }
+        val toolchain = native.toolchain() ?: return null
+        val service = ClangdService(toolchain, projectRoot, dispatchers)
+        nativeCurrent = projectRoot to service
+        return service
+    }
+
+    /**
+     * The JavaScript service, or null when Node is not installed.
+     *
+     * Keyed by project only so diagnostics can be reported relative to it.
+     * `node --check` parses one file and resolves nothing, so unlike the other
+     * three there is no classpath and no session a second project could
+     * invalidate -- but a diagnostic naming an absolute path is unreadable on a
+     * phone, and the root is what makes it short.
+     */
+    private fun nodeFor(projectRoot: File): NodeLanguageService? {
+        nodeCurrent?.let { (root, service) ->
+            if (root == projectRoot) return service
+            service.close()
+            nodeCurrent = null
+        }
+        val installed = toolchain.nodeRoot() ?: return null
+        val service = NodeLanguageService(
+            node = NodeToolchain(installed, LinkerLaunch.forThisProcess()),
+            dispatchers = dispatchers,
+            scratch = File(buildOutputRoot.parentFile, "js-check"),
+            projectRoot = projectRoot,
+        )
+        nodeCurrent = projectRoot to service
+        return service
+    }
+
+    /** Drops the warm compiler and stops the language server. */
+    @Synchronized
+    fun release() {
+        current?.second?.close()
+        current = null
+        kotlinCurrent?.second?.close()
+        kotlinCurrent = null
+        nativeCurrent?.second?.close()
+        nativeCurrent = null
+        nodeCurrent?.second?.close()
+        nodeCurrent = null
+    }
+
+    private companion object {
+        const val TAG = "LanguageServices"
+    }
+}
+
+/**
+ * What a project's language services are built from, beyond its root.
+ *
+ * [sourceRoots] are source folders besides the root's own `src/main/java` --
+ * a Gradle project's other modules. [classpath] is the jars the code compiles
+ * against. Both are decided by `EditorContexts`, which knows the engines; this
+ * class knows neither.
+ */
+data class EditorContext(
+    val sourceRoots: List<File> = emptyList(),
+    val classpath: List<File> = emptyList(),
+)
+
+/**
+ * Lets the editor ask `:lsp:java` for proposals without knowing it exists.
+ *
+ * [runBlocking] is deliberate and safe here: sora calls `completionsAt` on its
+ * own completion worker, never the main thread, and expects it to take a while.
+ * The alternative -- an async bridge back into a callback -- would buy nothing,
+ * because sora's contract is already "block until you have an answer, and be
+ * abandoned if the user types again".
+ *
+ * That abandonment arrives as an interrupt, which [runBlocking] reports by
+ * cancelling its coroutine and throwing [InterruptedException]. It is allowed
+ * out of here on purpose; [com.osamu.aide.editor.CompletionSource] documents it,
+ * and the editor turns it into a cancellation rather than a failure.
+ */
+class ServiceCompletionSource(
+    /**
+     * Resolved per call rather than captured, because which service owns a
+     * file is a property of the file. One editor may hold a `.java` and a
+     * `.cpp` tab at once, and a source that had captured a single service
+     * would answer for both with whichever it happened to be given.
+     */
+    private val serviceFor: (File) -> LanguageService?,
+) : CompletionSource {
+
+    override fun completionsAt(file: File, text: String, offset: Int): List<EditorCompletion> =
+        runBlocking { serviceFor(file)?.complete(file, text, offset).orEmpty() }
+            .map { proposal ->
+                EditorCompletion(
+                    label = proposal.label,
+                    kind = proposal.kind.toEditorKind(),
+                    insert = proposal.insert,
+                    detail = proposal.detail,
+                )
+            }
+
+    private fun CompletionKind.toEditorKind(): EditorCompletionKind = when (this) {
+        CompletionKind.METHOD -> EditorCompletionKind.METHOD
+        CompletionKind.FIELD -> EditorCompletionKind.FIELD
+        CompletionKind.VARIABLE -> EditorCompletionKind.VARIABLE
+        CompletionKind.CLASS -> EditorCompletionKind.CLASS
+        CompletionKind.PACKAGE -> EditorCompletionKind.PACKAGE
+        CompletionKind.KEYWORD -> EditorCompletionKind.KEYWORD
+    }
+}
