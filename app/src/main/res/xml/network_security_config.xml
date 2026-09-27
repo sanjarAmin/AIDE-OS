@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext for loopback only.
+
+  The app talks to a `llama-server` it starts itself, on 127.0.0.1. Without
+  this the request is refused before it leaves the process. Measured, not
+  assumed: LoopbackCleartextTest got
+
+      java.io.IOException: Cleartext HTTP traffic to 127.0.0.1 not permitted
+
+  on a real device at targetSdk 37. The phone's browser opens such a URL
+  happily, which misleads anyone testing by hand, because the cleartext policy
+  is per app. See tools/localai/FINDINGS.md section 5.
+
+  Scoped, not global. android:usesCleartextTraffic="true" would be one
+  attribute instead of this file, and would permit plaintext to everything,
+  including the remote providers whose API key travels in a request header. On
+  loopback there is no wire for anyone to read it from; on the internet there
+  is. That difference is why this file is narrow.
+
+  includeSubdomains is deliberately absent: these are literal addresses rather
+  than domains, and there is nothing beneath them.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain>127.0.0.1</domain>
+        <domain>localhost</domain>
+        <domain>::1</domain>
+    </domain-config>
+</network-security-config>
