@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      Gradle binds a socket before it will run a build: its
+      FileLockContentionHandler listens so that other Gradle processes can ask
+      it to release a lock. An Android app cannot create a socket at all
+      without this, and the failure says only:
+
+        Gradle could not start your build.
+        > Could not determine a usable wildcard IP for this machine.
+
+      Declared here rather than left to the app, because it is this module's
+      requirement and an app that embeds it without the permission gets that
+      message and no way to connect it to Gradle. A Gradle build also resolves
+      dependencies over the network, so the permission is needed twice over.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+</manifest>
