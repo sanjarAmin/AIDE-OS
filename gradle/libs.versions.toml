@@ -1,0 +1,147 @@
+[versions]
+agp = "9.4.0"
+kotlin = "2.2.10"
+
+# AndroidX
+coreKtx = "1.19.0"
+activityCompose = "1.13.0"
+lifecycle = "2.11.0"
+navigation = "2.9.8"
+composeBom = "2026.02.01"
+
+# Build engine. r8 and apksig track the AGP line; they are the same code the
+# desktop toolchain runs, just executed on ART.
+# 3.38.0 is the newest ECJ that runs on Android. 3.40.0 added a source-level
+# check built on java.lang.Runtime.Version, which Android has no equivalent of
+# and which cannot be shimmed -- the platform forbids defining classes in
+# java.*. See tools/ecj/FINDINGS.md.
+ecj = "3.38.0"
+r8 = "9.3.19"
+apksig = "9.3.1"
+
+# Spike R3. NetBeans' fork of javac -- error-tolerant, built for editors --
+# patched for Android by the AndroidIDE project. Frozen upstream at JDK 17
+# since 2022; AndroidIDE later absorbed the compiler into its own tree, so
+# this artifact is the last standalone release.
+nbJavac = "17.0.0.3"
+
+# Spike R4. Maven resolution on ART. The 1.9 line, not 2.x: 2.x's default
+# transport is java.net.http.HttpClient, which Android does not have at any API
+# level. maven-resolver-provider is Maven's own wiring for reading POMs -- the
+# resolver alone cannot, and that is the half most likely to resist dexing.
+# Spike R5. The Anthropic SDK, for M5's AI layer. A JVM SDK on ART, which is
+# the assumption this project has been wrong about three times.
+anthropicJava = "2.57.0"
+# Matches the OkHttp the SDK resolves, so the test server and the client under
+# test share one HTTP stack rather than two versions of it.
+okhttp = "4.12.0"
+
+mavenResolver = "1.9.27"
+mavenResolverProvider = "3.9.16"
+
+# Editor. Both are LGPL-2.1 and are consumed unmodified, as Maven artifacts;
+# see R6 in docs/PLAN.md for the obligation that imposes and the relink path.
+sora = "0.23.6"
+# Must be the group sora's language-treesitter binds to -- io.github.itsaky
+# publishes a differently-versioned build of the same project, and grammars from
+# one do not load against the core of the other. 4.3.2 also lifts sora's
+# transitive 4.3.1 so there is exactly one native core in the APK.
+treeSitter = "4.3.2"
+
+desugarJdkLibs = "2.1.5"
+
+# Third party
+koin = "4.1.0"
+coroutines = "1.10.2"
+json = "20250517"
+
+# Test
+junit = "4.13.2"
+junitVersion = "1.3.0"
+espressoCore = "3.7.0"
+testRunner = "1.7.0"
+uiautomator = "2.3.0"
+
+# Spike R6. Git on ART, for M8. JGit is the fourth "pure JVM, therefore fine"
+# assumption this project has made; the previous three each needed work. 7.x
+# targets Java 17 and leans on java.nio.file, and JGit's FS layer shells out to
+# detect umask and locate a git executable -- neither of which exists at the
+# paths it looks in on Android. Pinned rather than floating: the answer this
+# spike gives is only about the version it was asked about.
+jgit = "7.7.1.202607240634-r"
+
+# Reading the C/C++ toolchain's tar. Hand-rolling one would mean handling
+# GNU long names and symlink entries correctly across ~9,700 entries, which is
+# exactly the kind of thing that fails on the next toolchain rather than this
+# one. Apache-2.0.
+commons-compress = "1.27.1"
+
+[libraries]
+commons-compress = { group = "org.apache.commons", name = "commons-compress", version.ref = "commons-compress" }
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle" }
+androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycle" }
+androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigation" }
+
+androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }
+androidx-compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
+androidx-compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
+androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+androidx-compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
+androidx-compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
+androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+androidx-compose-material3-window-size = { group = "androidx.compose.material3", name = "material3-window-size-class" }
+androidx-compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
+
+ecj = { group = "org.eclipse.jdt", name = "ecj", version.ref = "ecj" }
+r8 = { group = "com.android.tools", name = "r8", version.ref = "r8" }
+apksig = { group = "com.android.tools.build", name = "apksig", version.ref = "apksig" }
+nb-javac-android = { group = "io.github.itsaky", name = "nb-javac-android", version.ref = "nbJavac" }
+
+anthropic-java = { group = "com.anthropic", name = "anthropic-java", version.ref = "anthropicJava" }
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+okhttp-mockwebserver = { group = "com.squareup.okhttp3", name = "mockwebserver", version.ref = "okhttp" }
+
+maven-resolver-supplier = { group = "org.apache.maven.resolver", name = "maven-resolver-supplier", version.ref = "mavenResolver" }
+maven-resolver-connector-basic = { group = "org.apache.maven.resolver", name = "maven-resolver-connector-basic", version.ref = "mavenResolver" }
+maven-resolver-transport-http = { group = "org.apache.maven.resolver", name = "maven-resolver-transport-http", version.ref = "mavenResolver" }
+maven-resolver-transport-file = { group = "org.apache.maven.resolver", name = "maven-resolver-transport-file", version.ref = "mavenResolver" }
+maven-resolver-provider = { group = "org.apache.maven", name = "maven-resolver-provider", version.ref = "mavenResolverProvider" }
+
+desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugarJdkLibs" }
+
+sora-bom = { group = "io.github.Rosemoe.sora-editor", name = "bom", version.ref = "sora" }
+sora-editor = { group = "io.github.Rosemoe.sora-editor", name = "editor" }
+sora-language-treesitter = { group = "io.github.Rosemoe.sora-editor", name = "language-treesitter" }
+
+# The grammars are prebuilt native libraries; nothing here compiles tree-sitter.
+tree-sitter = { group = "com.itsaky.androidide.treesitter", name = "android-tree-sitter", version.ref = "treeSitter" }
+tree-sitter-java = { group = "com.itsaky.androidide.treesitter", name = "tree-sitter-java", version.ref = "treeSitter" }
+tree-sitter-kotlin = { group = "com.itsaky.androidide.treesitter", name = "tree-sitter-kotlin", version.ref = "treeSitter" }
+tree-sitter-xml = { group = "com.itsaky.androidide.treesitter", name = "tree-sitter-xml", version.ref = "treeSitter" }
+tree-sitter-json = { group = "com.itsaky.androidide.treesitter", name = "tree-sitter-json", version.ref = "treeSitter" }
+tree-sitter-python = { group = "com.itsaky.androidide.treesitter", name = "tree-sitter-python", version.ref = "treeSitter" }
+
+kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+
+koin-bom = { group = "io.insert-koin", name = "koin-bom", version.ref = "koin" }
+koin-android = { group = "io.insert-koin", name = "koin-android" }
+koin-androidx-compose = { group = "io.insert-koin", name = "koin-androidx-compose" }
+
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
+androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
+androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "testRunner" }
+androidx-uiautomator = { group = "androidx.test.uiautomator", name = "uiautomator", version.ref = "uiautomator" }
+
+jgit = { group = "org.eclipse.jgit", name = "org.eclipse.jgit", version.ref = "jgit" }
+kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
+json = { group = "org.json", name = "json", version.ref = "json" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+android-library = { id = "com.android.library", version.ref = "agp" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
