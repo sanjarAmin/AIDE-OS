@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Resolution reaches real repositories, which is the point: the failure
+         this module exists to avoid only happens on a device with a network. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+</manifest>
