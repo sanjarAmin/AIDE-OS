@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- The spike resolves against real repositories on purpose: the question
+         is whether Maven resolution works on a device, and a mocked transport
+         would answer a different one. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+</manifest>

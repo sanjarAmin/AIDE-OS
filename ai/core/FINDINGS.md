@@ -1,0 +1,791 @@
+# M5: the AI layer — what was not obvious
+
+Spike R5 (`tools/ai/FINDINGS.md`) settled the platform question: the Anthropic
+SDK runs on ART unmodified. Everything below is what building on top of it cost,
+and almost none of it is about Android. The theme is different from earlier
+milestones: **M5's characteristic bug produces a correct answer.** A broken
+cache still answers. A dropped tool result still answers, until it does not. An
+absolute path in a prompt still gets a reply, one round trip later. There is
+usually nothing to catch and nothing wrong on screen, which is why each of these
+has a test that fails when the line is removed.
+
+Measured on `aideos_test` (API 34, x86_64) unless stated otherwise.
+
+**§§1–10 were written when this layer spoke to Anthropic and nothing else.**
+Since 2026-09-02 it speaks to Gemini (the default), OpenAI and anything
+OpenAI-compatible as well, and §§11–14 are what that cost. Read §11 first if you
+are changing anything in `AiSession`: there are two tool loops now, and the
+rules above hold in only one of them.
+
+---
+
+## 1. Koin cannot hold `null` in a singleton — and it took the app down
+
+The worst bug of the milestone was not in the AI layer at all. It had been in
+`:app` since M4:
+
+```kotlin
+single<KotlinCompiler?> { provider.toolchain()?.let { KotlinCompiler(it, dir) } }
+```
+
+On a device without the Kotlin toolchain installed, `toolchain()` returns null,
+the definition resolves to null, and Koin throws:
+
+```
+IllegalStateException: Single instance created couldn't return value
+```
+
+`ProjectBuilder` depends on it, so **opening any project crashed the app**. Not
+an edge case: the compiler is a 54 MB download the app fetches on demand, so
+"not installed" is the state every new user is in.
+
+It survived a green suite because the null branch is the *uncommon* one on a
+development machine — the toolchain is installed there — and every unit test
+builds its objects by hand rather than through the graph. Nothing ever resolved
+`ProjectBuilder` from `appModule` in a test.
+
+**The fix is a holder, not a nullable definition.** `KotlinCompilerSource`
+resolves on use (so a toolchain installed in-app is picked up by the next build
+rather than the next launch) and memoises only success, since re-checking is a
+stat call and the compiler's ~11 s startup is not.
+
+**The test that was missing** is `AppModuleTest`: resolve every definition a
+workspace needs, from the real module, on a bare device. Add to it whenever
+something joins the graph — the second thing it caught was `AssistantViewModel`,
+which pulls in both the builder and the repository.
+
+---
+
+## 2. Thinking blocks must be replayed **unchanged**, or the *next* request fails
+
+Adaptive thinking means real responses carry `thinking` blocks, including in
+front of tool calls. The API requires them back verbatim on the following turn;
+removing or rebuilding them produces a block-ordering or signature error that
+names nothing useful.
+
+The trap is that the obvious implementation looks right. Reconstructing the
+assistant's turn from `response.textOnly()` produces a valid-looking message,
+passes every local assertion, and fails on the request *after* the one you are
+debugging.
+
+```kotlin
+messages += response.toParam()   // right: the whole turn, blocks intact
+messages += assistantTurn(text)  // wrong: silently drops thinking and tool_use
+```
+
+`Message.toParam()` is the round trip. `AiSessionTest`'s fixture emits a
+thinking block with a signature specifically so a session that drops them fails
+here rather than against the real endpoint.
+
+**This is Anthropic-only, but the hazard is not.** The other providers have no
+thinking blocks to preserve, and the same mistake still breaks them in a
+different shape. See §12.
+
+---
+
+## 3. Parallel tool results go in **one** user message
+
+An assistant turn can hold several `tool_use` blocks. All of their
+`tool_result`s belong in a single user message. Splitting them across messages
+raises no error and returns a fine answer — the model simply stops asking for
+parallel calls, and the assistant gets quietly slower over the conversation.
+
+Related and sharper: **every `tool_use` needs a matching `tool_result`,
+including refused ones.** A missing result is a 400. A tool the user declined is
+a result with `is_error: true` — which is also information the model can act on,
+where a hole is not.
+
+**"One message" is a fact about this API, not about tool loops.** It holds for
+Gemini and is false for OpenAI. Porting this section literally to another
+provider asserts a bug — §12.
+
+---
+
+## 4. The SDK builder treats `messages` as required
+
+`MessageCreateParams.builder()` throws on `build()` if `messages` was never set,
+even when the conversation is legitimately empty:
+
+```
+IllegalStateException: `messages` is required, but was not set
+```
+
+Set `.messages(emptyList())` explicitly. An empty conversation is still invalid
+to the API, but that is the API's judgement to make with an error naming the
+problem, rather than a builder exception raised while the caller is looking at
+prompt layout.
+
+---
+
+## 5. Prompt caching is a layout, and its failure mode is a bill
+
+Caching is prefix-match, and the request renders `tools` → `system` →
+`messages`. Anything that changes invalidates everything after it. The layout
+`PromptAssembler` enforces:
+
+1. **Tools** — fixed set, fixed order. Reordering them costs every conversation.
+2. **Standing instructions** — no cache control on this block.
+3. **Project context** — the cache breakpoint sits here.
+4. **Conversation** — everything volatile, after the last breakpoint.
+
+Two system blocks rather than one concatenated block, because the breakpoint
+marks a boundary: sharing an entry between the instructions and the project
+context makes every project change re-cache text that never varies.
+
+A timestamp, a cursor position, or a "you are helping with X.kt" line anywhere
+above step 4 costs the whole prefix and **returns a perfectly good answer**.
+`usage.cacheReadInputTokens` is the only way to see it. Since that number needs
+a real key, `PromptAssemblerTest` pins the property that makes a hit possible
+instead: two turns of one conversation must have a byte-identical cacheable
+prefix.
+
+A corollary that is easy to get wrong later: contributed tools
+(`ProjectToolset(files, extra)`) must be built **once per session**. A list
+assembled per turn is a new prefix every turn.
+
+---
+
+## 6. Anything handed to the model must carry **relative** paths
+
+`ProjectFiles.resolve` refuses absolute paths by design, so the model learns to
+send relative ones. The consequence runs the other way too: any text put into a
+prompt — a diagnostic in a "fix this" request, an error in a build summary —
+must already be relative, or the model's first tool call is a refusal and its
+second is a guess at the right form. The only symptom is an assistant that seems
+slow and confused.
+
+A path that escapes the project (`../..`) is refused for the same reason, so
+those degrade to the bare filename: something to search for beats something that
+cannot be read.
+
+---
+
+## 7. Testing an agent loop: three things that cost an hour each
+
+**`advanceUntilIdle()` does not wait for `Dispatchers.IO`.** The session's
+request goes through `withContext(dispatchers.io)`; with a real IO dispatcher
+the HTTP call lands on a thread the test clock knows nothing about, so
+`advanceUntilIdle()` returns mid-turn and every assertion reads a half-finished
+state. Pin IO to `StandardTestDispatcher(testScheduler)`.
+
+**`runTest` waits for every child coroutine.** A test that deliberately leaves
+the approval handshake parked — which is the point of the test — ends in a
+60-second timeout rather than a pass. Release it after the assertions.
+
+**A local Messages API has to be *scripted*.** The interesting request is the
+second one, the one carrying tool results, so a fixture that returns the same
+body every time cannot test the loop at all. `ScriptedApi` serves a queue and
+records every request body; the assertions read the bodies.
+
+`com.sun.net.httpserver` is still absent on Android — see
+`tools/ai/FINDINGS.md` §1 — so this is MockWebServer, and `androidTest` needs a
+loopback-scoped `network-security-config` or the SDK reports
+`AnthropicIoException: Request failed` three frames above the real cause.
+
+---
+
+## 8. Compose: two nodes with the same label break unrelated tests
+
+The chat panel's empty-state heading was "Ask about this project", which is also
+the composer's placeholder. `onNodeWithText(...).assertExists()` fails on
+multiple matches, and `performTextInput` on an ambiguous node fails too — so a
+new empty-state test broke an existing send test that had nothing to do with it.
+
+Worth recording because the test failure is the *lucky* outcome: the same
+duplication is ambiguous to a screen reader, and nothing else would have said
+so.
+
+---
+
+## 9. A custom endpoint is one builder call and four rejections
+
+`AnthropicOkHttpClient.baseUrl` is all it takes to point this SDK at anything
+that speaks the same wire format. The work is not the wiring — it is that every
+way of mistyping a URL fails at *request* time, several turns later, with an
+error that blames the SDK.
+
+**The SDK appends `/v1/messages`.** Pinned by
+`EndpointTest.the_sdk_appends_v1_messages_to_the_base_url` rather than assumed,
+because two silent corrections in `parseEndpoint` depend on it:
+
+- A **trailing slash** yields `//v1/messages`. `ScriptedApi` has trimmed one off
+  since the first test in this module, which is how easy it is to hit.
+- A **trailing `/v1`** yields `/v1/v1/messages` and a 404. This is the likelier
+  mistake, because `/v1/messages` is what every provider's documentation shows,
+  so the URL gets copied down to the version. Safe to strip rather than warn
+  about: a proxy mounted at `/anything/v1/messages` has base `/anything`, so no
+  correct base URL for this SDK ends in `/v1`.
+
+Both corrections are **shown, not just applied** — the field is rewritten with
+what was stored. A silent fix plus the original text left on screen leaves the
+user believing something other than what is saved.
+
+**`http` is refused, and the reason is about the key rather than about URLs.**
+The API key travels as a request header, so cleartext puts a billable credential
+on the wire in plaintext. It would fail regardless — `:app` ships no
+`network-security-config`, so the platform has blocked cleartext since API 28 —
+but `UnknownServiceException: CLEARTEXT communication to ... not permitted`
+names neither the setting nor the fix. A **local** proxy over `http://localhost`
+would need a loopback exemption in the shipped manifest; that is a security
+decision nobody has asked for, so it is refused rather than quietly allowed.
+
+**The endpoint is stored in the clear, beside the key.** Two deliberate
+asymmetries with §1's neighbour. It is *displayed back*, which the key never is
+— a base URL the user cannot see is one they cannot notice is wrong, while being
+exactly the setting that decides who receives their key. And it *survives*
+`clear()`: "Remove" sits next to the key, and silently resetting a visible field
+from that button is a worse surprise than leaving it. The cost is a test trap —
+`clear()` no longer resets everything, so a test that sets an endpoint leaks it
+into whatever runs next on the device. Every `setUp` here now resets it by hand.
+
+**`Assistant.defaultClient` is `internal`, not `private`, so it can be tested.**
+Every other test in the module injects a fake client factory, which would leave
+the one line that actually reaches the SDK — the line that is the whole feature
+— unexercised. Two tests call the real factory against MockWebServer and assert
+the path the request lands on.
+
+**What this does not buy.** Anything that does not implement `cache_control` or
+thinking blocks silently loses §5 and §2: full price every turn, no error. A
+structurally different provider is a port, not a setting — see `docs/PLAN.md`.
+
+---
+
+## 10. Judgements, so they are not re-litigated as bugs
+
+- **`run_build` is `READ_ONLY`.** It writes only to the build cache, never the
+  user's sources, so the plan's "confirm every mutating tool" does not reach it.
+  A prompt there would turn fix → rebuild → check into three taps and train the
+  user to approve without reading, which is how the one prompt that matters
+  (`edit_file`) gets waved through.
+- **Inline completion is a button, not a keystroke handler.** Every keystroke
+  would be a request, spending the user's own money and battery. The tap is the
+  budget.
+- **Inline completion offers no tools.** A completion that stopped to read files
+  would arrive after the user had typed the line; and since tools render first,
+  a different tool list is a different cached prefix — paying for two entries to
+  make completion slower is the wrong trade twice.
+- **The build summary is not the build log.** Stage lines and dependency notes
+  help nobody decide anything. The model gets the outcome plus the errors,
+  capped at twenty, warnings dropped when there are errors.
+- **The stored API key is never rendered back.** `ApiKeyStore` can decrypt it,
+  but a screen that shows a secret has to be right about screenshots,
+  accessibility services and the recents thumbnail forever after. "A key is
+  saved" asks none of those questions.
+
+---
+
+## 11. There are two tool loops, and the suite covered one of them
+
+*Added 2026-09-02, with the multi-provider work.*
+
+`AiSession` holds `sendAnthropic` and `sendGeneric`. They share `executeTool`
+and nothing else — not the history, not the request assembly, not the rule about
+batching results. `sendAnthropic` speaks the SDK's `MessageParam`;
+`sendGeneric` speaks `AiClient`'s `AiMessage`/`AiPart`.
+
+**The rules that live in the loop had to be re-established in the second one,
+and the suite went on passing while they were not.** All 87 instrumented tests
+in this module drove the Anthropic path, because that is the path they were
+written for. A second loop with no §2 and no §3 in it is not a red suite; it is
+a green one, and the assistant answers correctly on the provider nobody is
+testing.
+
+What carries over for free is whatever sits behind `executeTool`: §6's relative
+paths are enforced by `ProjectFiles`, and the confirmation gate by
+`ProjectToolset.execute`, so both loops inherit them. That is the whole list.
+Anything above that line — history, request assembly, result batching — exists
+twice and agrees only by hand.
+
+The lesson generalises past this file: **a green suite is evidence about the
+code paths it executes and nothing else.** Two implementations of one behaviour
+need two sets of tests, and the second set does not write itself when the first
+one passes.
+
+`GenericSessionTest` is the second set — the nine cases from `AiSessionTest`
+ported, plus two the generic path needs on its own, with `GeminiSessionTest` and
+`OpenAiSessionTest` supplying the provider. It drives the **real**
+`GeminiAiClient` and `OpenAiClient` against `ScriptedProviderApi` rather than a
+fake `AiClient`, for the reason §7 gives about fakes: the wire format is where a
+provider rejects a request, and a fake never emits one.
+
+Two of them exist because the generic loop builds its own system instruction
+rather than going through `PromptAssembler`, so nothing on the Anthropic side
+guarantees either:
+
+- **the tools are declared** — a request with no declarations gets a perfectly
+  good answer; the model just never asks to read a file, and the assistant
+  quietly degrades into a chatbot that cannot see the project;
+- **the project context is in the instruction** — same shape, no error, it
+  simply answers about a project it cannot see.
+
+Both were verified by mutation rather than assumed: forcing `tools` to
+`emptyList()` and dropping the assistant turn from the history produces eight
+failures across the two providers, in exactly the tests that name those things.
+
+---
+
+## 12. The provider-neutral vocabulary leaks, and porting a rule can assert a bug
+
+*Added 2026-09-02.*
+
+`AiPart` — text, thought, function call, function response — is deliberately
+thin, and it still does not mean the same thing on both sides of it.
+
+**Tool results batch differently, and §3 is the trap.** Anthropic wants every
+`tool_result` in one user message. Gemini agrees: one `user` turn of
+`functionResponse` parts. OpenAI wants the opposite — one `role: "tool"` message
+*per* call. A test ported literally from `AiSessionTest` asserts the Anthropic
+shape and therefore asserts an OpenAI bug. `GenericSessionTest` keeps only the
+provider-independent claim in the shared case (both calls ran, neither result
+was dropped) and pushes the shape into each subclass.
+
+**Call ids mean different things.** OpenAI issues a `tool_call_id` and rejects a
+`tool` message carrying one it did not issue. Gemini has no call ids at all and
+matches a result to its call by function name — so `GeminiAiClient` synthesises
+a UUID on parse purely to satisfy the shared type, and that id never goes back
+on the wire. The shared field invites one provider's convention into the other,
+which is why the id round trip is pinned only where it is real
+(`OpenAiSessionTest.a_result_carries_back_the_id_the_server_issued`) and why the
+shared refusal case asserts on the tool *name*.
+
+This bit during the port. The shared declined-edit test first asserted the id
+appeared in the follow-up request; it passes on OpenAI and fails on Gemini, for
+a correct implementation.
+
+**§2's failure survives without §2's mechanism.** There are no thinking blocks
+here, but the history still has to carry the turn that asked for a tool.
+Dropping it leaves the result an orphan: OpenAI answers with a 400 naming an
+orphaned `tool` message, Gemini just loses the thread. Same defect, different
+symptom, no local sign of it either way.
+
+---
+
+## 13. `AiPart.Thought` does not round-trip on the Gemini path
+
+*Added 2026-09-02. Known gap, not a fixed bug.*
+
+`GeminiAiClient.parseResponse` only ever emits `AiPart.Text` and
+`AiPart.FunctionCall` — it never constructs a `Thought`. The encoder, meanwhile,
+writes a `Thought` out as an ordinary `text` part and drops its `signature`.
+
+So thoughts cannot survive a turn on this path today. It is inert because
+nothing produces one; it stops being inert the moment thought signatures are
+parsed, and then it is §2 again with Gemini's spelling. Anything added here
+needs the encoder and the parser changed together.
+
+Adjacent and same species: the thinking budget is gated on
+`model.contains("3.7") || model.contains("flash")`. That is a version substring,
+and it rots the way §14 describes. It is currently harmless — every Flash model
+in the list matches on `"flash"` — but the Pro models get no budget, which is a
+product decision nobody has actually made.
+
+---
+
+## 14. Model IDs rot, and nothing catches it until a 404
+
+*Added 2026-09-02.*
+
+The provider menu shipped IDs that no longer existed: OpenAI's entire list was
+the retired GPT-4o and o-series generation, and Anthropic's was three Claude 3.x
+IDs beside one current model.
+
+**A dead ID fails at none of the places that would catch it.** Not the build,
+not startup, not when the user picks it from the menu. It fails on the first
+request, as a 404 from the provider, which reaches the user as "the assistant is
+broken" and reaches the log as someone else's error message.
+
+They rotted because they were written in **five** places: `AiProviderType`, plus
+a literal default in each of the three clients and in `ChatController`. The enum
+offered models the client would never request and nothing said so. The clients
+now derive their defaults from the enum, which makes it the only place a model
+ID appears, and `AiProviderTest` pins that they agree.
+
+**Check the provider's own documentation, not your memory of it.** This was
+established the embarrassing way: `gemini-3.7-flash` and `gemini-3.1-pro-preview`
+were called invented in this repo's own session notes, and both are real. The
+stale lists were the two nobody doubted. A model ID is a fact with an expiry
+date, and it is cheap to look up and expensive to guess.
+
+---
+
+## 15. A model in `models.list` is not a model you can call
+
+`AiProviderType.GEMINI.availableModels` offered `gemini-2.5-pro`. The models
+endpoint lists it, with `generateContent` among its
+`supportedGenerationMethods` -- and calling it returns:
+
+```
+404  This model models/gemini-2.5-pro is no longer available to new users.
+     Please update your code to use models/gemini-3.1-pro-preview
+```
+
+So the catalogue and the capability disagree, and the catalogue is the
+optimistic one. **Checking a model id against `models.list` proves nothing**;
+that check was run here first, reported all five ids present, and was wrong
+about one of them. Only a request settles it, which is what
+`GeminiOnDeviceTest.every_offered_model_answers` does -- one tiny call per model
+in the picker, because the cost of a dead entry is a user selecting it and
+getting an error that names the model as missing rather than retired.
+
+This is §14's failure -- a model id that rots with nothing to catch it -- with
+one addition: the id had not been renamed or removed, so even an id-existence
+check against the catalogue would have passed.
+
+`gemini-2.5-pro` is dropped from the picker. `gemini-3.1-pro-preview`, which the
+error message recommends, was already there.
+
+## 16. Google Sign-In cannot authorise a Gemini call, and no scope will fix it
+
+The sign-in flow works. On a real device: authorize, consent, redirect back
+through `com.googleusercontent.apps.<suffix>:/oauth2redirect`, PKCE token
+exchange, profile parsed, account shown in settings. That part is done.
+
+**What it cannot do is authorise `generateContent`.** Signed in, every request
+returns:
+
+```
+403 PERMISSION_DENIED  ACCESS_TOKEN_SCOPE_INSUFFICIENT
+method: google.ai.generativelanguage.v1beta.GenerativeService.GenerateContent
+```
+
+Three pieces of evidence, in the order they were found, because the first two
+were wrong turns:
+
+1. `https://www.googleapis.com/auth/generative-language` -- the scope this code
+   shipped with -- fails at the account chooser with `400 invalid_scope`,
+   "Some requested scopes cannot be shown".
+2. `https://www.googleapis.com/auth/cloud-platform` **is granted** -- the token
+   response says so, and the app now shows it in settings -- and the call still
+   fails identically. So the scope is not missing; it is not sufficient either.
+3. The API's own discovery document settles it:
+   `generativelanguage.models.generateContent` declares **`scopes: NONE`**, and
+   the only OAuth scope the whole API declares is `devstorage.read_only`.
+
+**There is no scope to find.** `generateContent` on
+`generativelanguage.googleapis.com` authenticates with an API key. OAuth user
+credentials reach the endpoint -- an unauthenticated probe answers
+`401 UNAUTHENTICATED: Expected OAuth 2 access token, login cookie or other
+valid authentication credential`, which is what made the first two attempts look
+reasonable -- but no scope authorises this method.
+
+The Gemini in Android Studio comparison does not hold: that is a first-party
+Google product on Google's own entitlement path, not this public API.
+
+**What is actually available**, none of it free:
+
+- **Keep sign-in for identity only** and keep calling with a pasted API key.
+  `docs/PLAN.md`'s locked decision is already "bring-your-own API key"; sign-in
+  then shows who you are and nothing more, which is close to worthless.
+- **Move the OAuth path to Vertex AI** (`aiplatform.googleapis.com`), which does
+  accept `cloud-platform` tokens. Different endpoint, different request shape, a
+  GCP project and region per user, and `cloud-platform` is a **sensitive scope**
+  -- shipping it needs Google's app verification, since in testing it is capped
+  at 100 named testers.
+- **Drop sign-in.** The feature was worth building on the assumption it removed
+  the key-pasting step. It does not.
+
+**Dropped, and the code kept.** `GoogleAuthManager.SIGN_IN_ENABLED` is `false`
+and the settings button is gone; sign *out* stays, so anyone already signed in
+can clear it. Nothing else was deleted, because nothing else is wrong -- and if
+a Vertex AI path ever arrives this is its front half unchanged. Re-deriving a
+working PKCE flow, a registered Android client, the reversed-client-id redirect
+and the custom-URI-scheme toggle would cost far more than a flag. A test pins
+the flag to this section so flipping it means reading first: on its own it
+restores a button that signs in and then fails every request.
+
+**So every provider the app supports is bring-your-own API key** -- Gemini,
+Anthropic, OpenAI and anything OpenAI-compatible. `docs/PLAN.md`'s locked
+decision turns out to be the only shape on offer rather than a preference.
+
+**The method that settled this is the one to reuse.** Two scope guesses were
+made from documentation and both were wrong; what ended it was reading the
+API's discovery document for the method's declared scopes, and showing the
+*granted* scopes in the UI so "requested" and "granted" could be told apart.
+A token response's `scope` field is the only place that difference is visible,
+and a dropped scope is otherwise invisible until a request fails naming the
+method and not the scope.
+
+## 17. Every provider's key was written to Anthropic's slot
+
+`ApiKeyStore` keeps one encrypted preference per provider, plus a *legacy* pair
+(`apiKey.ciphertext` / `apiKey.iv`) that predates providers and is still what
+`save()` and `read()` use for Anthropic. The settings screen called `save()`
+**and** the provider's own setter on every save:
+
+```kotlin
+keys.save(trimmed)                                   // the legacy slot
+when (activeProvider) { GEMINI -> keys.saveGeminiApiKey(trimmed); ... }
+```
+
+So saving a Gemini key also wrote it into Anthropic's store. Two consequences,
+neither of which announces itself:
+
+- `hasAnthropic()` reads the legacy slot, so **Anthropic reported a key it had
+  never been given** -- and any UI marking configured providers marks it too.
+- Switching to Anthropic then sends a *Gemini* key to `api.anthropic.com`, which
+  fails as an authentication error naming neither the key nor where it came
+  from.
+
+Only Anthropic writes the legacy slot now, and
+`ApiKeySectionTest.a_key_saved_for_one_provider_does_not_appear_under_another`
+pins it.
+
+**Removing one key may not use `clear()`.** `clear()` ends with
+`keyStore().deleteEntry(ALIAS)`, and that alias is shared by all four providers:
+deleting it turns every ciphertext that was meant to survive into undecryptable
+bytes. `clearProviderKey(provider)` removes only that provider's preferences and
+leaves the alias alone. The alias may only be deleted by the call that is
+removing every key in the same breath.
+
+**The screen's copy of that state is keyed on the provider, not reset by hand.**
+Six values in `ApiKeySection` are per provider -- whether a key is stored, the
+draft, the reveal toggle, the model, and both halves of the endpoint -- and each
+was read once at composition and re-read individually in the provider chip's
+`onClick`. That is correct, and it is this finding's bug waiting to happen
+again: a seventh value added to the composition and forgotten in the handler
+shows the previous provider's value under the new provider's name, silently, in
+the screen where the values are credentials. They are `remember(activeProvider)`
+now, so a new one is right by construction and there is no second place to
+remember. The exception is the advanced disclosure, which is deliberately
+sticky: opened once it stays open across a switch, where a keyed remember would
+shut it again on any provider with no endpoint stored.
+`ApiKeySectionTest.switching_provider_swaps_the_endpoint_and_drops_a_half_typed_key`
+pins both halves, and fails if the key is dropped from any one of them.
+
+## 18. A Compose test composing more than one screenful loses its own nodes
+
+`ApiKeySectionTest` composed the section bare -- `setContent { ApiKeySection(keys) }`
+-- and every test passed until one added a saved key. That adds a status row,
+which pushes the endpoint field past the bottom of the display, and the failure
+is:
+
+```
+Failed to perform text input.
+Reason: Expected exactly '1' node but could not find any node that satisfies:
+(ContentDescription = 'API endpoint')
+```
+
+which reads as *the field does not exist* rather than *nothing could scroll to
+it*. The section is hosted in a `LazyColumn` in `SettingsScreen`, so the harness
+now wraps it in a `verticalScroll` and reaches nodes with `performScrollTo()`.
+**A test that composes a section in a container the app never uses is testing a
+layout that does not ship**, and this is how that difference surfaces.
+
+## 19. A provider checks the model before it checks the quota, and that is a free test
+
+Measured against both APIs with keys whose accounts have no credit:
+
+| request | answer |
+|---|---|
+| `gpt-5.6` | `429 credit_balance_exhausted` |
+| `gemini-3.8-flash` | `429 RESOURCE_EXHAUSTED` |
+| `definitely-not-a-model-xyz` | `404 model_not_found` / `404 NOT_FOUND` |
+| `gemini-2.5-pro` | `404 "no longer available to new users"` |
+
+**Validation happens before billing.** So the question that has bitten this
+project twice — §14 (a renamed id) and §15 (a listed id that cannot be called)
+— can be answered **without paying for a single token**:
+`every_offered_model_is_one_the_api_knows` probes every id in the picker and
+fails only on a 404, in both `GeminiOnDeviceTest` and `OpenAiOnDeviceTest`.
+Those two tests pass today on two exhausted accounts. The stronger claim, that
+a model *answers*, still needs credit and still skips.
+
+`LiveApiOutcome` holds the classifier, and
+`a_retired_model_is_told_apart_from_an_unpayable_one` is its negative control:
+on a credit-less account every live model reports the same 429, so without a
+known-retired id to test against, nothing would notice if the distinction
+stopped working. It was also verified the blunt way — adding `gemini-2.5-pro`
+to the shipped picker made the test fail and name it.
+
+**An empty 404 is not a missing model.** Probing several ids back to back
+earned a burst of `HTTP 404` with a **zero-length body**, `gemini-3.8-flash`
+included, which had answered 429 seconds earlier and did so again seconds
+later. That is Google's rate limiter, and read naively it would fail the suite
+by declaring every model dead. A genuine model-not-found always names the model
+in its body, so an empty one is classified `Inconclusive`, and the probes are
+spaced.
+
+**`models.list` is wrong in both directions.** §15 established that a listed
+model may not be callable. The reverse also holds: `gpt-5.6` — the OpenAI
+default — is **absent** from `/v1/models`, while `gpt-5.6-sol`, `-terra` and
+`-luna` are all present. It is nonetheless real, and the table above is how
+that was settled rather than by guessing which way the alias resolves. **The
+list is not the authority; the endpoint you actually call is.**
+
+## Still open — needs a real API key
+
+Two questions are semantics rather than platform, and a local fake must not be
+allowed to look like it settled them. They remain skipped tests in
+`:spike:ai`'s `AnthropicOnDeviceTest`:
+
+- **Does the live API accept this exact request shape?** The fake accepts
+  anything.
+- **Does prompt caching report a hit?** Everything in §5 is designed around it,
+  and a miss is invisible without `cache_read_input_tokens` from a second turn.
+
+```sh
+./gradlew :spike:ai:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.anthropicApiKey=sk-ant-...
+```
+
+**The multi-provider work made this list longer, not shorter.** The first
+question above now exists once per provider, and it is least answered for the
+one that matters most:
+
+- **Gemini: the test exists, the account does not pay for it.**
+  `GeminiOnDeviceTest` (in `:ai:core`, not `:spike:ai` -- that spike is about
+  whether a vendor SDK survives ART and does not depend on our code) drives
+  `GeminiAiClient` against the live API and skips without a `geminiApiKey`
+  argument. It has already earned its place by catching §15. The four
+  assertions themselves are **still unproven**: with a valid key but no billing
+  credit, `generateContent` returns
+  `429 Your prepayment credits are depleted`, so whether Google accepts the
+  request shape our client builds is *still* an open question. A key is not
+  enough; the project behind it needs credit.
+
+  Those four tests now **skip** on `429 RESOURCE_EXHAUSTED` rather than fail. A
+  depleted account answers every request that way whatever was asked, so the
+  failures said nothing about the code -- and `every_offered_model_answers`
+  reported the entire picker dead, which is a false accusation against a model
+  list that had been answering an hour earlier. Anything else, a 400 on our
+  JSON or a 404 on a retired id, stays a failure: those are the questions the
+  suite exists to ask.
+- **OpenAI: the test exists now, and the account is exhausted too.**
+  `OpenAiOnDeviceTest` drives `OpenAiClient` against the live API, one question
+  per test, and skips on `429 insufficient_quota`. A real key **authenticates**
+  — a rejected key would 401, which the suite deliberately does not skip — and
+  every model in the picker is known to the API (§19). What is still unproven is
+  whether OpenAI accepts the request shape the client builds; `max_tokens` in
+  particular is the parameter OpenAI has been retiring in favour of
+  `max_completion_tokens`, and nothing here would notice. The paragraph below
+  described the state before that test existed:
+
+- **No request had ever reached OpenAI.** Every test of that client ran against
+  `ScriptedProviderApi`, which proves the JSON matches *our reading of the spec*
+  and nothing about whether the provider accepts it. One test modelled on
+  `GeminiOnDeviceTest`, skipping without a key, is the cheapest way to close it.
+- **Google Sign-In: registered, and Google accepts the request.** The
+  flow is wired end to end -- PKCE, the `com.osamu.aide://oauth2callback`
+  intent filter in the manifest, the settings entry point and the
+  `MainActivity` callback, and an Android OAuth client is registered for
+  `com.osamu.aide` against the **debug** signing certificate. Hitting the
+  authorize endpoint now redirects to Google's sign-in page rather than an
+  error, which is as far as this can be verified without a human typing a
+  password. A release build signed with a different key needs its own client
+  id and will fail with this one.
+
+  **Two things had to change, and neither was guessable.** An Android client
+  accepts exactly one redirect -- the reverse of its own client id,
+  `com.googleusercontent.apps.<suffix>:/oauth2redirect`, single slash. The
+  `com.osamu.aide://oauth2callback` this code shipped with was registrable
+  nowhere. And the redirect has **no authority**, so `MainActivity` matching on
+  `uri.host` dropped every callback silently; it matches on scheme now.
+
+  **Custom URI schemes are off by default on new Android clients.** With
+  everything else correct, Google answered `invalid_request` / "Custom URI
+  scheme is not enabled for your Android client" -- base64-encoded inside the
+  `authError` parameter of a 302, so from inside the app it is a browser page
+  that fails with nothing to read. It is a toggle on the client in the console.
+  **Check an OAuth client with one request to the authorize endpoint** before
+  driving any UI: a `location:` header pointing at `signin/identifier` means
+  accepted, and one pointing at `signin/oauth/error` carries the reason once
+  the `authError` blob is decoded.
+
+  **It will not spend a Gemini subscription.** The token carries the
+  `generative-language` scope and calls `generativelanguage.googleapis.com`,
+  which bills to a Cloud project -- the same billing that answered
+  `429 prepayment credits are depleted` for a pasted key. Gemini in Android
+  Studio is a first-party product on Google's own entitlement path, not this
+  API. **Not verified**, because it cannot be until a client id exists; the
+  experiment is one `generateContent` call from a signed-in subscriber account
+  with no project credit, and it is worth running because being wrong about it
+  would change what the feature is for. Gemini by pasted API key is unaffected,
+  which is why this is easy to miss.
+- **Prompt caching has no analogue on the generic path**, so §5 simply does not
+  apply there. Whether these providers offer anything equivalent, and what it
+  would cost to use it, is unexamined. Today the generic loop pays full price
+  every turn.
+
+## 12. Streaming: the deltas are not the answer
+
+Adding streaming to four providers took an afternoon; the parts worth writing
+down are all about the *relationship* between what streams and what is true.
+
+**`AiClient.send(request, onTextDelta)` defaults to the one-shot path.** A
+provider that cannot stream produces one delta containing the whole reply, so
+the panel has exactly one rendering path and a provider added later cannot
+introduce a second. That default is the reason the UI work did not have to
+branch on provider at all.
+
+**The response is authoritative and the deltas are decoration.** Two things
+force this, and both bit:
+
+- **A written-out tool call.** A local model that prints `{"name": "read_file",
+  ...}` into its prose has that object recovered and stripped (§4 of
+  `tools/localai/FINDINGS.md`), so the final text is *not* the concatenation of
+  the deltas. Rendering the deltas and stopping there leaves raw JSON on
+  screen -- which it did, permanently, because a tool card closes the bubble
+  before the end of the turn can correct it. `TurnListener.onTextSettled`
+  exists for exactly that: it fires after the response arrives and *before* any
+  tool runs.
+- **The guards.** The round cap and the repeat-call guard both return
+  explanatory text that was never streamed.
+
+**Tool-call reassembly is where the bugs are, and it needs no device.** The
+OpenAI wire format sends a call's arguments as a run of JSON fragments keyed by
+`index`, so two calls interleave and are told apart only by that field; a
+`finish_reason` can arrive on a chunk carrying nothing else; `"content": null`
+appended naively puts the literal string "null" in the reply. All of it is
+decided in pure functions in `Streaming.kt` with unit tests, because a device
+test cannot arrange the orderings and a scripted server only produces the
+orderings you thought of.
+
+**Gemini streams from a different route, not with a different body.**
+`:streamGenerateContent?alt=sse`, and without `alt=sse` the same route returns
+a JSON *array* of chunks -- a valid response that an SSE reader sees as one
+unparseable blob, so the reply arrives empty with no error anywhere.
+
+**Anthropic is accumulated by the SDK's own `MessageAccumulator`.** Not
+convenience: thinking blocks have to be replayed verbatim with their signatures
+(§2), and hand-reassembling `content_block_start` / `input_json_delta` /
+`content_block_stop` is precisely how that breaks. Only `text_delta` is
+forwarded; streaming `thinking_delta` into the bubble would render the model's
+reasoning as the answer and then replace it.
+
+## 13. A persisted list and a process-local key
+
+**This crashed the app, and the shape is general.** `ChatEntry` ids come from a
+counter that starts at zero in each process, and they are also the keys a
+`LazyColumn` uses. Conversations are stored on disk with their ids, so
+reopening one restored entries holding ids 1 and 2 -- and the next message
+minted id 1 again. `LazyColumn` throws on a duplicate key, and the crash lands
+on the *next* interaction, nowhere near the load.
+
+Ids are now minted fresh on load. The rule: **a key that is process-local must
+not be persisted, or must be re-derived on the way back in.** The field is
+still written to the file, because a record of the order it was saved in is
+useful when something goes wrong; it is simply not trusted when read.
+
+Worth knowing how it presented: `dumpsys activity exit-info` said
+`reason=4 (APP CRASH(EXCEPTION))` with `trace=null`, there was no new
+tombstone, and `logcat -b crash` was empty -- this phone returns nothing to
+logcat for app processes. So the diagnosis came from the change set and was
+confirmed by a unit test that plants a file "from a previous run", not from a
+stack trace.
+
+## 14. Two theme tokens that mean something other than what they say
+
+Both found by looking at the phone, and neither is visible in code review.
+
+**`secondaryContainer` is green in this theme.** Used for the user's own
+message it rendered the question as a success banner, louder than the answer it
+is meant to be quieter than; used for the approval prompt it put a green band
+in front of rewriting someone's files, which reads as "approved" at a glance.
+Both are neutral surfaces now. The general point: the Material role names
+describe *structure*, and this app's palette assigns real colours to them, so a
+token chosen for its name can carry a meaning nobody intended.
+
+**`outlineVariant` is #1E2838 against a #0B0E14 background.** Intended as the
+quietest divider, it is effectively invisible on this phone at hairline widths.
+The chat panel's turn rail -- its whole structural device -- used it and did not
+render. `outline` is still quiet and actually appears.

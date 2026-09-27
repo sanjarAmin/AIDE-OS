@@ -1,0 +1,1093 @@
+package com.osamu.aide.ui.workspace
+
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import com.osamu.aide.build.BuildRunner
+import com.osamu.aide.engine.api.DebuggerRequest
+import com.osamu.aide.core.common.AppResult
+import com.osamu.aide.core.common.DefaultDispatcherProvider
+import com.osamu.aide.core.fs.BuildEngine
+import com.osamu.aide.core.fs.FileProjectRepository
+import com.osamu.aide.core.fs.Project
+import com.osamu.aide.core.fs.SourceLanguage
+import com.osamu.aide.editor.DocumentStore
+import com.osamu.aide.engine.deps.DependencyResolver
+import com.osamu.aide.editor.EditorLanguages
+import com.osamu.aide.engine.fast.AndroidPlatformProvider
+import com.osamu.aide.engine.fast.KotlinToolchainProvider
+import com.osamu.aide.engine.fast.NativeToolchainProvider
+import com.osamu.aide.engine.gradle.GradleToolchainProvider
+import com.osamu.aide.engine.fast.ApkInstaller
+import com.osamu.aide.toolchain.manager.ToolchainComponent
+import com.osamu.aide.toolchain.manager.ToolchainManager
+import com.osamu.aide.toolchain.nativetools.NativeToolRunner
+import com.osamu.aide.toolchain.nativetools.NativeToolchain
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import java.io.File
+import java.util.concurrent.TimeUnit
+
+/**
+ * The workspace's wiring, on a device: project -> file tree -> editor -> build.
+ *
+ * Instrumented rather than a JVM test because every collaborator this screen
+ * has needs a real [android.content.Context] -- the installer, the toolchain
+ * manager, the native tool runner. Mocking them out would leave only the parts
+ * that were never in doubt.
+ *
+ * What it does not do is run a build. That needs the 63 MB platform and is
+ * already proved end to end by :engine:fast's DownloadedPlatformBuildTest; the
+ * question here is whether the screen reaches the engine at all.
+ */
+@RunWith(AndroidJUnit4::class)
+class WorkspaceViewModelTest {
+
+    private val context = InstrumentationRegistry.getInstrumentation().targetContext
+    private val dispatchers = DefaultDispatcherProvider()
+
+    private lateinit var workspaceRoot: File
+    private lateinit var repository: FileProjectRepository
+    private lateinit var project: Project
+    private lateinit var viewModel: WorkspaceViewModel
+
+    @Before
+    fun setUp() = runBlocking {
+        workspaceRoot = File(context.cacheDir, "workspace-test-${System.nanoTime()}")
+        repository = FileProjectRepository(workspaceRoot, dispatchers)
+
+        project = (
+            repository.createProject(
+                // Not the directory name: "Demo App" becomes the directory
+                // "Demo-App", so a test that waits for the *project* name is
+                // really waiting for the descriptor to have been read.
+                name = "Demo App",
+                applicationId = "com.example.demo",
+                language = SourceLanguage.JAVA,
+                engine = BuildEngine.FAST,
+            ) as AppResult.Success
+            ).value
+
+        val toolchain = ToolchainManager(context, dispatchers)
+        val projectDependencies = ProjectDependencies(
+            DependencyResolver(File(context.cacheDir, "maven"), dispatchers),
+        )
+        stagePlatformJar()
+        val projectBuilder = ProjectBuilder(
+            toolchain = toolchain,
+            platforms = AndroidPlatformProvider(context, dispatchers),
+            runner = NativeToolRunner(NativeToolchain.from(context), dispatchers),
+            dependencies = projectDependencies,
+            // Points at a directory with no toolchain in it, so
+            // compiler() returns null -- which is what a device without
+            // the 54 MB download has, and the case this test is about.
+            kotlin = KotlinCompilerSource(
+                KotlinToolchainProvider(context),
+                File(context.cacheDir, "kotlin-host-test"),
+            ),
+            // Likewise resolves to null: this context's files directory
+            // holds no 551 MB clang, which is what almost every device
+            // looks like.
+            native = NativeToolchainProvider(context, dispatchers),
+            // Also absent: no JDK, no Gradle. Which is what a device that
+            // has never opened a Gradle project looks like.
+            gradle = GradleToolchainProvider(context, dispatchers),
+            dispatchers = dispatchers,
+            outputRoot = File(context.cacheDir, "builds-test"),
+        )
+
+        viewModel = WorkspaceViewModel(
+            dispatchers = dispatchers,
+            projects = repository,
+            documents = DocumentStore(dispatchers),
+            builder = projectBuilder,
+            // The same builder, in this process: these tests are about a
+            // device with no toolchains, not about where a build runs.
+            runner = object : BuildRunner {
+                override fun build(project: Project, debuggable: Boolean, debugger: DebuggerRequest?) =
+                    projectBuilder.build(project, debuggable, debugger)
+            },
+            toolchain = toolchain,
+            installer = ApkInstaller(context, dispatchers),
+            languageServices = LanguageServices(
+                native = NativeToolchainProvider(context, dispatchers),
+                toolchain = toolchain,
+                dispatchers = dispatchers,
+                buildOutputRoot = File(context.cacheDir, "builds-test"),
+            ),
+            dependencies = projectDependencies,
+            languages = EditorLanguages(context),
+        )
+        Unit
+    }
+
+    @After
+    fun tearDown() {
+        workspaceRoot.deleteRecursively()
+    }
+
+    /**
+     * Puts an `android.jar` where [ToolchainManager] looks for one.
+     *
+     * Language intelligence is disabled without it, so a test asserting that
+     * diagnostics appear would otherwise pass by asserting nothing. Copied from
+     * the same staged asset `:engine:fast`'s tests use rather than downloaded;
+     * see that module's FINDINGS on what is and is not in git.
+     */
+    private fun stagePlatformJar() {
+        val target = File(
+            context.filesDir,
+            "toolchains/platforms-android-36/android.jar",
+        )
+        if (target.isFile) return
+        target.parentFile?.mkdirs()
+        runCatching {
+            InstrumentationRegistry.getInstrumentation().context.assets
+                .open("android.jar")
+                .use { input -> target.outputStream().use { input.copyTo(it) } }
+        }
+    }
+
+    /**
+     * Installs a staged Node where [ToolchainManager] looks for one.
+     *
+     * The same shape as [stagePlatformJar] and for the same reason: without it
+     * the JavaScript test can assert only that a download is offered, and the
+     * half of the feature that matters -- a program starting and its output
+     * arriving in the panel -- would never run. `tar` rather than a Kotlin
+     * unpack because the archive carries symlinks (`bin/npm`) and modes, both
+     * of which a naive extractor drops.
+     */
+    private fun stageNode() = stage("node.tar", into = "node-24", marker = "bin/node")
+
+    /** The same for mono, whose marker is the real file and not `bin/mono`. */
+    private fun stageMono() = stage("mono.tar", into = "mono-6", marker = "bin/mono-sgen")
+
+    private fun stage(archiveName: String, into: String, marker: String) {
+        val root = File(context.filesDir, "toolchains/$into")
+        if (File(root, marker).isFile) return
+        val archive = File(context.getExternalFilesDir(null), archiveName)
+        if (!archive.isFile) return
+        root.mkdirs()
+        ProcessBuilder("/system/bin/tar", "-xf", archive.absolutePath, "-C", root.absolutePath)
+            .redirectErrorStream(true)
+            .start()
+            .apply { inputStream.readBytes(); waitFor(10, TimeUnit.MINUTES) }
+    }
+
+    private val hasPlatform: Boolean
+        get() = File(context.filesDir, "toolchains/platforms-android-36/android.jar").isFile
+
+    /** ViewModel work runs on the main dispatcher; nothing observable happens off it. */
+    private fun onMain(block: () -> Unit) = runBlocking(Dispatchers.Main) { block() }
+
+    private fun awaitState(
+        what: String,
+        timeoutMillis: Long = TIMEOUT_MILLIS,
+        predicate: (WorkspaceUiState) -> Boolean,
+    ) = runBlocking {
+        val deadline = System.currentTimeMillis() + timeoutMillis
+        while (System.currentTimeMillis() < deadline) {
+            if (predicate(viewModel.state.value)) return@runBlocking
+            withContext(Dispatchers.IO) { Thread.sleep(POLL_MILLIS) }
+        }
+        throw AssertionError("timed out waiting for $what; state was ${viewModel.state.value}")
+    }
+
+    private val mainActivitySource: File
+        get() = File(project.rootDir, "src/main/java/com/example/demo/MainActivity.java")
+
+    private val manifest: File
+        get() = File(project.rootDir, "src/main/AndroidManifest.xml")
+
+    /**
+     * The wiring this milestone is actually about: typing produces diagnostics.
+     *
+     * Everything between the keystroke and the gutter is in scope here --
+     * the debounce, the language service, the state -- because each piece is
+     * tested in isolation elsewhere and none of that proves they are connected.
+     * The bug this catches is the one that unit tests never do: a service that
+     * works perfectly and is never called.
+     */
+    @Test
+    fun typing_a_broken_line_puts_a_diagnostic_in_the_state() {
+        assumeTrue("no android.jar staged; language services are disabled", hasPlatform)
+
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(mainActivitySource) }
+        awaitState("the document to load") { it.active != null }
+
+        val broken = mainActivitySource.readText()
+            .replace("setContentView(text);", "setContentView(text); int x = notAThing;")
+        onMain { viewModel.onTextChanged(broken) }
+
+        awaitState("analysis to report the undefined symbol") { state ->
+            state.analysis.file == mainActivitySource &&
+                state.analysis.diagnostics.any { "notAThing" in it.message }
+        }
+
+        // And it must reach the gutter, which reads editorDiagnostics rather
+        // than the analysis directly.
+        val shown = viewModel.state.value.editorDiagnostics
+        assertTrue("the diagnostic did not reach the gutter", shown.any { "notAThing" in it.message })
+    }
+
+    /**
+     * Fixing the line has to clear it again, or the gutter lies.
+     *
+     * Asserted against the specific message rather than an empty list, because
+     * a project that has never been built legitimately has one other error:
+     * `R` is generated by aapt2, so until a build has run there is no `R.java`
+     * for the template's `R.string.greeting` to resolve against. Demanding
+     * silence here would be demanding the analysis lie about that.
+     */
+    @Test
+    fun fixing_the_line_clears_the_diagnostic() {
+        assumeTrue("no android.jar staged; language services are disabled", hasPlatform)
+
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(mainActivitySource) }
+        awaitState("the document to load") { it.active != null }
+
+        val original = mainActivitySource.readText()
+        val broken = original.replace("setContentView(text);", "setContentView(text); int x = notAThing;")
+
+        onMain { viewModel.onTextChanged(broken) }
+        awaitState("the error to appear") { state ->
+            state.analysis.diagnostics.any { "notAThing" in it.message }
+        }
+
+        onMain { viewModel.onTextChanged(original) }
+        awaitState("the error to clear") { state ->
+            state.analysis.file == mainActivitySource &&
+                state.analysis.diagnostics.none { "notAThing" in it.message }
+        }
+        assertTrue(
+            "the gutter still shows the fixed error",
+            viewModel.state.value.editorDiagnostics.none { "notAThing" in it.message },
+        )
+    }
+
+    @Test
+    fun opening_a_project_names_it_and_lists_its_files() {
+        onMain { viewModel.open(project.rootDir) }
+
+        awaitState("the descriptor to be read") { it.projectName == "Demo App" }
+        awaitState("the tree to be listed") { it.visibleNodes.isNotEmpty() }
+        assertEquals(project.rootDir, viewModel.state.value.visibleNodes.first().file)
+    }
+
+    /**
+     * A tap on Go to definition always says something.
+     *
+     * The manifest has no language service and never will, and the button is
+     * live for it like any other file. It used to return silently -- which is
+     * also what every Java file did on a device with no `android.jar`, so the
+     * first thing a new user tried did nothing and explained nothing.
+     */
+    /**
+     * **A file rewritten under the editor reaches the editor.**
+     *
+     * The assistant writes through `ProjectFiles`, which knows nothing about
+     * open buffers, and `openDocument` returns early for a file that is already
+     * open -- right for a tab switch, wrong for this. So an approved edit to
+     * the file on screen left the old text there, and the next save would have
+     * written it back over the change the user had just approved: a silent
+     * revert of something they explicitly allowed.
+     */
+    @Test
+    fun a_file_changed_on_disk_is_re_read_into_its_open_tab() {
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(mainActivitySource) }
+        awaitState("the source to load") { it.active?.file == mainActivitySource }
+        val before = viewModel.state.value.active!!.document.text
+
+        val after = before.replace("onCreate", "onResume")
+        assertTrue("the fixture did not change, so this asserts nothing", after != before)
+        mainActivitySource.writeText(after)
+        onMain { viewModel.reloadFromDisk(mainActivitySource) }
+
+        awaitState("the tab to pick up the new text") { it.active?.document?.text == after }
+        val state = viewModel.state.value
+        assertFalse("a file matching disk was left marked dirty", state.active!!.isDirty)
+        assertTrue("nothing was marked as changed", state.changedLines.isNotEmpty())
+    }
+
+    @Test
+    fun a_reload_that_changes_nothing_marks_nothing() {
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(mainActivitySource) }
+        awaitState("the source to load") { it.active?.file == mainActivitySource }
+
+        // A tool that rewrote a file with identical content should not flash
+        // the whole document at the user.
+        onMain { viewModel.reloadFromDisk(mainActivitySource) }
+        Thread.sleep(500)
+
+        assertTrue(
+            "an unchanged reload highlighted lines",
+            viewModel.state.value.changedLines.isEmpty(),
+        )
+    }
+
+    @Test
+    fun reloading_a_file_that_is_not_open_does_nothing() {
+        onMain { viewModel.open(project.rootDir) }
+
+        onMain { viewModel.reloadFromDisk(manifest) }
+        Thread.sleep(300)
+
+        assertTrue(viewModel.state.value.openFiles.isEmpty())
+    }
+
+    @Test
+    fun go_to_definition_says_why_when_nothing_can_answer() {
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(manifest) }
+        awaitState("the manifest to load") { it.active?.file == manifest }
+
+        val notice = runBlocking {
+            withTimeoutOrNull(TimeUnit.SECONDS.toMillis(10)) {
+                val collected = async(Dispatchers.Default) {
+                    viewModel.events.filterIsInstance<WorkspaceEvent.Notice>().first()
+                }
+                onMain { viewModel.goToDefinition(0) }
+                collected.await()
+            }
+        }
+
+        assertNotNull("Go to definition said nothing at all", notice)
+        assertTrue(
+            "the notice does not name the file type: ${notice?.message}",
+            notice!!.message.contains(".xml"),
+        )
+    }
+
+    /**
+     * Opening a Java file with no platform offers the download.
+     *
+     * Kotlin has done this since M11 -- the answer to "why are there no
+     * completions in this file" has to arrive while the file is on screen --
+     * and Java, which is the template's default language, did not. It waited
+     * for the user to press Build, which is a different question.
+     */
+    @Test
+    fun opening_java_without_the_platform_offers_it() {
+        val jar = File(context.filesDir, "toolchains/platforms-android-36/android.jar")
+        val staged = jar.isFile
+        if (staged) jar.delete()
+        try {
+            onMain { viewModel.open(project.rootDir) }
+            onMain { viewModel.openDocument(mainActivitySource) }
+
+            awaitState("the platform download to be offered") { it.platform != null }
+            val offer = viewModel.state.value.platform!!
+            assertTrue(
+                "the prompt does not say what it is for: $offer",
+                offer.rationale.contains("Java"),
+            )
+        } finally {
+            if (staged) stagePlatformJar()
+        }
+    }
+
+    /**
+     * A file with an error in it reports it on open, without being typed in.
+     *
+     * `analyse` was reachable from `onTextChanged` and from two install
+     * callbacks, and from nothing else. So a broken file opened clean: the
+     * gutter was empty, Problems said "No problems found in project", and the
+     * first keystroke -- any keystroke, even one immediately undone -- made
+     * every error appear at once. Opening a file to see why it will not build
+     * is the ordinary reason to open it.
+     */
+    @Test
+    fun opening_a_file_analyses_it_without_waiting_for_a_keystroke() {
+        assumeTrue("no android.jar staged; language services are disabled", hasPlatform)
+
+        val broken = mainActivitySource.readText()
+            .replace("setContentView(text);", "setContentView(text); int x = notAThing;")
+        mainActivitySource.writeText(broken)
+
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(mainActivitySource) }
+
+        // No edit anywhere in this test: the only thing that has happened is
+        // that the file was opened.
+        awaitState("analysis to report the undefined symbol on open") { state ->
+            state.analysis.file == mainActivitySource &&
+                state.analysis.diagnostics.any { "notAThing" in it.message }
+        }
+    }
+
+    /**
+     * The bisect for `tools/javals/FINDINGS.md`'s unresolved `R`.
+     *
+     * In the app, a successful build writes `R.java` and the editor goes on
+     * reporting `package R does not exist` -- on three separate projects,
+     * surviving a restart. `GeneratedRResolvesTest` does the same thing with a
+     * hand-written `R.java` and passes, so the plumbing works when a test
+     * drives it.
+     *
+     * **The bisect that found it**, kept as the regression test. The build runs
+     * in this process rather than the `:build` one the app spawns, which ruled
+     * that out first; then a service constructed *after* the build resolved
+     * `R` while the warm one did not, which named the cause: a
+     * `StandardJavaFileManager` caches what it finds at a location, so a
+     * service built before the first build holds an empty listing of the
+     * directory aapt2 is about to write `R.java` into, and keeps it.
+     *
+     * `LanguageServices.invalidateAfterBuild` drops it. This fails without
+     * that call.
+     */
+    @Test
+    fun a_build_clears_the_R_error_whose_source_it_generates() {
+        assumeTrue("no android.jar staged; language services are disabled", hasPlatform)
+
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(mainActivitySource) }
+        awaitState("the R error to appear before any build") { state ->
+            state.analysis.diagnostics.any { "R" in it.message && "does not exist" in it.message }
+        }
+
+        onMain { viewModel.build() }
+        awaitState("the build to finish", timeoutMillis = 240_000) { state ->
+            !state.build.isRunning && state.build.outcome != null
+        }
+        assertTrue(
+            "the build did not succeed, so this proves nothing: " +
+                "${viewModel.state.value.build.outcome}",
+            viewModel.state.value.build.succeeded,
+        )
+
+        val generated = File(
+            File(context.cacheDir, "builds-test"),
+            "${project.rootDir.name}/generated/java/com/example/demo/R.java",
+        )
+        assertTrue("aapt2 wrote no R.java at $generated", generated.isFile)
+
+        // The build wrote R.java; nothing re-analyses on its own, so ask.
+        onMain { viewModel.onTextChanged(mainActivitySource.readText()) }
+        awaitState("the R error to clear now that R.java exists", timeoutMillis = 60_000) { state ->
+            state.analysis.file == mainActivitySource &&
+                state.analysis.diagnostics.none { "R" in it.message && "does not exist" in it.message }
+        }
+    }
+
+    /**
+     * A release build interrupted by a download is still a release build.
+     *
+     * **This shipped and was caught by driving it.** Tapping "Build release
+     * APK" on a device with no `android.jar` offers the download, and the
+     * install used to resume through `AfterInstall.BUILD` -- which is
+     * `build()`, which defaults to debug. The APK came out signed with the
+     * device's throwaway key instead of the user's, and nothing said so: the
+     * only visible difference is the certificate on the finished file.
+     *
+     * That is exactly why `AfterInstall` exists, in its own words: what the
+     * user asked for "is not recoverable from the state the install is about
+     * to change". It had three cases and needed a fourth.
+     */
+    @Test
+    fun a_release_build_that_waits_for_a_download_resumes_as_a_release_build() {
+        // The platform is what a release build waits for, so this test is about
+        // a device that has none -- which is every device before the first
+        // build.
+        val jar = File(context.filesDir, "toolchains/platforms-android-36/android.jar")
+        val staged = jar.isFile
+        if (staged) jar.delete()
+        try {
+            onMain { viewModel.open(project.rootDir) }
+            onMain { viewModel.build(debuggable = false) }
+
+            awaitState("the platform download to be offered") { it.platform != null }
+            assertEquals(
+                "the release request was forgotten while the download was offered",
+                AfterInstall.BUILD_RELEASE,
+                viewModel.afterInstall,
+            )
+        } finally {
+            if (staged) stagePlatformJar()
+        }
+    }
+
+    @Test
+    fun revealing_a_directory_expands_everything_above_it() {
+        onMain { viewModel.open(project.rootDir) }
+        awaitState("the tree to be listed") { it.visibleNodes.isNotEmpty() }
+        val packageDir = mainActivitySource.parentFile!!
+
+        onMain { viewModel.revealInTree(packageDir) }
+
+        // Every level, not just the target: a tree opened one level deep with
+        // the levels above it closed shows nothing at all.
+        awaitState("the package to be visible") { state ->
+            state.visibleNodes.any { it.file == mainActivitySource }
+        }
+        val expanded = viewModel.state.value.expandedPaths
+        var walk: File? = packageDir
+        while (walk != null && walk != project.rootDir.parentFile) {
+            assertTrue("$walk was left collapsed", walk.absolutePath in expanded)
+            walk = walk.parentFile
+        }
+    }
+
+    @Test
+    fun revealing_something_outside_the_project_does_nothing() {
+        onMain { viewModel.open(project.rootDir) }
+        awaitState("the tree to be listed") { it.visibleNodes.isNotEmpty() }
+        val before = viewModel.state.value.expandedPaths
+
+        // An open file need not live under the project. Walking up from one
+        // that does not would expand every directory to the filesystem root.
+        onMain { viewModel.revealInTree(File(context.cacheDir, "elsewhere/deep")) }
+
+        assertEquals(before, viewModel.state.value.expandedPaths)
+    }
+
+    @Test
+    fun selecting_a_source_file_opens_it_in_the_editor() {
+        assertTrue("the template wrote no MainActivity.java", mainActivitySource.isFile)
+
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(mainActivitySource) }
+
+        awaitState("the document to load") { it.active != null }
+        val active = viewModel.state.value.active!!
+        assertEquals(mainActivitySource, active.file)
+        assertEquals(mainActivitySource.readText(), active.document.text)
+        assertFalse("a freshly opened file is not modified", active.isDirty)
+    }
+
+    @Test
+    fun an_edit_is_marked_modified_and_reaches_the_file_on_disk() {
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(mainActivitySource) }
+        awaitState("the document to load") { it.active != null }
+
+        val edited = viewModel.state.value.active!!.document.text + "\n// edited\n"
+
+        // The widget echoes its own setText back; that must not count as a change.
+        onMain { viewModel.onTextChanged(viewModel.state.value.active!!.document.text) }
+        assertFalse(viewModel.state.value.isDocumentDirty)
+
+        onMain { viewModel.onTextChanged(edited) }
+        assertTrue("the edit was not noticed", viewModel.state.value.isDocumentDirty)
+
+        onMain { viewModel.save() }
+        awaitState("the save to finish") { !it.isDocumentDirty }
+        assertEquals(edited, mainActivitySource.readText())
+    }
+
+    @Test
+    fun opening_a_second_file_adds_a_tab_and_leaves_the_first_open() {
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(mainActivitySource) }
+        awaitState("the first document") { it.active?.file == mainActivitySource }
+
+        onMain { viewModel.openDocument(manifest) }
+        awaitState("the second document") { it.active?.file == manifest }
+
+        val state = viewModel.state.value
+        assertEquals(2, state.openFiles.size)
+        assertEquals(
+            listOf(mainActivitySource, manifest),
+            state.openFiles.map { it.file },
+        )
+    }
+
+    @Test
+    fun reopening_a_file_that_is_already_open_activates_its_tab() {
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(mainActivitySource) }
+        awaitState("the first document") { it.active?.file == mainActivitySource }
+        onMain { viewModel.openDocument(manifest) }
+        awaitState("the second document") { it.active?.file == manifest }
+
+        onMain { viewModel.openDocument(mainActivitySource) }
+        awaitState("the first tab to come forward") { it.active?.file == mainActivitySource }
+
+        assertEquals(
+            "a duplicate tab was opened",
+            2,
+            viewModel.state.value.openFiles.size,
+        )
+    }
+
+    @Test
+    fun each_tab_tracks_its_own_unsaved_changes() {
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(mainActivitySource) }
+        awaitState("the first document") { it.active?.file == mainActivitySource }
+
+        val edited = viewModel.state.value.active!!.document.text + "\n// edited\n"
+        onMain { viewModel.onTextChanged(edited) }
+
+        onMain { viewModel.openDocument(manifest) }
+        awaitState("the second document") { it.active?.file == manifest }
+
+        val state = viewModel.state.value
+        assertFalse("the manifest was not edited", state.isDocumentDirty)
+        assertTrue(
+            "the first tab lost its unsaved change",
+            state.openFiles.first { it.file == mainActivitySource }.isDirty,
+        )
+        // Still only in the buffer -- switching tabs is not a save.
+        assertFalse(mainActivitySource.readText().contains("// edited"))
+    }
+
+    @Test
+    fun closing_a_tab_saves_it_and_falls_back_to_its_neighbour() {
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(mainActivitySource) }
+        awaitState("the first document") { it.active?.file == mainActivitySource }
+        onMain { viewModel.openDocument(manifest) }
+        awaitState("the second document") { it.active?.file == manifest }
+
+        val edited = viewModel.state.value.active!!.document.text + "\n<!-- edited -->\n"
+        onMain { viewModel.onTextChanged(edited) }
+
+        onMain { viewModel.closeDocument(manifest) }
+        awaitState("the tab to close") { it.openFiles.size == 1 }
+
+        assertEquals(mainActivitySource, viewModel.state.value.activeFile)
+        assertEquals("closing a tab discarded its edit", edited, manifest.readText())
+    }
+
+    @Test
+    fun a_build_saves_every_modified_tab_not_just_the_active_one() {
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(mainActivitySource) }
+        awaitState("the first document") { it.active?.file == mainActivitySource }
+
+        val edited = viewModel.state.value.active!!.document.text + "\n// built with this\n"
+        onMain { viewModel.onTextChanged(edited) }
+
+        onMain { viewModel.openDocument(manifest) }
+        awaitState("the second document") { it.active?.file == manifest }
+
+        // Build refuses for want of a platform, or runs -- either way it saves
+        // first, because the compiler reads the disk and not the buffers.
+        onMain { viewModel.build() }
+        awaitState("the background tab to be written") {
+            mainActivitySource.readText() == edited
+        }
+    }
+
+    /**
+     * The same courtesy for C and C++, and the reason it is asserted here
+     * rather than in the engine: `:engine:fast` refuses a native project by
+     * name whether or not anything offers the download, and a refusal naming a
+     * component the user has no way to get is a dead end. The engine's test
+     * would pass with this screen doing nothing at all.
+     */
+    @Test
+    fun building_a_native_project_without_the_toolchain_offers_to_download_it() {
+        // src/main/cpp is the whole trigger; the file need not be valid, since
+        // nothing will compile it.
+        File(project.rootDir, "src/main/cpp").mkdirs()
+        File(project.rootDir, "src/main/cpp/hello.c").writeText("int main(void) { return 0; }\n")
+
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.build() }
+
+        awaitState("the toolchain prompt") { it.platform != null }
+        val prompt = viewModel.state.value.platform!!
+        assertTrue(
+            "the prompt is for something else: ${prompt.component.id}",
+            prompt.component.id.startsWith("clang-"),
+        )
+        // LLVM is Apache-2.0. Asking for Google's terms here would be asking
+        // the user to agree to something with no bearing on what they get.
+        assertFalse("clang should need no SDK licence", prompt.component.requiresSdkLicense)
+        assertTrue("the prompt should be ready to download", prompt.licenseAccepted)
+        assertTrue("the prompt does not say why", prompt.rationale.contains("C or C++"))
+        assertFalse("a build started anyway", viewModel.state.value.build.isRunning)
+    }
+
+    @Test
+    fun building_without_the_platform_offers_to_download_it_rather_than_failing() {
+        // A device that has never built anything is the state every install
+        // starts in. It has to lead somewhere the user can act on.
+        if (ToolchainManager(context, dispatchers).canBuild()) {
+            // The platform is already installed on this device from an earlier
+            // run, so there is nothing to offer. Nothing to assert either.
+            return
+        }
+
+        // Deliberately without waiting first: tapping Build the instant the
+        // screen opens must still work.
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.build() }
+
+        awaitState("the platform prompt") { it.platform != null }
+        val platform = viewModel.state.value.platform!!
+        assertNotNull("the licence text is empty", platform.licenseText.ifBlank { null })
+        assertTrue(
+            "the prompt names no download",
+            platform.component.archiveUrl.startsWith("https://dl.google.com/"),
+        )
+        assertFalse("a build was started without a platform", viewModel.state.value.build.isRunning)
+    }
+
+    /**
+     * The M10 slice: tapping the same button on a JavaScript project runs it.
+     *
+     * The two outcomes below are the same assertion seen from either side of
+     * one download, and both are worth having. On a device without Node the
+     * point is that the refusal names Node -- not clang, not android.jar,
+     * which is what the APK pipeline would have said had this project reached
+     * it, and a refusal naming the wrong download is worse than none. On a
+     * device with Node the point is that the program's own stdout reaches the
+     * panel, which is the whole feature.
+     */
+    @Test
+    fun running_a_javascript_project_runs_node_rather_than_building_an_apk() = runBlocking {
+        val script = (
+            repository.createProject(
+                name = "Hello Node",
+                applicationId = "com.example.hello",
+                language = SourceLanguage.JAVASCRIPT,
+                engine = BuildEngine.FAST,
+            ) as AppResult.Success
+            ).value
+        assertTrue("the template wrote no entry point", File(script.rootDir, "index.js").isFile)
+        stageNode()
+
+        onMain { viewModel.open(script.rootDir) }
+        awaitState("the descriptor to be read") { it.projectName == "Hello Node" }
+        onMain { viewModel.build() }
+
+        if (ToolchainManager(context, dispatchers).nodeRoot() == null) {
+            awaitState("the Node prompt") { it.platform != null }
+            val prompt = viewModel.state.value.platform!!
+            assertEquals("the prompt is for something else", "node-24", prompt.component.id)
+            assertFalse("Node should need no SDK licence", prompt.component.requiresSdkLicense)
+            assertTrue("the prompt should be ready to download", prompt.licenseAccepted)
+            assertFalse("a build started anyway", viewModel.state.value.build.isRunning)
+            return@runBlocking
+        }
+
+        // index.js prints one line naming the platform it is running on, so
+        // seeing it means node really started -- an empty log would also be
+        // consistent with a process that never launched.
+        awaitState("the script's output") { state ->
+            state.build.log.any { "Hello from" in it }
+        }
+        awaitState("the run to finish") { !it.build.isRunning && it.build.outcome != null }
+        assertTrue(
+            "a clean script did not report success: ${viewModel.state.value.build.outcome}",
+            viewModel.state.value.build.succeeded,
+        )
+        assertTrue("the run panel stayed shut", viewModel.state.value.isBuildPanelOpen)
+    }
+
+    /**
+     * Typing a syntax error into a `.js` buffer reaches the gutter.
+     *
+     * The JavaScript twin of
+     * [typing_a_broken_line_puts_a_diagnostic_in_the_state], and it exists for
+     * the reason that one does: `:lsp:node` has its own suite proving it parses,
+     * and none of it proves this screen ever calls it. The bug a unit test
+     * never catches is a service that works perfectly and is never asked.
+     */
+    @Test
+    fun typing_a_broken_line_into_javascript_reaches_the_gutter() = runBlocking {
+        val script = (
+            repository.createProject(
+                name = "Broken Script",
+                applicationId = "com.example.broken",
+                language = SourceLanguage.JAVASCRIPT,
+                engine = BuildEngine.FAST,
+            ) as AppResult.Success
+            ).value
+        stageNode()
+        assumeTrue(
+            "no Node staged; there is nothing to check with",
+            ToolchainManager(context, dispatchers).nodeRoot() != null,
+        )
+        val entry = File(script.rootDir, "index.js")
+
+        onMain { viewModel.open(script.rootDir) }
+        onMain { viewModel.openDocument(entry) }
+        awaitState("the document to load") { it.active != null }
+
+        onMain { viewModel.onTextChanged("const a = 1;\nfunction f( {\n  return a;\n}\n") }
+        awaitState("the syntax error to be reported", timeoutMillis = 30_000L) { state ->
+            state.analysis.file == entry &&
+                state.analysis.diagnostics.any { "SyntaxError" in it.message }
+        }
+        assertTrue(
+            "the diagnostic did not reach the gutter",
+            viewModel.state.value.editorDiagnostics.any { "SyntaxError" in it.message },
+        )
+
+        // And it clears, or the gutter lies. A .js file has no `R` to be
+        // legitimately unresolved, so silence here is the whole answer.
+        onMain { viewModel.onTextChanged("const a = 1;\nconsole.log(a);\n") }
+        awaitState("the error to clear", timeoutMillis = 30_000L) { state ->
+            state.analysis.file == entry && state.analysis.diagnostics.isEmpty()
+        }
+    }
+
+    /**
+     * "Install dependencies" reaches npm, and the tree shows what it wrote.
+     *
+     * A local `file:` dependency, so the test needs no registry: what is being
+     * asserted is that the button reaches npm through the linker and that the
+     * file tree is read again afterwards. A dependency the user cannot see in
+     * the tree reads as an install that did nothing.
+     */
+    @Test
+    fun installing_dependencies_runs_npm_and_shows_what_it_wrote() = runBlocking {
+        val script = (
+            repository.createProject(
+                name = "Needs Deps",
+                applicationId = "com.example.deps",
+                language = SourceLanguage.JAVASCRIPT,
+                engine = BuildEngine.FAST,
+            ) as AppResult.Success
+            ).value
+        stageNode()
+        assumeTrue(
+            "no Node staged; nothing can install anything",
+            ToolchainManager(context, dispatchers).nodeRoot() != null,
+        )
+
+        val dependency = File(script.rootDir, "vendor/greeter").apply { mkdirs() }
+        File(dependency, "package.json").writeText(
+            """{"name":"greeter","version":"1.0.0","main":"index.js"}""",
+        )
+        File(dependency, "index.js").writeText("module.exports = () => 'hi';")
+        File(script.rootDir, "package.json").writeText(
+            """{"name":"needs-deps","version":"1.0.0","main":"index.js",""" +
+                """"dependencies":{"greeter":"file:vendor/greeter"}}""",
+        )
+
+        onMain { viewModel.open(script.rootDir) }
+        awaitState("the descriptor to be read") { it.projectName == "Needs Deps" }
+        onMain { viewModel.installDependencies() }
+
+        awaitState("the install to finish", timeoutMillis = 120_000L) {
+            !it.build.isRunning && it.build.outcome != null
+        }
+        val log = viewModel.state.value.build.log
+        assertTrue("npm was not invoked as npm-cli.js: $log", log.any { "npm-cli.js" in it })
+        assertTrue(
+            "npm did not report success: ${viewModel.state.value.build.outcome}",
+            viewModel.state.value.build.succeeded,
+        )
+        assertTrue(
+            "nothing was installed",
+            File(script.rootDir, "node_modules/greeter/index.js").exists(),
+        )
+        // `package-lock.json` and not `node_modules`: the tree ignores that
+        // directory by name, which is right -- it is thousands of files nobody
+        // browses. The lock file is what an install adds that the user should
+        // see, and it did not exist before this ran.
+        awaitState("the tree to show the lock file npm wrote") { state ->
+            state.visibleNodes.any { it.file.name == "package-lock.json" }
+        }
+    }
+
+    /**
+     * A download accepted for npm installs dependencies, not the program.
+     *
+     * The install flow was written for the platform, where finishing the
+     * download and starting the build is right. Every borrower since has
+     * wanted something else, and the intent cannot be recovered afterwards --
+     * so it is carried. This asserts the carrying, at the seam where the bug
+     * lived: the two lines that decide what a finished download leads to.
+     *
+     * The install itself is not exercised. It is 37 MB over the network and
+     * has nothing to do with the question.
+     */
+    @Test
+    fun a_node_download_accepted_for_npm_does_not_run_the_program_instead()  = runBlocking {
+        val script = (
+            repository.createProject(
+                name = "Toll Paid",
+                applicationId = "com.example.toll",
+                language = SourceLanguage.JAVASCRIPT,
+                engine = BuildEngine.FAST,
+            ) as AppResult.Success
+            ).value
+        stageNode()
+        assumeTrue(
+            "no Node staged; both branches would refuse for the same reason",
+            ToolchainManager(context, dispatchers).nodeRoot() != null,
+        )
+        // Something npm will report on, so its output is distinguishable from
+        // the program's -- which prints "Hello from ..." and must not appear.
+        File(script.rootDir, "package.json").writeText(
+            """{"name":"toll-paid","version":"1.0.0","main":"index.js"}""",
+        )
+
+        onMain { viewModel.open(script.rootDir) }
+        awaitState("the descriptor to be read") { it.projectName == "Toll Paid" }
+
+        onMain {
+            viewModel.offerComponentInstall(
+                component = ToolchainComponent.node("x86_64")!!,
+                rationale = "test",
+                then = AfterInstall.INSTALL_DEPENDENCIES,
+            )
+            viewModel.resumeAfterInstall()
+        }
+
+        awaitState("npm to finish", timeoutMillis = 120_000L) {
+            !it.build.isRunning && it.build.outcome != null
+        }
+        val log = viewModel.state.value.build.log
+        assertTrue("npm was not what resumed: $log", log.any { "npm-cli.js" in it })
+        assertTrue("the program was run instead: $log", log.none { "Hello from" in it })
+    }
+
+    /**
+     * The other half of M10: ▶ on a C# project compiles it and runs the result.
+     *
+     * The same two branches as the JavaScript test and for the same reasons,
+     * with one assertion that language cannot make: the log has to hold the
+     * compiler's command *and* the program's output, because a C# run is two
+     * processes and a panel showing only the second would hide every `CS0103`
+     * the user needs.
+     */
+    @Test
+    fun running_a_csharp_project_compiles_it_and_runs_the_assembly() = runBlocking {
+        val console = (
+            repository.createProject(
+                name = "Hello Sharp",
+                applicationId = "com.example.sharp",
+                language = SourceLanguage.CSHARP,
+                engine = BuildEngine.FAST,
+            ) as AppResult.Success
+            ).value
+        assertTrue("the template wrote no Program.cs", File(console.rootDir, "Program.cs").isFile)
+        stageMono()
+        // **Skip with a reason, like its siblings.** `stage()` returns quietly
+        // when the archive is not on the device, so without this the test ran
+        // with no mono at all and failed thirty seconds later with "timed out
+        // waiting for the program's output" -- which names the symptom and
+        // hides the cause. It was the only genuine-looking failure in a full
+        // sweep that was not genuine, and it cost a diagnosis to find that out.
+        assumeTrue(
+            "no mono staged; there is nothing to compile the assembly with",
+            ToolchainManager(context, dispatchers).monoRoot() != null,
+        )
+
+        onMain { viewModel.open(console.rootDir) }
+        awaitState("the descriptor to be read") { it.projectName == "Hello Sharp" }
+        onMain { viewModel.build() }
+
+        if (ToolchainManager(context, dispatchers).monoRoot() == null) {
+            awaitState("the Mono prompt") { it.platform != null }
+            val prompt = viewModel.state.value.platform!!
+            assertEquals("the prompt is for something else", "mono-6", prompt.component.id)
+            assertFalse("Mono should need no SDK licence", prompt.component.requiresSdkLicense)
+            assertFalse("a build started anyway", viewModel.state.value.build.isRunning)
+            return@runBlocking
+        }
+
+        // Compiling is slower than starting node: mcs is itself an assembly, so
+        // the runtime starts twice before a line of the program is printed.
+        awaitState("the program's output", timeoutMillis = 120_000L) { state ->
+            state.build.log.any { "Hello from" in it }
+        }
+        awaitState("the run to finish", timeoutMillis = 60_000L) {
+            !it.build.isRunning && it.build.outcome != null
+        }
+        val log = viewModel.state.value.build.log
+        assertTrue("the compiler's command line is not in the log: $log", log.any { "mcs.exe" in it })
+        assertTrue(
+            "a clean program did not report success: ${viewModel.state.value.build.outcome}",
+            viewModel.state.value.build.succeeded,
+        )
+        assertTrue(
+            "the assembly was left out of the project's build directory",
+            File(console.rootDir, ".aide-build").listFiles().orEmpty().any { it.extension == "exe" },
+        )
+    }
+
+    /**
+     * What "fix this error" depends on: the file matches the buffer first.
+     *
+     * The diagnostic describes the buffer and the assistant's `read_file` reads
+     * the disk. Driving the app showed what happens when they disagree -- the
+     * assistant read a file with no error in it, said so, and refused to guess.
+     * `askToFix` calls this before sending; if it stops writing, the assistant
+     * goes back to answering the wrong question.
+     */
+    @Test
+    fun saving_for_a_fix_writes_every_dirty_buffer() = runBlocking {
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(mainActivitySource) }
+        awaitState("the document to load") { it.active != null }
+
+        val edited = viewModel.state.value.active!!.document.text + "\n// asked about this\n"
+        onMain { viewModel.onTextChanged(edited) }
+        assertTrue("the edit was not noticed", viewModel.state.value.isDocumentDirty)
+
+        viewModel.saveAllNow()
+
+        assertEquals(
+            "the assistant would have read the file without the edit",
+            edited,
+            mainActivitySource.readText(),
+        )
+    }
+
+    /**
+     * The engine can be changed after the project exists, and it sticks.
+     *
+     * It was written once at creation and never again: a project made with the
+     * fast path and later needing AGP had to be recreated. The assertion that
+     * matters is the second one -- the state agreeing is easy, and a state that
+     * disagrees with the descriptor survives until the next open and then
+     * quietly reverts.
+     */
+    @Test
+    fun changing_the_build_engine_reaches_the_descriptor() = runBlocking {
+        onMain { viewModel.open(project.rootDir) }
+        awaitState("the descriptor to be read") { it.projectEngine == BuildEngine.FAST }
+
+        onMain { viewModel.setEngine(BuildEngine.GRADLE) }
+        awaitState("the panel to show the new engine") { it.projectEngine == BuildEngine.GRADLE }
+
+        val reopened = repository.openProject(project.rootDir) as AppResult.Success
+        assertEquals(BuildEngine.GRADLE, reopened.value.engine)
+    }
+
+    /** Choosing the engine it already has changes nothing and writes nothing. */
+    @Test
+    fun choosing_the_engine_it_already_has_is_a_no_op() = runBlocking {
+        onMain { viewModel.open(project.rootDir) }
+        awaitState("the descriptor to be read") { it.projectEngine == BuildEngine.FAST }
+        val before = File(project.rootDir, Project.DESCRIPTOR_NAME).lastModified()
+
+        onMain { viewModel.setEngine(BuildEngine.FAST) }
+
+        assertEquals(
+            "the descriptor was rewritten for nothing",
+            before,
+            File(project.rootDir, Project.DESCRIPTOR_NAME).lastModified(),
+        )
+    }
+
+    private companion object {
+        const val TIMEOUT_MILLIS = 10_000L
+        const val POLL_MILLIS = 20L
+    }
+}

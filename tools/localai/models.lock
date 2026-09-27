@@ -1,0 +1,4 @@
+# Models for spike R16, pinned by repository revision and SHA-256.
+# name  repo  revision  file  bytes  sha256
+qwen2.5-coder-0.5b-q4km  Qwen/Qwen2.5-Coder-0.5B-Instruct-GGUF  ebb2015119c907b064c512bf053e945850b5875f  qwen2.5-coder-0.5b-instruct-q4_k_m.gguf  491400064  1d9614638d18024d0fbb36575a15f1302a3adf044df10345688ec4f6e1c4ff32
+qwen2.5-coder-1.5b-q4km  Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF  f86cb2c1fa58255f8052cc32aeede1b7482d4361  qwen2.5-coder-1.5b-instruct-q4_k_m.gguf  1117320768  cc324af070c2ecbfd324a30884d2f951a7ff756aba85cb811a6ec436933bb046

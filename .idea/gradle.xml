@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="GradleMigrationSettings" migrationVersion="1" />
+  <component name="GradleSettings">
+    <option name="linkedExternalProjectsSettings">
+      <GradleProjectSettings>
+        <option name="testRunner" value="CHOOSE_PER_TEST" />
+        <option name="externalProjectPath" value="$PROJECT_DIR$" />
+        <option name="modules">
+          <set>
+            <option value="$PROJECT_DIR$" />
+            <option value="$PROJECT_DIR$/ai" />
+            <option value="$PROJECT_DIR$/ai/core" />
+            <option value="$PROJECT_DIR$/ai/ui" />
+            <option value="$PROJECT_DIR$/app" />
+            <option value="$PROJECT_DIR$/core" />
+            <option value="$PROJECT_DIR$/core/common" />
+            <option value="$PROJECT_DIR$/core/fs" />
+            <option value="$PROJECT_DIR$/core/ui" />
+            <option value="$PROJECT_DIR$/debugger" />
+            <option value="$PROJECT_DIR$/editor" />
+            <option value="$PROJECT_DIR$/engine" />
+            <option value="$PROJECT_DIR$/engine/api" />
+            <option value="$PROJECT_DIR$/engine/deps" />
+            <option value="$PROJECT_DIR$/engine/fast" />
+            <option value="$PROJECT_DIR$/engine/gradle" />
+            <option value="$PROJECT_DIR$/engine/mono" />
+            <option value="$PROJECT_DIR$/engine/node" />
+            <option value="$PROJECT_DIR$/lsp" />
+            <option value="$PROJECT_DIR$/lsp/api" />
+            <option value="$PROJECT_DIR$/lsp/java" />
+            <option value="$PROJECT_DIR$/lsp/kotlin" />
+            <option value="$PROJECT_DIR$/lsp/native" />
+            <option value="$PROJECT_DIR$/lsp/node" />
+            <option value="$PROJECT_DIR$/spike" />
+            <option value="$PROJECT_DIR$/spike/ai" />
+            <option value="$PROJECT_DIR$/spike/clang" />
+            <option value="$PROJECT_DIR$/spike/deps" />
+            <option value="$PROJECT_DIR$/spike/git" />
+            <option value="$PROJECT_DIR$/spike/javals" />
+            <option value="$PROJECT_DIR$/spike/jdwp" />
+            <option value="$PROJECT_DIR$/spike/jdwpdebuggee" />
+            <option value="$PROJECT_DIR$/spike/kotlinls" />
+            <option value="$PROJECT_DIR$/spike/localai" />
+            <option value="$PROJECT_DIR$/spike/mono" />
+            <option value="$PROJECT_DIR$/spike/nativeexec" />
+            <option value="$PROJECT_DIR$/spike/nodejs" />
+            <option value="$PROJECT_DIR$/spike/rootfs" />
+            <option value="$PROJECT_DIR$/terminal" />
+            <option value="$PROJECT_DIR$/toolchain" />
+            <option value="$PROJECT_DIR$/toolchain/manager" />
+            <option value="$PROJECT_DIR$/toolchain/native" />
+            <option value="$PROJECT_DIR$/vcs" />
+            <option value="$PROJECT_DIR$/vcs/git" />
+          </set>
+        </option>
+      </GradleProjectSettings>
+    </option>
+  </component>
+</project>

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      Gradle binds a socket before it will run a build: its
+      FileLockContentionHandler listens on a wildcard address so that other
+      Gradle processes can ask it to release a lock. An Android app cannot
+      create a socket at all without this permission, and the failure names
+      neither sockets nor permissions:
+
+        Could not create service of type FileLockContentionHandler
+          > Could not determine a usable wildcard IP for this machine.
+
+      Nothing here talks to the network; the socket is local coordination
+      between Gradle processes.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+</manifest>

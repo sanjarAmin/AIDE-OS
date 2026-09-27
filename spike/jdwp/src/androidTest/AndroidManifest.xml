@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        Test-only. Without it `socket()` fails with EPERM before any connection
+        is attempted, and the probe reports the platform refusing access to
+        adbd when what actually happened is that this app may not open a socket
+        at all. The first run of this spike drew exactly that wrong conclusion.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+</manifest>

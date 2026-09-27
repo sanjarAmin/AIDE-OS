@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        Loopback TCP to llama-server. Without INTERNET, socket() fails with
+        EPERM before connecting, which reads as the server refusing: spike R15
+        drew exactly that wrong conclusion once.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+</manifest>

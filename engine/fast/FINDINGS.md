@@ -1,0 +1,656 @@
+# `:engine:fast` — what building an APK on the device actually costs
+
+Written while assembling the six-stage pipeline (aapt2 compile → aapt2 link →
+ECJ → D8 → package → apksig) and getting the platform to install what it
+produced. Everything here was learned by hitting it. The toolchain-level
+findings live elsewhere and are not repeated: `tools/aapt2/FINDINGS.md` for the
+native binary and W^X, `tools/ecj/FINDINGS.md` for the compiler's three
+obstacles, `tools/kotlinc/FINDINGS.md` for the Kotlin front end.
+
+---
+
+## 1. `resources.arsc` must be stored uncompressed, and nothing tells you
+
+From API 30 the platform maps the resource table straight out of the APK and
+refuses to install a package whose table is deflated. Nothing upstream of
+packaging notices: the archive is perfectly well-formed either way, every stage
+reports success, and the failure arrives at install time as a bare
+`INSTALL_PARSE_FAILED_*` code with no reference to compression.
+
+The packaging stage therefore forces `STORED` for that one entry whatever aapt2
+chose, and `FastBuildSystemTest.the_resource_table_is_stored_uncompressed` pins
+it. Every other entry keeps aapt2's choice — it already knows which resource
+extensions are not worth deflating.
+
+## 2. apksig aligns; do not align before it
+
+`ApkSigner.Builder.setAlignmentPreserved` defaults to **false**, which means
+apksig realigns every uncompressed entry as it writes the signed copy. A
+zipalign pass in the packaging stage would be undone, not respected. This is why
+`PackageStage` is a plain copy-and-add and contains no alignment code at all —
+the one thing it must get right is the compression *method*, because that
+apksig does preserve.
+
+## 3. apksig reports `isVerifiedUsingV1Scheme = false` on a v1-signed APK
+
+`ApkVerifier` reports which schemes it *used*, not which are present. Handed an
+APK whose manifest declares `minSdk 26`, it verifies v2/v3 and never looks at
+v1, because no device that new would. A correctly JAR-signed APK therefore comes
+back with `isVerifiedUsingV1Scheme = false`, and asserting on that flag fails
+against a perfectly good archive.
+
+The v1 signature still has to be written — a project declaring an older
+`minSdk` gets no other signature a device that old understands. Assert its
+presence by looking for `META-INF/*.SF` in the archive instead.
+
+## 4. `minSdkVersion` has to be read from the manifest, not assumed
+
+D8 desugars against a minimum API level. Guessing it wrong is silent in the
+dangerous direction: **too high** and D8 leaves language features in the dex
+that an old runtime cannot execute, so the APK builds clean, installs, and
+crashes only on the devices the developer promised to support. Too low costs a
+little dex size and nothing else.
+
+`ProjectManifest` reads it with DOM — `javax.xml.parsers` exists on both ART and
+the JVM, so the same code is unit-testable without Robolectric. A codename
+(`TIRAMISU`, `S`) is treated as *unreadable* rather than mapped to a number: the
+mapping table goes stale every release, and a stale guess rounds the wrong way.
+
+## 5. `/data/user/0/<pkg>` and `/data/data/<pkg>` are the same directory
+
+Android reaches app storage by two absolute paths; the first is a symlink to the
+second. A project handed to a tool as one comes back reported as the other the
+moment that tool canonicalises — ECJ does — and a plain string prefix match then
+silently fails, leaving every diagnostic pointing at an absolute cache path
+instead of a file the user can open.
+
+`ProjectPaths.relativise` canonicalises both sides first. Note that **no JVM
+unit test can catch this**: the aliasing only exists on a device. It was found
+by the instrumented test and would have shipped otherwise.
+
+## 6. Zip timestamps are wall-clock with no offset
+
+Fixing entry times to a constant makes builds byte-reproducible, but the
+constant has to be built in the *default* zone. Zip stores local time with no
+offset, so an instant fixed in UTC lands on a different DOS date per device —
+and in any zone behind UTC, on a date before 1980, which zip cannot encode and
+the writer silently clamps.
+
+## 7. Installing: three separate walls, none of them the APK
+
+`REQUEST_INSTALL_PACKAGES` in the manifest is necessary and not sufficient. It
+is a *special* permission — not requested at run time, but toggled by the user
+in Settings — and an app installed from a file manager, F-Droid or a direct APK
+starts without it. Since those are AIDE-OS's distribution channels (R5 in
+`docs/PLAN.md`), the first install a user attempts will be refused. `ApkInstaller`
+checks `canRequestPackageInstalls()` and returns an intent to the right Settings
+page rather than reporting a failure.
+
+In a test the toggle cannot be granted the usual way; `appops set <pkg>
+REQUEST_INSTALL_PACKAGES allow` is how the platform's own tests do it.
+
+**`pm install` cannot read the app's own storage.** Staging the APK to
+`getExternalFilesDir()` and installing from there fails with an SELinux denial —
+`/storage` is FUSE-backed and system_server is denied any read of a fuse file.
+The tool says so and names the way round it: copy to `/data/local/tmp` first.
+The app cannot write there and shell cannot read the app's private cache, so
+the file takes two hops.
+
+**Package visibility hides the result.** From Android 11 an app cannot see
+packages it did not install, so `getPackageInfo` on the freshly installed
+package throws `NameNotFoundException` in a test that installed it through
+shell. The test APK declares `QUERY_ALL_PACKAGES`; the app needs no equivalent,
+because installing through `PackageInstaller` grants the installer visibility of
+what it installed.
+
+One test-harness trap worth writing down: `UiAutomation.executeShellCommand`
+passes the string to `Runtime.exec`, which tokenises on whitespace and does not
+honour quotes — so `sh -c '... 2>&1'` arrives as a dozen separate arguments and
+silently does nothing useful. It also returns stdout only, and `pm install`
+reports every refusal on stderr, so a failure arrives as an empty string.
+`executeShellCommandRwe` (API 31+) returns both.
+
+## 8. What the stages cost
+
+Measured on the `aideos_test` AVD (API 34, x86_64), template Java project,
+second build in the process so compiler class loading is already paid:
+
+| | |
+|---|---|
+| Two full builds plus fixture setup | **~4.8 s** |
+| M2's budget for one | 10 s |
+
+The budget is an assertion in `FastBuildSystemTest`, not an aspiration. The
+number above is an emulator on a desktop and is not a phone; the manual device
+matrix in `docs/PLAN.md` is what settles that.
+
+## 9. Timestamp-based incrementality ships a corrupt APK
+
+Reviewed and rejected 2026-08-24, because it is the obvious first design and
+someone will propose it again. The shape that fails:
+
+> Skip `compile`+`link` if `res/` has not changed since `linked.apk`; skip
+> `javac`+`dex` if `src/` has not changed since the dex.
+
+The two halves are not independent, and `FastBuildSystem` says so where it
+orders them: **`R.java` is an output of linking and an input to compiling.**
+Change only a resource -- add a string, add a layout -- and `src/` is untouched,
+so that rule skips `javac` and `dex` and packages a dex whose `R` constants came
+from the *previous* link. Resource IDs move on every link. The APK installs,
+runs, and resolves the wrong resources, which is a far worse outcome than the
+clean build it saved.
+
+Anything mtime-based has three more problems on top:
+
+- A directory's `lastModified` does not change when a nested file does, so the
+  check needs a recursive walk to be even approximately right.
+- A deleted `.java` leaves its `.class` in `classes/`, and the dexer takes it.
+- Builds here run 2--3 s, inside the resolution of the timestamps being
+  compared. Edit within the same second as a build and the tree reads
+  up-to-date.
+
+And the workspace lives in `cacheDir` (`ProjectBuilder`), which Android may
+evict *partially* at any moment. An up-to-date check that trusts a half-evicted
+workspace is exactly the corrupt-reuse case `BuildWorkspace.prepare()` is
+written to prevent.
+
+What would work is what `docs/PLAN.md` already asks for: per-stage stamps over a
+content hash of that stage's real inputs -- file set and contents, tool
+arguments, `minSdk`, `debuggable` -- with res -> `R.java` -> javac modelled as a
+dependency edge so a resource change invalidates everything downstream of it,
+and `prepare()` staying destructive whenever a stamp is missing or does not
+match. That is a milestone's work, not a cleanup.
+
+## 10. Two `javax.lang.model.SourceVersion`s in one APK, and the silence that follows
+
+Android has no `javax.lang.model`, so this module used to carry a hand-written
+twelve-line `SourceVersion` enum: ECJ's batch `FileSystem` reads
+`SourceVersion.valueOf("RELEASE_12")` in a static initialiser, catching
+`IllegalArgumentException`. A *missing class* throws `NoClassDefFoundError`
+instead, which walks past that handler and makes the whole batch compiler
+unloadable. The shim stopped at `RELEASE_11` deliberately, so the probe threw
+the exception ECJ expects and left `isJRE12Plus` false.
+
+That was correct for this module alone and became a bug the moment `:lsp:java`
+existed. nb-javac ships the *real* `javax.lang.model`, `SourceVersion`
+included — `RELEASE_0` through `RELEASE_17`, plus `isIdentifier`, `isName` and
+`latest`. With both modules in one APK, **both classes are dexed**: D8 does not
+report a duplicate, because each library is dexed separately and the copies land
+in different `classes*.dex`. ART then resolves the name to whichever dex comes
+first, which was the shim.
+
+The symptom is worth recording, because nothing about it points at a classpath:
+
+- Completion returned nothing. Diagnostics returned nothing.
+- No crash, no log, no exception out of the language service.
+- `parse()` worked perfectly — `typeDecls=1`.
+- `analyze()` returned zero elements, and `Elements.getTypeElement` then reported
+  *"Cannot use Elements.getTypeElement before the TaskEvent.Kind.ENTER finished
+  event"* — because ENTER had aborted on a `NoSuchMethodError` for
+  `SourceVersion.isIdentifier(CharSequence)`, swallowed inside javac.
+
+A language service that silently answers "no errors" is indistinguishable from a
+clean file, which is how this survived a green unit-test suite: `:lsp:java`'s own
+instrumented tests pass, because its test APK has no ECJ in it and therefore only
+one `SourceVersion`. **Only the app that contains both is broken**, and only an
+end-to-end test through the app catches it — `WorkspaceViewModelTest` now has one.
+
+The fix is to have exactly one definition. The shim is deleted and this module
+depends on `nb-javac-android` for the real one, which is already in the app for
+`:lsp:java`, so nothing grows. Two things make that safe, and both were checked
+rather than assumed:
+
+- `isJRE12Plus` becomes **true** with the real enum. It gates only
+  `getOlderSystemRelease`, which reads `ct.sym` out of a JDK image that does not
+  exist on a device — and that is reached only for `--release`, which
+  `JavaCompileStage` does not pass. It uses `-source`/`-target`.
+- `:engine:fast`'s instrumented suite still builds and signs a working APK.
+
+Worth noting for the future: this is *why* AndroidIDE relocated
+`javax.*` to `jdkx.*` and `com.sun.tools.javac.*` to `openjdk.tools.javac.*` in
+their vendored compiler. `tools/javals/FINDINGS.md` recorded that the relocation
+was not needed on ART — true of the compiler in isolation, and wrong for an
+application that also carries ECJ. A third javax-providing dependency would put
+that question back on the table.
+
+## 11. Things known missing
+
+- **The bundled tests stage `android.jar` by hand.** They read a 27 MB copy out
+  of `androidTest/assets`, which is not in git and only exists on a machine that
+  put it there. `:toolchain:manager` now delivers the real thing, and
+  `DownloadedPlatformBuildTest` builds a project with it -- but that test is
+  opt-in, so the everyday suite still depends on the staged copy. Keep it in
+  step with the pin in `ToolchainComponent.ANDROID_PLATFORM`.
+- **Incrementality is dex only.** `BuildWorkspace.prepare()` deletes the tree
+  every build, deliberately: reusing a workspace from a cancelled build is how
+  you get an APK containing the previous run's classes. A debug build's dex is
+  kept per package and per jar under a content key (section 16), and Java is
+  compiled incrementally when no signature changed (section 17); resources and
+  Kotlin still run in full. Section 9 records the cheaper design that does not
+  work.
+- **No `.module` parsing.** Maven resolution reads `.pom` only, and AndroidX's
+  graph is correct only under Gradle Module Metadata. Section 12 records the
+  three mechanisms that costs us and the narrow rules standing in for them; two
+  of those rules are curated tables that will rot.
+- **Resources are linked, not merged.** aapt2's `-R` overlay is doing the job
+  AGP gives to a resource merger. It is the right semantics for last-one-wins,
+  but it is not a merger: nothing reconciles two libraries' `values.xml`, and
+  nothing reports when one silently shadows the other.
+- **The manifest merger implements the common rules, not the specification.**
+  Section 13. `tools:replace`, node selectors and priorities are absent, and a
+  library relying on one gets an ordinary merge instead.
+
+## 12. Making a Compose app *run*, not build
+
+Getting a Compose hello-world to run took six fixes across `:engine:deps` and
+this module. Every one was invisible to a build-only test: the build reported
+success, the APK installed cleanly, and the app crashed on launch or drew
+nothing. `ComposeRunTest` exists because of that, and found all six.
+
+Five of the six were resolution, and they are written up where the code is:
+**`engine/deps/FINDINGS.md`**. The one-line version is that AndroidX's graph is
+correct only under Gradle Module Metadata, and the difference costs duplicate
+classes at D8 and missing ones at runtime. That module now reads the `.module`
+file rather than approximating it, which is what retired the curated tables the
+first version of this section described. Everything below is this module's half.
+
+### Library resources are `-R` overlays, not positional inputs
+
+A positional input joins aapt2's *base* set, where two archives defining one
+resource name is a hard error — and matched-version AndroidX libraries do
+exactly that: `compose.ui:ui-android` and `compose.foundation:foundation-android`
+both ship `string/autofill`. Verified by downloading both AARs, not inferred
+from the message. Under `-R` the last one wins, which is the documented
+behaviour and the one AGP's resource merger provides.
+
+The first input has to stay positional: `-R` overlays *onto* something, and with
+every input an overlay there is no base to overlay onto. Order is the whole
+rule — libraries first, the project last — so reversing it lets a library's
+`app_name` silently replace the user's.
+
+### `--extra-packages`, or the app dies on launch
+
+aapt2 generates `R` for the manifest's package and nothing else, but a library's
+compiled code references *its own*. So `androidx.customview.poolingcontainer.R`
+is simply not in the APK, the build succeeds, the APK installs, and the app dies
+at `onAttachedToWindow`:
+
+```
+java.lang.NoClassDefFoundError: Failed resolution of:
+    Landroidx/customview/poolingcontainer/R$id;
+```
+
+The flag accumulates, so it is repeated rather than joined. The project's own
+package is excluded, or aapt2 emits a second identical `R.java` and the Java
+compiler rejects the duplicate. The package names come from each AAR's manifest;
+`engine/deps/FINDINGS.md` section 5 records how that parse failed silently.
+
+### The manifest merger, and the shape of the bug it fixed
+
+`-R` is doing the job AGP gives to a resource merger. For a while there was no
+equivalent for manifests at all: a library's `<uses-permission>`, `<provider>`
+or `<activity>` never reached the app's manifest. `AarExtractor` had unpacked
+every library `AndroidManifest.xml` since M4, and nothing read them.
+
+**The failure mode is why this belongs here rather than on a to-do list.**
+`androidx.startup` ships a `<provider>` whose only job is to run other
+libraries' initialisers, and Compose pulls it in through `emoji2`. Without the
+merge the build succeeds, the APK verifies, it installs, it launches, it draws
+— and the initialisers never run. No crash, no diagnostic. Text renders
+slightly wrong, forever.
+
+`ManifestMerger` closes it; section 13 has the rules. The test that proves it
+is in `ComposeRunTest`, and it asks **Android's own `PackageManager`** whether
+`com.example.composerun.androidx-startup` resolves after install. Nothing
+weaker would do, because the app looks identical either way.
+
+### Instrumented tests need their own `largeHeap`
+
+`androidTest/AndroidManifest.xml` here sets `android:largeHeap="true"`. `:app`
+already had it; this module's test manifest did not, and resolving a Compose
+graph hit ART's 192 MB default and reported only `Process crashed`. **A
+library's instrumented tests run in their own process with their own manifest**,
+and a `largeHeap` on the app under test does not reach them.
+
+Also: XML comments cannot contain `--`, and the manifest merger fails the build
+with `The string "--" is not permitted within comments` rather than pointing at
+the line.
+
+### What the test has to assert
+
+"Builds" and "runs" are different milestones, and the gap between them is where
+all six of these lived. `ComposeRunTest` asserts the app *drew* — UiAutomator
+waiting on a marker string in another process's accessibility tree — because
+every weaker assertion passed while the app was broken:
+
+- the build reported success
+- the APK was well-formed and verified
+- `pm install` succeeded
+- `am start -W` reported `Status: ok`
+
+Only the last of those is even suspicious in hindsight, and only if you know
+that `am start` reports the *launch*, not the process surviving it.
+
+## 13. Merging manifests: what the rules are, and what they are not
+
+`ManifestMerger` is not AGP's. AGP implements a specification with node markers,
+selectors and priorities; this implements the part every ordinary Android build
+depends on, and says so rather than implying more:
+
+- `<uses-permission>` and `<uses-feature>` unioned by `android:name`;
+- the `<application>` element's children added when the project does not already
+  declare one with the same `android:name`;
+- `${applicationId}` substituted.
+
+**The project always wins.** It is the one merge rule a user can reason about
+without reading a specification.
+
+### `tools:node="merge"` is not a marker to skip
+
+The first version dropped every element carrying any `tools:` attribute, on the
+grounds that this implements none of them and aapt2 refuses an unbound prefix.
+That threw away the exact component the merger exists to bring in:
+
+```xml
+<provider
+    android:name="androidx.startup.InitializationProvider"
+    android:authorities="${applicationId}.androidx-startup"
+    tools:node="merge" />
+```
+
+`merge` is the *default*, spelled out. Only `remove` and `removeAll` mean "do
+not include this", and they are the only two honoured. The rest are stripped
+from the output rather than passed through, so a marker this does not implement
+cannot look as though it had been.
+
+### Keying by `android:name` is what keeps the unioned set safe
+
+An element with no `android:name` is never merged, because there is nothing to
+compare it against. That — not its absence from the unioned set, which is the
+reason a reader would give — is what actually protects `<uses-sdk>`.
+
+Found by mutation: adding `uses-sdk` to the unioned set fails no test, because
+it has no name either way. The property doing the work now has a test of its
+own, and reversing it fails.
+
+`<uses-sdk>` genuinely must not be unioned: `androidx.startup` declares
+`minSdkVersion="14"`, and an app that took a library's floor would silently
+claim to run on devices it cannot.
+
+### A bad library manifest costs that library, not the build
+
+These files come out of archives fetched over the network from a coordinate the
+user typed. A malformed one is skipped and the merge continues; a failure of the
+merge as a whole falls back to linking the project's own manifest, which is what
+this project did until now and still produces a working APK.
+
+### The test helper was the bug, and one test hid it
+
+Worth recording because it will happen again. Kotlin's `trimIndent()` runs
+*after* interpolation, so building a fixture as one raw string with a multi-line
+`$body` drops the common indent to zero and leaves the XML declaration indented
+— which is not a well-formed document. Every library manifest failed to parse,
+the merger skipped them exactly as designed, and four tests failed pointing
+squarely at the code under test.
+
+The fifth passed. `a_library_uses_sdk_is_left_alone` asserts that a library's
+`minSdkVersion` does *not* appear, and nothing being merged satisfies that
+perfectly. **A test whose assertion is an absence passes when the fixture is
+broken**, which is the most expensive kind of green.
+
+## 14. An input wired only into a test is not wired
+
+`DependencyInputs` gained `libraryPackages` in M6 and `libraryManifests` in M8.
+Both were passed by `:engine:fast`'s own instrumented tests, which is how each
+was proved to work. Neither was passed by `ProjectDependencies.inputsFor`, which
+is the only path a project built **through the app** takes.
+
+So for the whole of M6 the engine was correct and the app was not. A user
+opening an AndroidX project and tapping Build got a successful build, a valid
+APK, a clean install, and a crash on launch — `NoClassDefFoundError` on a
+library's own `R` class, the exact failure `--extra-packages` was added to
+prevent. The test that proved the fix could not see the app, and the app had no
+test that looked at what it handed the engine.
+
+**A data class with defaulted fields compiles either way.** That is what makes
+this shape of bug survivable: adding a field breaks no call site, so the one
+that matters silently keeps the default. Every existing test still passed.
+
+`ProjectDependenciesTest` now asserts the shape of the object the app hands the
+engine, rather than trusting a call site. It is a seam test and it is worth its
+run time: two of the four fields were missing when it was written, and both
+failures happen *after* a successful build.
+
+The rule this leaves behind: **when a stage gains an input, the test that proves
+the stage is not enough.** Something has to assert that the caller supplies it,
+and the caller is usually in another module.
+
+
+## 15. The native stage, and the two shapes it cannot take
+
+M7 added C and C++ to the pipeline. The compiler mechanics are in
+`tools/clang/FINDINGS.md`; what belongs here is what the *engine* had to do
+differently because of them.
+
+**One clang invocation per source, then a separate link.** Not a batching
+choice that could be revisited for speed. Two jobs in one invocation make the
+driver spawn `cc1` through `/proc/self/exe`, which under the linker launch is
+the linker, and it dies on `expected absolute path: "-cc1"`. The link is worse:
+the driver always `execve`s `ld.lld`, out of app storage, which nothing may
+execute — so `ClangToolchain` asks it to *plan* the link with `-###` and runs
+the linker itself. The stage's job is only to hand it one job at a time.
+
+**A C++ project must be linked by the C++ driver**, even though its objects are
+already compiled. `clang` and `clang++` are the same binary and the name decides
+what gets linked in; linking C++ objects with the C driver omits libc++ and
+fails on every symbol the standard library owns.
+
+**`libc++_shared.so` goes into the APK.** It is part of the toolchain, not part
+of Android, and the driver plans `-lc++_shared` into every C++ link. Nothing on
+the device resolves it, so an APK without it installs cleanly and dies at
+`System.loadLibrary` — which is the NDK Gradle plugin's reason for doing the
+same copy.
+
+### Native libraries are packaged compressed
+
+`lib/<abi>/*.so` entries are `DEFLATED`, so the platform extracts them at
+install. The alternative — storing them uncompressed and mapping them in place,
+which is what modern AGP does — requires every such entry to be page-aligned,
+and `apksig` aligns uncompressed entries to 4 bytes, not to a page. A library
+stored and misaligned produces an APK that installs and then fails to load, and
+only on devices whose page size is larger than the alignment it got. Compressed
+costs install-time disk and nothing else.
+
+### One ABI: the device's own
+
+Built for `Build.SUPPORTED_ABIS.first()` and no other. An on-device IDE's output
+is nearly always installed on the device that built it, and each additional ABI
+means another 551 MB toolchain to hold a compiler that produces libraries this
+device cannot run. Worth revisiting only when this engine is asked to produce an
+APK for somewhere else.
+
+### The refusal has to come first
+
+A project with `src/main/cpp` on a device with no toolchain is refused before
+any stage starts, naming the toolchain. Letting it build would produce an APK
+with no library in it — no error anywhere in the build — that installs and dies
+at `System.loadLibrary` on the user's device, with nothing pointing back at a
+missing download. This is section 14's lesson again: the failure that costs is
+the one that produces a plausible artefact.
+
+### clang's diagnostics are not aapt2's
+
+Close enough to look reusable and not reusable. clang prefixes its own failures
+with the driver's name, so `clang-21: error: unable to execute command` parses
+under aapt2's rules as a file named `clang-21` — putting a tappable link to a
+nonexistent file in front of the user, for the one error class they can do
+nothing about. `ClangDiagnostics` checks for a tool prefix first, and keeps
+`note:` lines, which for a template error are usually the useful half.
+
+## 16. Dexing a debug build a package at a time, and keeping it
+
+**Dexing was most of every build on anything bigger than a template.** A
+3,000-class, 216,000-line project (`tools/bench/FINDINGS.md`) took 82 s cold
+and 52 s for a second build with nothing changed; D8 was 62 s and 42 s of
+those. Java compilation was 9--13 s. Every build dexed every class again,
+because the workspace is emptied each time -- rightly, section 9.
+
+`DexShards` keeps what section 9 rules out -- reuse -- and drops what made reuse
+wrong, the timestamps. A debuggable build with `minSdk` 24 or more is dexed in
+**shards: one per package of the project's classes, one per dependency jar.**
+Each shard's dex is stored beside the workspace under a key hashed from the
+shard's input paths and bytes, D8's version, `minSdk` and the platform jar. A
+shard whose key matches is not dexed; a resource change alters `R$*.class`,
+which alters the key of that package and nothing else.
+
+Measured on the same emulator and project:
+
+| Large project | Before | Shards |
+|---|---|---|
+| First build | 82.1 s (D8 61.8 s) | 58.6 s (D8 41.9 s, 21 of 21 shards) |
+| One class edited, same session | -- | **13.4 s** (D8 3.5 s, 1 of 21) |
+| Nothing edited, same session | 51.7 s (D8 42.1 s) | -- |
+| App restarted, nothing edited | 82.1 s | **17.1 s** (0 of 21) |
+
+Even a first build is faster: twenty small D8 runs beat one large one here.
+
+Decisions that are not obvious:
+
+- **No merge.** Gradle dexes per class and merges. On a desktop, for these
+  3,000 classes, per-class intermediates took 31.9 s and the merge 8.1 s
+  against 20.7 s for one whole-program run -- the merge alone would eat most
+  of what a small edit saves. The shards are packaged as they are, as
+  `classes.dex` ... `classes21.dex`, which every device at API 21 or more loads
+  natively. The Compose app `ComposeRunTest` builds is 107 shards, and it
+  installs, launches and draws.
+- **A package is a sound unit, a class would be too, a module is not
+  needed.** What D8 generates for a class is named after it and needs only its
+  nest, and a nest shares a package. Interface desugaring does read across the
+  hierarchy, and only happens below API 24 -- hence the floor, and release
+  builds stay whole-program, where one optimised dex is the point.
+- **Two definitions of a class fall back to a whole-program dex.**
+  `DexShards.duplicateClasses` reads each shard's `class_defs` straight from
+  the dex header. The exception is D8's own `com/android/tools/r8/` support
+  classes: **the first lambda test found that any debug dex with a lambda
+  defines `Lcom/android/tools/r8/annotations/LambdaMethod;`**, so every real
+  app's shards each carried one, the check fired on every build, and the cache
+  would have fallen back to whole-program for ever while every test with one
+  lambda passed. They are fixed definitions and tolerated.
+- **Warnings from a cached shard are not repeated.** They were reported when
+  it was dexed, about code that has not changed since.
+- **Written through a sibling directory with its key already inside, then
+  renamed**, so a build killed half way leaves the old entry or none, never a
+  new key over an old dex. Entries for packages and jars no longer in the build
+  are deleted.
+
+Java compilation was then the larger half of an edit -- 8.4 s of 13.4 --
+because ECJ compiled every source every time. Section 17.
+
+## 17. Compiling only the Java that changed, and when that is not allowed
+
+With dex cached (section 16) a one-class edit to the 3,000-class project still
+took 13.4 s, and 8.4 s of it was ECJ compiling 2,999 sources that had not
+changed. `IncrementalJava` keeps the last successful compile -- its classes,
+and per source a content hash, the class files it produced and its diagnostics
+-- and the stage uses it under one rule:
+
+> Recompile the sources whose content changed, against the kept classes of the
+> rest -- **unless one of them now has a different ABI, or a source was added
+> or removed, and then compile everything.**
+
+The ABI (`ClassAbi`) is what another file could have compiled against: access,
+supertypes, generic signatures, every non-private member's descriptor, and
+**every constant's value**. The constants are why the rule is blunt. ECJ copies
+a `static final` value into each class that reads it, and that class's file
+keeps no reference to where the value came from -- so a dependency graph read
+out of class files misses exactly the dependents that go stale. `R` is a class
+of such constants. A method body edit, the case this is for, never changes the
+ABI; a signature or constant change pays for a full compile, which is only
+slow. `JavaCompileStageTest` checks both directions: an untouched class's
+cached file is not rewritten after a body edit, and a class that inlined a
+changed constant is.
+
+Measured on the emulator, large project:
+
+| | Before (dex cache only) | Now |
+|---|---|---|
+| First build, empty caches | 58.6 s | 63.4 s |
+| One class edited | 13.4 s | **7.2 s** (1 of 3,002 compiled) |
+| Nothing edited | -- | **5.4 s** |
+| App restarted, nothing edited | 17.1 s | **6.8 s** |
+
+The first two attempts were slower than compiling everything, and why is the
+useful part:
+
+- **Copying kept classes cost more than compiling.** Restoring 3,000 class
+  files into the workspace was 4 s of a build that compiled nothing. They are
+  hard links now. That is safe only because nothing writes a class file in
+  place: a rebuild deletes a changed source's classes before ECJ writes new
+  ones, and a project with Kotlin -- where kotlinc writes into the same
+  directory first -- does not use incremental compilation at all.
+- **Reading every class's ABI after every full compile** cost more than the
+  compile. The ABI is now read only for a changed source, from its kept
+  classes, just before it is recompiled; a class is matched to its source by
+  name (`p/Outer$Inner.class` is `p/Outer.java`) and opened only when no source
+  has that name.
+- **Hashing every source went through FUSE.** Projects live on external
+  storage, and reading 3,000 files to hash them was 3.2 s with nothing
+  changed -- 9 s on a cold first build. Like git's index, the state keeps each
+  source's size and modification time with its hash, and a source whose size
+  and time match is not read. This is **not the rule section 9 rejects**: a
+  time never decides whether to compile, only whether an earlier hash of the
+  content still stands, and a file modified within two seconds of the state
+  being saved is always read again -- the same-tick edit that would otherwise
+  look untouched. A first build takes no hashes, having nothing to compare
+  them with.
+
+Still spent on an edit: D8 warming up in a process that has not dexed yet (up
+to 8 s the first time after an app start), linking 3,000 classes back into the
+workspace (1.6--2.3 s), and hashing each shard's class files for the dex cache
+key. Warnings from files not recompiled are replayed from the state, so the
+Problems pane does not empty on an unchanged rebuild.
+
+## 18. Kotlin compiles incrementally too, except around `inline`
+
+Section 17 left projects with Kotlin compiling everything, and a 480-class
+Kotlin project (`tools/bench`, `--kotlin`) rebuilt with **nothing changed in
+86 s**, the dex cache hitting every shard: kotlinc was nearly all of it. Now
+kotlinc and ECJ share one plan (`IncrementalCompile`), the same rule as
+section 17, and that project rebuilds in **2.0 s with nothing changed and
+11.9 s after a method body edit** (1 of 482 sources compiled, 1 of 10 dex
+shards).
+
+Three things Kotlin needed beyond Java's rule, each of which a plain port
+would have got wrong:
+
+- **An inline function's body is invisible to the ABI, and is its callers'
+  code.** Checked against kotlinc 2.2.10 on a desktop, rendering class files
+  with `ClassAbi`: a body edit, same ABI (correct); a private function added,
+  different; `String` to `String?`, different -- but only once `@Metadata` was
+  in the rendering, since both are `Ljava/lang/String;` -- and **an edit to the
+  body of an `inline fun`, same ABI**, which would leave every caller running
+  the old body. So a changed Kotlin file that mentions `inline` anywhere
+  compiles everything. `KotlinBuildTest.an_inline_body_edit_reaches_its_callers`.
+- **The module file.** kotlinc finds another file's top-level functions
+  through `META-INF/<module>.kotlin_module` on the classpath. A partial compile
+  writes its own, listing only the files it compiled; written into the shared
+  output it would hide every other file's top-level functions from the next
+  partial compile. So a partial compile writes elsewhere and its classes are
+  moved in without that file. It stays correct because a new top-level
+  declaration changes the ABI, which compiles everything.
+- **`internal`.** A partial compile passes the kept classes as
+  `-Xfriend-paths`, so the recompiled files can still use the module's
+  internal declarations. The body-edit test uses a top-level function and an
+  internal one from another file, and edits the caller twice -- the second
+  partial compile is the one that fails without the two points above.
+
+Java and Kotlin in one project recompile together from the one plan: a changed
+Java file is handed to kotlinc for its signatures, then to ECJ;
+`KotlinBuildTest.java_and_kotlin_edits_still_link_both_ways`.
+
+Also found on the way: **a Kotlin project could not be built from the project
+list at all on a device without the compiler.** The compiler was offered only
+when a `.kt` file was opened, so tapping Build -- or finishing the platform
+download a build asked for -- ended at "the Kotlin compiler is not installed"
+with nothing to tap. Build offers it now, as it offers clang and the Gradle
+components.

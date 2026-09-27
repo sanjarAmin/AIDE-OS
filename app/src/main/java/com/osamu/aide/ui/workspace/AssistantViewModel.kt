@@ -1,0 +1,196 @@
+package com.osamu.aide.ui.workspace
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.osamu.aide.ai.core.AiProviderType
+import com.osamu.aide.ai.core.ApiKeyStore
+import com.osamu.aide.ai.core.Assistant
+import com.osamu.aide.ai.core.CompletionContext
+import com.osamu.aide.core.common.AppResult
+import com.osamu.aide.core.fs.Project
+import com.osamu.aide.core.fs.ProjectRepository
+import com.osamu.aide.ai.core.ChatController
+import com.osamu.aide.ai.core.ChatUiState
+import com.osamu.aide.ai.core.ApprovalScope
+import com.osamu.aide.ai.core.ConversationStore
+import com.osamu.aide.vcs.git.GitWorkspace
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
+import java.io.File
+
+/**
+ * Keeps one conversation alive for as long as the workspace is open.
+ */
+class AssistantViewModel(
+    private val assistant: Assistant,
+    private val builder: ProjectBuilder,
+    private val projects: ProjectRepository,
+    /**
+     * The same instance the editor uses, so the assistant asks a session that
+     * is **already warm**.
+     *
+     * Building a second one would cost the ~4 s a session takes to open, per
+     * question, and hold a second copy of the front end's object graph on a
+     * phone. `LanguageServices` is a singleton for exactly this reason.
+     */
+    private val languages: LanguageServices,
+    private val keys: ApiKeyStore? = null,
+    private val git: GitWorkspace? = null,
+    private val workspaceRoot: File? = null,
+    /**
+     * Where conversations are stored: the app's private files directory.
+     *
+     * **Not the project directory**, for the reason [ConversationStore]
+     * documents -- a `connectedAndroidTest` run deletes external app storage
+     * and would take the history with it.
+     */
+    private val chatHistoryRoot: File? = null,
+) : ViewModel() {
+
+    private val lastBuild = LastBuild()
+    private val _completing = MutableStateFlow(false)
+
+    val completing: StateFlow<Boolean> = _completing
+
+    private val noticeChannel = Channel<String>(Channel.BUFFERED)
+    val notices: Flow<String> get() = noticeChannel.receiveAsFlow()
+
+    private var openProject: Project? = null
+    private val controller = MutableStateFlow<ChatController?>(null)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val state: StateFlow<ChatUiState> = controller
+        .flatMapLatest { it?.state ?: flowOf(ChatUiState()) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, ChatUiState())
+
+    fun open(projectDir: File) {
+        if (controller.value?.projectDir == projectDir) return
+
+        controller.value = ChatController(
+            assistant = assistant,
+            projectDir = projectDir,
+            scope = viewModelScope,
+            extraTools = buildTools(
+                runBuild = { target -> builder.build(target).toList().summarise(target.rootDir) },
+                project = { openProject },
+                lastBuild = lastBuild,
+            ) + kotlinTools(
+                // Resolved per call rather than captured: the service is null
+                // until its components are installed, and a session that
+                // decided that once at open would never notice them arriving.
+                serviceFor = { file -> languages.serviceFor(file, projectDir) },
+                project = { openProject },
+            ) + gitTools(
+                project = { openProject },
+                git = git,
+                workspaceRoot = workspaceRoot,
+            ) + shellTools(
+                project = { openProject },
+            ) + codeSearchTools(
+                project = { openProject },
+            ),
+            keys = keys,
+            store = chatHistoryRoot?.let { ConversationStore(it, projectDir) },
+        )
+        controller.value?.refreshConversations()
+
+        viewModelScope.launch {
+            openProject = (projects.openProject(projectDir) as? AppResult.Success)?.value
+        }
+    }
+
+    /**
+     * Files the assistant has changed, as absolute paths.
+     *
+     * Resolved against the project here rather than in `:ai:core`, which deals
+     * in paths relative to the project root and has no business knowing where
+     * that root is mounted.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val filesWritten: Flow<File> = controller
+        .flatMapLatest { active -> active?.filesWritten ?: flowOf() }
+        .map { relative -> File(controller.value?.projectDir, relative) }
+
+    fun send(text: String) = controller.value?.send(text) ?: Unit
+
+    fun resolveApproval(approved: Boolean, scope: ApprovalScope = ApprovalScope.ONCE) =
+        controller.value?.resolveApproval(approved, scope) ?: Unit
+
+    fun regenerate() = controller.value?.regenerate() ?: Unit
+
+    fun editAndResend(entryId: Long, text: String) =
+        controller.value?.editAndResend(entryId, text) ?: Unit
+
+    fun openConversation(id: String) = controller.value?.openConversation(id) ?: Unit
+
+    fun deleteConversation(id: String) = controller.value?.deleteConversation(id) ?: Unit
+
+    fun renameConversation(id: String, title: String) =
+        controller.value?.renameConversation(id, title) ?: Unit
+
+    fun dismissError() = controller.value?.dismissError() ?: Unit
+
+    fun switchProvider(provider: AiProviderType) =
+        controller.value?.switchProvider(provider) ?: Unit
+
+    fun switchModel(model: String) =
+        controller.value?.switchModel(model) ?: Unit
+
+    fun cancelSend() = controller.value?.cancelSend() ?: Unit
+
+    fun newChat() = controller.value?.newChat() ?: Unit
+
+    fun toggleShareContext(share: Boolean) =
+        controller.value?.toggleShareContext(share) ?: Unit
+
+    fun complete(path: String, text: String, cursor: Int, onInsert: (String) -> Unit) {
+        if (_completing.value) return
+        _completing.value = true
+
+        viewModelScope.launch {
+            val completer = assistant.completer()
+            if (completer == null) {
+                _completing.value = false
+                noticeChannel.trySend("Add your AI credentials in Settings to use completion.")
+                return@launch
+            }
+
+            val outcome = runCatching {
+                completer.complete(
+                    CompletionContext(
+                        path = path,
+                        before = text.take(cursor),
+                        after = text.drop(cursor),
+                    ),
+                )
+            }
+            _completing.value = false
+
+            outcome.fold(
+                onSuccess = { suggestion ->
+                    if (suggestion == null) {
+                        noticeChannel.trySend("Nothing to suggest here.")
+                    } else {
+                        onInsert(suggestion)
+                    }
+                },
+                onFailure = { failure ->
+                    noticeChannel.trySend(
+                        "Completion failed: ${failure.message ?: failure::class.java.simpleName}",
+                    )
+                },
+            )
+        }
+    }
+}

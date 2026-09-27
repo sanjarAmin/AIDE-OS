@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!--
+            Test-only. Serves a temp directory as a document tree so the SAF
+            import path can be driven end to end; see FakeDocumentsProvider.
+
+            exported="true" is not a choice: DocumentsProvider.attachInfo
+            throws "Provider must be exported" otherwise. MANAGE_DOCUMENTS is
+            what actually guards it. That permission is signature-level and
+            held only by the system, so nothing but this test APK's own
+            process can reach the provider.
+        -->
+        <provider
+            android:name="com.osamu.aide.core.fs.FakeDocumentsProvider"
+            android:authorities="com.osamu.aide.core.fs.test.documents"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS" />
+    </application>
+
+</manifest>

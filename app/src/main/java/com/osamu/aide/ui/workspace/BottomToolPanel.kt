@@ -1,0 +1,573 @@
+package com.osamu.aide.ui.workspace
+
+import com.osamu.aide.core.ui.fadingEdges
+import android.content.Intent
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ListAlt
+import androidx.compose.material.icons.filled.AutoFixHigh
+import androidx.compose.material.icons.filled.AccountTree
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.CheckCircleOutline
+import androidx.compose.material.icons.filled.PlayCircleOutline
+import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.material3.FilterChip
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import com.osamu.aide.core.fs.BuildEngine
+import com.osamu.aide.core.ui.EmptyState
+import com.osamu.aide.core.ui.theme.CodeTextStyle
+import com.osamu.aide.engine.api.Diagnostic
+import com.osamu.aide.engine.api.DiagnosticSeverity
+import java.io.File
+
+/** Tabs whose content needs more than a strip: see the height below. */
+private val TALL_TABS = setOf(ToolTab.DEBUG, ToolTab.GIT, ToolTab.TERMINAL, ToolTab.LOGCAT)
+
+enum class ToolTab(val title: String, val icon: ImageVector) {
+    BUILD("Build", Icons.Default.PlayCircleOutline),
+    DEBUG("Debug", Icons.Default.BugReport),
+    // Not the bug icon any more: that is Debug's, which is what every IDE uses
+    // it for, and two tabs wearing one icon is a coin toss for the user.
+    PROBLEMS("Problems", Icons.Default.ErrorOutline),
+    GIT("Git", Icons.Default.AccountTree),
+    LOGCAT("Logcat", Icons.AutoMirrored.Filled.ListAlt),
+    TERMINAL("Terminal", Icons.Default.Terminal),
+}
+
+/**
+ * The workspace's bottom tool dock.
+ *
+ * Replaces the transient bottom sheet on layouts with no room for a side tool
+ * pane. Persistent rather than modal, because build output is something you
+ * read *while* editing -- a sheet that covers the code you are fixing has to be
+ * dismissed before you can act on what it said.
+ *
+ * [problems] is separate from `buildState.diagnostics` on purpose: the language
+ * service reports the file being edited as it is typed, and the build reports
+ * the project as it was on disk. The Problems tab wants the union, most-recent
+ * first, which is what the caller assembles.
+ */
+@Composable
+fun BottomToolDock(
+    buildState: BuildUiState,
+    problems: List<Diagnostic>,
+    gitState: GitUiState,
+    gitActions: GitActions,
+    terminalState: TerminalUiState,
+    terminalActions: TerminalActions,
+    logcatState: LogcatUiState,
+    logcatActions: LogcatActions,
+    debugState: DebugUiState,
+    debugActions: DebugActions,
+    /** Why this project cannot be debugged, or null when it can. */
+    debugUnavailable: String?,
+    projectRoot: File?,
+    /**
+     * Brings the Debug tab forward each time it changes.
+     *
+     * A counter rather than a tab, because the same request twice in a row --
+     * two breakpoints hit, with the user on Git between them -- must still
+     * switch, and state holding `DEBUG` both times would not change.
+     */
+    debugFocus: Int = 0,
+    /** Prefills the log filter: the id the built app installs under. */
+    applicationId: String?,
+    onDiagnosticClick: (Diagnostic) -> Unit,
+    onFixDiagnostic: (Diagnostic) -> Unit,
+    onLaunchIntent: (Intent) -> Unit,
+    onClose: () -> Unit,
+    /** Null for a project npm has nothing to do with, which is most of them. */
+    onInstallDependencies: (() -> Unit)? = null,
+    /**
+     * Builds signed with the user's key rather than the device's. Null for the
+     * languages that produce no APK.
+     */
+    onBuildRelease: (() -> Unit)? = null,
+    /** Which engine builds this project, and how to change it. Null for the
+     *  languages that have no engine because they do not build an APK. */
+    engine: BuildEngine? = null,
+    onSelectEngine: (BuildEngine) -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
+    var selectedTab by remember { mutableStateOf(ToolTab.BUILD) }
+    LaunchedEffect(debugFocus) {
+        if (debugFocus > 0) selectedTab = ToolTab.DEBUG
+    }
+
+    val infiniteTransition = rememberInfiniteTransition(label = "dockPulse")
+    val buildGlowAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "buildGlowAlpha",
+    )
+
+    val animatedHeight by animateDpAsState(
+        targetValue = if (selectedTab in TALL_TABS) 340.dp else 200.dp,
+        animationSpec = tween(250),
+        label = "dockHeight",
+    )
+
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.fillMaxWidth()) {
+            // Tab Header Row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                val tabScroll = rememberScrollState()
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fadingEdges(tabScroll)
+                        .horizontalScroll(tabScroll),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ToolTab.entries.forEach { tab ->
+                        val isSelected = tab == selectedTab
+                        val badgeCount = when (tab) {
+                            ToolTab.PROBLEMS -> problems.size
+                            ToolTab.BUILD -> if (buildState.isRunning) 1 else 0
+                            ToolTab.GIT -> gitState.status.staged.size
+                            ToolTab.DEBUG -> if (debugState.session is com.osamu.aide.debugger.DebugState.Stopped) 1 else 0
+                            else -> 0
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isSelected) {
+                                MaterialTheme.colorScheme.surfaceVariant
+                            } else {
+                                MaterialTheme.colorScheme.surfaceContainerLow
+                            },
+                            border = if (isSelected) {
+                                BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
+                            } else null,
+                            modifier = Modifier.clickable { selectedTab = tab },
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            ) {
+                                if (tab == ToolTab.BUILD && buildState.isRunning) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(14.dp)
+                                                .background(
+                                                    MaterialTheme.colorScheme.secondary.copy(alpha = buildGlowAlpha * 0.4f),
+                                                    CircleShape,
+                                                ),
+                                        )
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(12.dp),
+                                            strokeWidth = 1.5.dp,
+                                            color = MaterialTheme.colorScheme.secondary,
+                                        )
+                                    }
+                                } else {
+                                    Icon(
+                                        imageVector = tab.icon,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(15.dp),
+                                        tint = if (isSelected) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
+                                    )
+                                }
+                                Text(
+                                    text = tab.title,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                                    color = if (isSelected) {
+                                        MaterialTheme.colorScheme.onSurface
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                )
+                                if (badgeCount > 0) {
+                                    Box(
+                                        modifier = Modifier
+                                            .background(
+                                                if (tab == ToolTab.PROBLEMS) MaterialTheme.colorScheme.errorContainer
+                                                else MaterialTheme.colorScheme.primaryContainer,
+                                                RoundedCornerShape(8.dp),
+                                            )
+                                            .padding(horizontal = 6.dp, vertical = 1.dp),
+                                    ) {
+                                        Text(
+                                            text = badgeCount.toString(),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (tab == ToolTab.PROBLEMS) MaterialTheme.colorScheme.onErrorContainer
+                                            else MaterialTheme.colorScheme.onPrimaryContainer,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                IconButton(
+                    onClick = onClose,
+                    modifier = Modifier.size(28.dp),
+                ) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Close dock",
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+
+            HorizontalDivider()
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(animatedHeight)
+                    .padding(8.dp),
+            ) {
+                AnimatedContent(
+                    targetState = selectedTab,
+                    transitionSpec = {
+                        fadeIn(animationSpec = tween(200)) togetherWith fadeOut(animationSpec = tween(150))
+                    },
+                    label = "dockTabContent",
+                ) { currentTab ->
+                    when (currentTab) {
+                    ToolTab.BUILD -> {
+                        Column(Modifier.fillMaxWidth()) {
+                            // The one build failure the user can act on: the
+                            // install permission is a Settings toggle, not a
+                            // prompt. Losing this row when the dock replaced
+                            // the sheet would strand an otherwise good build.
+                            buildState.install?.let { install ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Text(
+                                        text = install.message,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    install.settings?.let { settings ->
+                                        TextButton(onClick = { onLaunchIntent(settings) }) {
+                                            Text("Settings")
+                                        }
+                                    }
+                                }
+                            }
+                            // How it ended, which the dock showed nowhere.
+                            // The side pane has always had it as a heading;
+                            // this is the phone layout, where a run that
+                            // exited 3 said so in no place a user could see --
+                            // a build at least leaves stage lines in the log,
+                            // and a program leaves only its own output.
+                            buildState.outcome?.let { outcome ->
+                                Text(
+                                    text = outcome,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = if (buildState.succeeded) {
+                                        MaterialTheme.colorScheme.onSurface
+                                    } else {
+                                        MaterialTheme.colorScheme.error
+                                    },
+                                    modifier = Modifier.padding(bottom = 4.dp),
+                                )
+                            }
+                            engine?.let { current ->
+                                EngineRow(current, onSelectEngine)
+                            }
+                            if (onInstallDependencies != null) {
+                                TextButton(
+                                    onClick = onInstallDependencies,
+                                    enabled = !buildState.isRunning,
+                                ) { Text("Install dependencies") }
+                            }
+                            // Only where an APK is the product. A Node or C#
+                            // project is started, not signed, and a release
+                            // button there would offer nothing.
+                            if (onBuildRelease != null) {
+                                TextButton(
+                                    onClick = onBuildRelease,
+                                    enabled = !buildState.isRunning,
+                                    modifier = Modifier.semantics {
+                                        contentDescription = "Build a release APK"
+                                    },
+                                ) { Text("Build release APK") }
+                            }
+                            if (buildState.log.isEmpty() && buildState.install == null) {
+                                // **Names the control that fills it.** The old
+                                // line said output "appears here" and stopped,
+                                // which tells someone that a panel is empty --
+                                // a thing they can already see -- and not what
+                                // to do about it. The button it points at is
+                                // the play control in the toolbar above, which
+                                // is the one piece of this screen a newcomer
+                                // has no reason to connect with this panel.
+                                EmptyState(
+                                    icon = Icons.Default.PlayCircleOutline,
+                                    title = when {
+                                        buildState.isRun -> "Not run yet"
+                                        buildState.isSync -> "Not synced yet"
+                                        else -> "Not built yet"
+                                    },
+                                    explanation = when {
+                                        buildState.isRun ->
+                                            "Press Run in the toolbar above. Whatever the program " +
+                                                "prints shows up here."
+                                        buildState.isSync ->
+                                            "Press Sync in the toolbar above. The modules Gradle " +
+                                                "finds show up here."
+                                        else ->
+                                            "Press Run in the toolbar above. Compiler output and " +
+                                                "any errors show up here."
+                                    },
+                                    modifier = Modifier.padding(horizontal = 0.dp),
+                                )
+                            }
+                            LazyColumn(Modifier.fillMaxWidth()) {
+                                items(buildState.log) { line ->
+                                    Text(
+                                        text = line,
+                                        style = CodeTextStyle,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(vertical = 1.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    ToolTab.DEBUG -> DebugPanel(
+                        state = debugState,
+                        actions = debugActions,
+                        projectRoot = projectRoot,
+                        unavailableReason = debugUnavailable,
+                        buildStatus = debugBuildStatus(buildState),
+                    )
+                    ToolTab.PROBLEMS -> ProblemsList(
+                        problems = problems,
+                        onDiagnosticClick = onDiagnosticClick,
+                        onFixDiagnostic = onFixDiagnostic,
+                    )
+
+                    // A placeholder that says so. A mocked-up log stream reads
+                    // as a working feature, and the first thing it teaches the
+                    // user is that the UI lies about what the app can do.
+                    //
+                    // The wording names the actual obstacle now that there is
+                    // one: an app sees only its own log lines until it holds
+                    // READ_LOGS, and holding it means every install can ask for
+                    // every log on the phone. `tools/logcat/FINDINGS.md` has
+                    // the evidence, including that the grant is one-time.
+                    ToolTab.GIT -> GitPanel(state = gitState, actions = gitActions)
+                    ToolTab.LOGCAT -> LogcatPanel(
+                        state = logcatState,
+                        actions = logcatActions,
+                        applicationId = applicationId,
+                    )
+                    ToolTab.TERMINAL -> TerminalPanel(
+                        state = terminalState,
+                        actions = terminalActions,
+                    )
+                }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Which engine builds this project.
+ *
+ * Here rather than in Settings because it is a property of the project, not of
+ * the app: two projects on one phone can want different engines, and the
+ * descriptor is where the answer lives. It was chosen once at creation and
+ * could never be changed, so a project made with the fast path and later
+ * needing AGP had to be made again from scratch.
+ */
+@Composable
+private fun EngineRow(engine: BuildEngine, onSelect: (BuildEngine) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = "Engine",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        BuildEngine.entries.forEach { option ->
+            FilterChip(
+                selected = engine == option,
+                onClick = { onSelect(option) },
+                label = { Text(option.displayName) },
+                modifier = Modifier.semantics {
+                    contentDescription = "Build with ${option.displayName}"
+                },
+            )
+        }
+    }
+}
+
+/**
+ * The Problems list, shared by the phone dock and the tablet's tool pane.
+ *
+ * Extracted when the tablet layout gained tabs of its own. It had exactly one
+ * caller for a long time and inlining it was right then; a second caller is
+ * what makes it a component.
+ */
+@Composable
+internal fun ProblemsList(
+    problems: List<Diagnostic>,
+    onDiagnosticClick: (Diagnostic) -> Unit,
+    onFixDiagnostic: (Diagnostic) -> Unit,
+) {
+    if (problems.isEmpty()) {
+        // No action: this panel fills itself from work done elsewhere, and a
+        // button here would only restate the sentence above it.
+        EmptyState(
+            icon = Icons.Default.CheckCircleOutline,
+            title = "Nothing to fix",
+            explanation = "Errors and warnings appear here as you type, and " +
+                "again when a build finishes.",
+        )
+        return
+    }
+    LazyColumn(Modifier.fillMaxWidth()) {
+        items(problems) { diagnostic ->
+            // **By severity, not all red.** Every row here used to carry an
+            // ERROR chip in the error colour, so a compiler's warning about its
+            // own JDK read as a third error on a project that built and ran.
+            // The tablet's DiagnosticRow already coloured by severity.
+            val style = severityStyle(diagnostic.severity)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = style.container,
+                    modifier = Modifier.padding(end = 8.dp),
+                ) {
+                    Text(
+                        text = style.label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = style.onContainer,
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                    )
+                }
+                Text(
+                    text = diagnostic.describe(),
+                    style = CodeTextStyle,
+                    color = style.text,
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable(enabled = diagnostic.hasLocation) {
+                            onDiagnosticClick(diagnostic)
+                        }
+                        .padding(vertical = 4.dp),
+                )
+                IconButton(
+                    onClick = { onFixDiagnostic(diagnostic) },
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        Icons.Default.AutoFixHigh,
+                        contentDescription = "Ask the assistant to fix this",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+private data class SeverityStyle(
+    val label: String,
+    val container: Color,
+    val onContainer: Color,
+    val text: Color,
+)
+
+@Composable
+private fun severityStyle(severity: DiagnosticSeverity): SeverityStyle {
+    val colors = MaterialTheme.colorScheme
+    return when (severity) {
+        DiagnosticSeverity.ERROR -> SeverityStyle("ERROR", colors.errorContainer, colors.onErrorContainer, colors.error)
+        DiagnosticSeverity.WARNING ->
+            SeverityStyle("WARNING", colors.tertiaryContainer, colors.onTertiaryContainer, colors.tertiary)
+        DiagnosticSeverity.INFO ->
+            SeverityStyle("INFO", colors.surfaceVariant, colors.onSurfaceVariant, colors.onSurfaceVariant)
+    }
+}
