@@ -1,0 +1,168 @@
+package com.osamu.aide.ai.core
+
+import com.anthropic.client.AnthropicClient
+import com.anthropic.client.okhttp.AnthropicOkHttpClient
+import com.osamu.aide.core.common.DispatcherProvider
+import java.io.File
+
+/**
+ * Builds a session for one project, for the active AI model provider.
+ *
+ * Supports Gemini as the default provider with Google Sign-In or API Key,
+ * as well as OpenAI, Anthropic, and Custom/Compatible endpoints.
+ */
+open class Assistant(
+    private val keys: ApiKeyStore? = null,
+    private val dispatchers: DispatcherProvider? = null,
+    private val clientFactory: (String, String?) -> AnthropicClient = ::defaultClient,
+) {
+
+    /**
+     * Null when the user has not supplied credentials for the active provider.
+     */
+    open fun session(
+        projectDir: File,
+        approver: Approver,
+        extraTools: List<AideTool> = emptyList(),
+    ): AiSession? {
+        val keys = keys ?: return null
+        val dispatchers = dispatchers ?: return null
+        val toolset = ProjectToolset(ProjectFiles(projectDir), extraTools)
+        val provider = keys.activeProvider()
+
+        return when (provider) {
+            AiProviderType.GEMINI -> {
+                val apiKey = keys.geminiApiKey()
+                val oauthToken = keys.googleAccessToken()
+                if (apiKey.isNullOrBlank() && oauthToken.isNullOrBlank()) return null
+                val client = GeminiAiClient(
+                    apiKey = apiKey,
+                    oauthToken = oauthToken,
+                    model = keys.activeModel(AiProviderType.GEMINI),
+                )
+                AiSession(client, toolset, approver, dispatchers)
+            }
+            AiProviderType.OPENAI -> {
+                val apiKey = keys.openAiApiKey() ?: return null
+                val client = OpenAiClient(
+                    apiKey = apiKey,
+                    customBaseUrl = keys.openAiBaseUrl(),
+                    model = keys.activeModel(AiProviderType.OPENAI),
+                    provider = AiProviderType.OPENAI,
+                )
+                AiSession(client, toolset, approver, dispatchers)
+            }
+            AiProviderType.CUSTOM -> {
+                // No address, no session: see ApiKeyStore.isReady.
+                val address = keys.customBaseUrl()?.takeIf { it.isNotBlank() } ?: return null
+                val client = OpenAiClient(
+                    apiKey = keys.customApiKey(),
+                    customBaseUrl = address,
+                    model = keys.activeModel(AiProviderType.CUSTOM),
+                    provider = AiProviderType.CUSTOM,
+                )
+                AiSession(client, toolset, approver, dispatchers)
+            }
+            AiProviderType.LOCAL -> {
+                // **No server, no session.** The address is written by whatever
+                // started `llama-server` and cleared when it stops, so its
+                // absence means there is nothing listening -- not that the user
+                // forgot to configure something. See ApiKeyStore.localBaseUrl.
+                val address = keys.localBaseUrl()?.takeIf { it.isNotBlank() } ?: return null
+                val client = OpenAiClient(
+                    // No key: the peer is a process this app started on its own
+                    // loopback, and there is nobody to authenticate to.
+                    apiKey = null,
+                    customBaseUrl = address,
+                    model = keys.activeModel(AiProviderType.LOCAL),
+                    provider = AiProviderType.LOCAL,
+                )
+                AiSession(client, toolset, approver, dispatchers)
+            }
+            AiProviderType.ANTHROPIC -> {
+                val key = keys.read() ?: return null
+                AiSession(
+                    client = clientFactory(key, keys.baseUrl()),
+                    assembler = PromptAssembler(toolset),
+                    toolset = toolset,
+                    approver = approver,
+                    dispatchers = dispatchers,
+                )
+            }
+        }
+    }
+
+    /**
+     * A completer for the active provider, if credentials exist.
+     */
+    open fun completer(): InlineCompleter? {
+        val keys = keys ?: return null
+        val dispatchers = dispatchers ?: return null
+        val provider = keys.activeProvider()
+        return when (provider) {
+            AiProviderType.GEMINI -> {
+                val apiKey = keys.geminiApiKey()
+                val oauthToken = keys.googleAccessToken()
+                if (apiKey.isNullOrBlank() && oauthToken.isNullOrBlank()) return null
+                val client = GeminiAiClient(
+                    apiKey = apiKey,
+                    oauthToken = oauthToken,
+                    model = keys.activeModel(AiProviderType.GEMINI),
+                )
+                InlineCompleter(client, dispatchers)
+            }
+            AiProviderType.OPENAI -> {
+                val apiKey = keys.openAiApiKey() ?: return null
+                val client = OpenAiClient(
+                    apiKey = apiKey,
+                    customBaseUrl = keys.openAiBaseUrl(),
+                    model = keys.activeModel(AiProviderType.OPENAI),
+                    provider = AiProviderType.OPENAI,
+                )
+                InlineCompleter(client, dispatchers)
+            }
+            AiProviderType.CUSTOM -> {
+                // No address, no session: see ApiKeyStore.isReady.
+                val address = keys.customBaseUrl()?.takeIf { it.isNotBlank() } ?: return null
+                val client = OpenAiClient(
+                    apiKey = keys.customApiKey(),
+                    customBaseUrl = address,
+                    model = keys.activeModel(AiProviderType.CUSTOM),
+                    provider = AiProviderType.CUSTOM,
+                )
+                InlineCompleter(client, dispatchers)
+            }
+            AiProviderType.LOCAL -> {
+                val address = keys.localBaseUrl()?.takeIf { it.isNotBlank() } ?: return null
+                val client = OpenAiClient(
+                    apiKey = null,
+                    customBaseUrl = address,
+                    model = keys.activeModel(AiProviderType.LOCAL),
+                    provider = AiProviderType.LOCAL,
+                )
+                InlineCompleter(client, dispatchers)
+            }
+            AiProviderType.ANTHROPIC -> {
+                val key = keys.read() ?: return null
+                InlineCompleter(clientFactory(key, keys.baseUrl()), dispatchers)
+            }
+        }
+    }
+
+    internal companion object {
+        fun defaultClient(apiKey: String, baseUrl: String?): AnthropicClient {
+            var builder = AnthropicOkHttpClient.builder().apiKey(apiKey)
+            if (baseUrl != null) builder = builder.baseUrl(baseUrl)
+            return builder.build()
+        }
+    }
+}
+
+/**
+ * The project, as the context block of the prompt sees it.
+ */
+fun projectContext(files: ProjectFiles): String =
+    when (val listing = files.list()) {
+        is ProjectFiles.Outcome.Ok -> listing.content
+        is ProjectFiles.Outcome.Refused -> "The project could not be listed: ${listing.reason}"
+    }
