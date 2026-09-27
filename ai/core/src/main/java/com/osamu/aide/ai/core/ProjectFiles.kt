@@ -1,5 +1,6 @@
 package com.osamu.aide.ai.core
 
+import com.osamu.aide.core.common.GeneratedDirectories
 import java.io.File
 
 /**
@@ -101,7 +102,7 @@ class ProjectFiles(private val root: File) {
         if (!directory.isDirectory) return Outcome.Refused("$path is not a directory.")
 
         val entries = directory.walkTopDown()
-            .onEnter { it.name !in SKIPPED }
+            .onEnter { it == directory || !GeneratedDirectories.isGenerated(it) }
             .filter { it.isFile }
             .map { it.relativeTo(root).invariantSeparatorsPath }
             .sorted()
@@ -126,7 +127,7 @@ class ProjectFiles(private val root: File) {
 
         val matches = mutableListOf<String>()
         directory.walkTopDown()
-            .onEnter { it.name !in SKIPPED }
+            .onEnter { it == directory || !GeneratedDirectories.isGenerated(it) }
             .filter { it.isFile && it.length() <= MAX_READ_BYTES }
             .forEach { file ->
                 if (matches.size >= limit) return@forEach
@@ -156,7 +157,5 @@ class ProjectFiles(private val root: File) {
         const val MAX_MATCHES = 100
         const val MAX_LINE_CHARS = 200
 
-        /** Derived or private; nothing here tells the model what the user wrote. */
-        val SKIPPED = setOf("build", ".git", ".gradle", ".idea", "node_modules")
     }
 }

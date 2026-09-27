@@ -2,6 +2,7 @@ package com.osamu.aide.ai.core
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.test.runTest
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -15,7 +16,7 @@ import org.junit.runner.RunWith
  * thing in this file that fails loudly rather than quietly.
  */
 @RunWith(AndroidJUnit4::class)
-class OpenAiSessionTest : GenericSessionTest() {
+open class OpenAiSessionTest : GenericSessionTest() {
 
     override fun client(api: ScriptedProviderApi): AiClient = api.openAiClient()
 
@@ -44,13 +45,32 @@ class OpenAiSessionTest : GenericSessionTest() {
      * and false of this one.
      */
     override fun assertBothResultsReturned(body: String, first: String, second: String) {
-        assertEquals(
-            "expected one tool message per call:\n$body",
-            2,
-            body.split("\"role\":\"tool\"").size - 1,
-        )
-        assertTrue("the result for $first was dropped:\n$body", first in body)
-        assertTrue("the result for $second was dropped:\n$body", second in body)
+        // By `tool_call_id` on the tool messages themselves. The ids also sit in
+        // the replayed assistant turn's `tool_calls`, so finding them anywhere
+        // in the body proved nothing about the results.
+        assertEquals("expected one tool message per call:\n$body", listOf(first, second), toolResults(body).map { it.key })
+    }
+
+    override fun toolResults(body: String): List<WireResult> = messages(body)
+        .filter { it.optString("role") == "tool" }
+        .map { WireResult(it.optString("tool_call_id"), it.optString("content")) }
+
+    override fun userTexts(body: String): List<String> = messages(body)
+        .filter { it.optString("role") == "user" }
+        .map { message ->
+            message.optJSONArray("content")?.let { parts ->
+                (0 until parts.length()).joinToString("") { parts.getJSONObject(it).optString("text") }
+            } ?: message.optString("content")
+        }
+
+    override fun declaredTools(body: String): List<String> {
+        val tools = JSONObject(body).optJSONArray("tools") ?: return emptyList()
+        return (0 until tools.length()).map { tools.getJSONObject(it).getJSONObject("function").getString("name") }
+    }
+
+    private fun messages(body: String): List<JSONObject> {
+        val array = JSONObject(body).getJSONArray("messages")
+        return (0 until array.length()).map { array.getJSONObject(it) }
     }
 
     /**
@@ -76,12 +96,13 @@ class OpenAiSessionTest : GenericSessionTest() {
                 ),
                 text("done"),
             ),
-        ).send("ctx", "read it")
+        ).ask("ctx", "read it")
 
         val second = api!!.body(1)
-        assertTrue(
+        assertEquals(
             "the tool result did not carry the server's own call id:\n$second",
-            "\"tool_call_id\":\"call_abc123\"" in second,
+            listOf("call_abc123"),
+            toolResults(second).map { it.key },
         )
     }
 
@@ -95,7 +116,7 @@ class OpenAiSessionTest : GenericSessionTest() {
      */
     @Test
     fun the_chat_completions_route_is_appended_to_a_bare_base_url() = runTest {
-        session(listOf(text("ok"))).send("ctx", "hello")
+        session(listOf(text("ok"))).ask("ctx", "hello")
 
         assertEquals("/v1/chat/completions", api!!.path(0))
     }
@@ -103,7 +124,7 @@ class OpenAiSessionTest : GenericSessionTest() {
     /** The key is a bearer token. */
     @Test
     fun the_api_key_is_sent_as_a_bearer_token() = runTest {
-        session(listOf(text("ok"))).send("ctx", "hello")
+        session(listOf(text("ok"))).ask("ctx", "hello")
 
         assertEquals("Bearer test-key", api!!.header(0, "Authorization"))
     }
@@ -118,7 +139,7 @@ class OpenAiSessionTest : GenericSessionTest() {
      */
     @Test
     fun the_system_instruction_is_the_first_message() = runTest {
-        session(listOf(text("ok"))).send("PROJECT_CONTEXT_MARKER", "hello")
+        session(listOf(text("ok"))).ask("PROJECT_CONTEXT_MARKER", "hello")
 
         val first = api!!.body(0)
         val systemAt = first.indexOf("\"role\":\"system\"")
@@ -132,7 +153,7 @@ class OpenAiSessionTest : GenericSessionTest() {
     /** The declarations go in OpenAI's `tools`, each wrapped as a function. */
     @Test
     fun tools_are_declared_in_openais_own_schema() = runTest {
-        session(listOf(text("ok"))).send("ctx", "hello")
+        session(listOf(text("ok"))).ask("ctx", "hello")
 
         val first = api!!.body(0)
         assertTrue("tools were not declared in OpenAI's shape:\n$first", "\"type\":\"function\"" in first)

@@ -1,5 +1,6 @@
 package com.osamu.aide.core.fs
 
+import com.osamu.aide.core.common.GeneratedDirectories
 import java.io.File
 import java.nio.file.Files
 
@@ -25,9 +26,6 @@ data class FileNode(
 )
 
 object ProjectFiles {
-
-    /** Directories that are never worth showing or indexing. */
-    private val IGNORED = setOf(".git", "build", ".gradle", ".idea", "node_modules")
 
     /**
      * The longest chain of single-child directories that will be folded into
@@ -65,7 +63,7 @@ object ProjectFiles {
     private fun visibleEntries(directory: File): List<File> {
         val entries = directory.listFiles() ?: return emptyList()
         return entries
-            .filter { it.name !in IGNORED && !it.isHidden }
+            .filter { !it.isHidden && !(it.isDirectory && GeneratedDirectories.isGenerated(it)) }
             .sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
     }
 

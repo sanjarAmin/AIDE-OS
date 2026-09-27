@@ -25,6 +25,11 @@ class ChatControllerUnitTest {
             projectDir = File("/tmp"),
             scope = testScope,
         )
+        // Something to clear: a question on screen and a turn under way. Called
+        // on an empty controller, as it was, this asserted the initial state.
+        controller.send("a question")
+        assertTrue(controller.state.value.entries.isNotEmpty())
+        assertTrue(controller.state.value.sending)
 
         controller.newChat()
 

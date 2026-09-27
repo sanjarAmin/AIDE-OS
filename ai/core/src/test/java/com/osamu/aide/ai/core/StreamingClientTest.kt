@@ -26,6 +26,12 @@ import org.junit.Test
  */
 class StreamingClientTest {
 
+    private companion object {
+        /** A small slice every period, so the body takes about a second to arrive. */
+        const val THROTTLE_BYTES = 48L
+        const val THROTTLE_MS = 250L
+    }
+
     private lateinit var server: MockWebServer
 
     @Before
@@ -58,6 +64,33 @@ class StreamingClientTest {
     )
 
     // -- OpenAI --------------------------------------------------------------
+
+    /**
+     * The first delta arrives while the body is still coming.
+     *
+     * The test below compares the list of deltas, which a client that buffered
+     * the whole body and replayed it would get exactly right. This one sends
+     * the body slowly and measures: a replaying client delivers every delta at
+     * the very end, so the gap between the first one and the end is nothing.
+     */
+    @Test
+    fun `the first delta arrives before the body has finished`() = runTest {
+        server.enqueue(
+            sse(
+                """{"choices":[{"delta":{"content":"Hello"}}]}""",
+                """{"choices":[{"delta":{"content":", world"}}]}""",
+                """{"choices":[{"delta":{"content":", slowly"}}]}""",
+                """{"choices":[{"delta":{},"finish_reason":"stop"}]}""",
+            ).throttleBody(THROTTLE_BYTES, THROTTLE_MS, java.util.concurrent.TimeUnit.MILLISECONDS),
+        )
+        var firstDeltaAt = 0L
+
+        openAi().send(request()) { if (firstDeltaAt == 0L) firstDeltaAt = System.nanoTime() }
+        val endedAt = System.nanoTime()
+
+        val gapMs = (endedAt - firstDeltaAt) / 1_000_000
+        assertTrue("the first delta came ${gapMs}ms before the end: the body was buffered", gapMs >= THROTTLE_MS)
+    }
 
     @Test
     fun `deltas arrive separately and the response holds the whole text`() = runTest {

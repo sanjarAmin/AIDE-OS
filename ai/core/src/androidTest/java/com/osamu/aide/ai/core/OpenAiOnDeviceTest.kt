@@ -131,7 +131,7 @@ class OpenAiOnDeviceTest {
     private fun probe() = AiClientRequest(
         systemInstruction = "Reply with exactly: ok",
         messages = listOf(AiMessage(AiRole.USER, "Reply with exactly: ok")),
-        maxTokens = 16L,
+        maxTokens = 256L,
     )
 
     /**
@@ -173,22 +173,23 @@ class OpenAiOnDeviceTest {
      */
     @Test
     fun every_offered_model_answers() = runBlocking {
-        val dead = AiProviderType.OPENAI.availableModels.filter { model ->
-            val text = runCatching {
-                client(model).send(
-                    AiClientRequest(
-                        systemInstruction = "Reply with exactly: ok",
-                        messages = listOf(AiMessage(AiRole.USER, "Reply with exactly: ok")),
-                        maxTokens = 16L,
-                    ),
-                ).text
-            }.getOrElse { failure ->
+        // Classified and spaced, for the reason GeminiOnDeviceTest gives: a
+        // throttled probe is not a dead model, and only an unknown model or a
+        // successful reply with no text counts against the picker.
+        val dead = mutableListOf<String>()
+        for (model in AiProviderType.OPENAI.availableModels) {
+            val result = runCatching { client(model).send(probe()) }
+            result.exceptionOrNull()?.let { failure ->
                 skipIfTheAccountCannotAnswer(failure)
-                Log.w(TAG, "model $model failed: ${failure.message}")
-                ""
+                val outcome = LiveApiOutcome.of(failure)
+                Log.w(TAG, "model $model -> $outcome")
+                if (outcome is LiveApiOutcome.Unknown) dead += "$model (${outcome.detail.take(120)})"
             }
-            Log.i(TAG, "model $model -> '${text.take(40)}'")
-            text.isBlank()
+            result.getOrNull()?.let { response ->
+                Log.i(TAG, "model $model -> '${response.text.take(40)}' finish=${response.finishReason}")
+                if (response.text.isBlank()) dead += "$model (answered with no text, finish=${response.finishReason})"
+            }
+            delay(PROBE_SPACING_MS)
         }
 
         assertEquals("models offered in the picker that do not answer", emptyList<String>(), dead)

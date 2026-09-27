@@ -144,13 +144,18 @@ failed to load still produces a clean compile.
   python3 -c "import glob,re;print('\n'.join(f\"{f.split('/build/')[0]} {re.search(r'skipped=.(\d+).',open(f).read()).group(1)} of {re.search(r'tests=.(\d+).',open(f).read()).group(1)} skipped\" for f in glob.glob('**/build/outputs/androidTest-results/connected/**/*.xml',recursive=True) if re.search(r'skipped=.([1-9]\d*).',open(f).read())))"
   ```
 
-  **Twenty-four skips is the honest floor**, measured on a full sweep: eight
-  live-API tests in `:ai:core` waiting on billing credit, nine spikes needing a
-  rootfs nothing builds any more, five in `:toolchain:manager` gated behind
+  **Twenty-eight skips is the honest floor**: eight live-API tests in
+  `:ai:core` waiting on billing credit, four more there that need a running
+  local model (`LocalModelTerminationTest`, `LiveWrittenCallTest`, which skip
+  without `-Pandroid.testInstrumentationRunnerArguments.localBaseUrl=...`),
+  nine spikes needing a rootfs nothing builds any more, five in
+  `:toolchain:manager` gated behind
   `-Pandroid.testInstrumentationRunnerArguments.downloadTests=true` because they
-  pull real archives from Google and GitHub, and two singletons. **Anything
-  above that is an archive on the wrong path, and a milestone's worth of
-  coverage doing nothing.**
+  pull real archives from Google and GitHub, and two singletons. The first
+  twenty-four were measured on a full sweep; the four local-model tests arrived
+  after it and were added by count, not re-measured. **Anything above that is an
+  archive on the wrong path, and a milestone's worth of coverage doing
+  nothing.**
 
   Count from a *full* sweep, not from whatever XML happens to be on disk: a
   targeted `-Pandroid.testInstrumentationRunnerArguments.class=...` run

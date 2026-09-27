@@ -151,9 +151,31 @@ class ProjectImporterTest {
         assertFalse("something was imported anyway", workspace.exists())
     }
 
+    /**
+     * A source package called `build` is imported.
+     *
+     * Every directory of that name used to be skipped at any depth, so the
+     * package's code was silently left behind -- an import that "succeeded"
+     * and lost source.
+     */
+    @Test
+    fun a_source_package_called_build_is_copied() {
+        writeModule()
+        write("build.gradle.kts", "plugins {}")
+        write("src/main/java/com/example/imported/build/Tool.java", "class Tool {}\n")
+
+        val project = (import() as AppResult.Success).value
+
+        assertTrue(
+            "the build package was left behind",
+            File(project.rootDir, "src/main/java/com/example/imported/build/Tool.java").isFile,
+        )
+    }
+
     @Test
     fun build_output_and_version_control_are_not_copied() {
         writeModule()
+        write("build.gradle.kts", "plugins {}")
         write("build/intermediates/huge.bin", "x".repeat(1000))
         write(".git/objects/pack/whatever", "x".repeat(1000))
         write(".gradle/caches/thing", "x")

@@ -26,13 +26,6 @@ class InlineCompleterTest {
 
     private var api: ScriptedApi? = null
 
-    private val dispatchers = object : DispatcherProvider {
-        override val main: CoroutineDispatcher get() = Dispatchers.Unconfined
-        override val default: CoroutineDispatcher get() = Dispatchers.Unconfined
-        override val io: CoroutineDispatcher get() = Dispatchers.Unconfined
-        override val compiler: CoroutineDispatcher get() = Dispatchers.Unconfined
-    }
-
     @After
     fun tearDown() {
         api?.stop()
@@ -40,7 +33,7 @@ class InlineCompleterTest {
 
     private fun completer(reply: String): InlineCompleter {
         val scripted = ScriptedApi(listOf(ScriptedApi.text(reply))).also { api = it }
-        return InlineCompleter(scripted.client(), dispatchers)
+        return InlineCompleter(scripted.client(), unconfinedDispatchers)
     }
 
     private val context = CompletionContext(

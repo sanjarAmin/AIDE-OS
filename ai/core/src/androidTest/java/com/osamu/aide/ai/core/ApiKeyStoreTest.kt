@@ -36,6 +36,12 @@ class ApiKeyStoreTest {
         // See clear()'s doc: the endpoint outlives the key on purpose, so a
         // test has to reset it or it carries into the next one.
         store.saveBaseUrl(Endpoint.Default)
+        // **Pinned, because hasKey() and read() route on it.** The provider
+        // lives in the same shared preferences, and ChatControllerTest leaves
+        // OPENAI or CUSTOM there -- so run after it without a reinstall (the
+        // targeted `am instrument` workflow CLAUDE.md recommends), every key
+        // here was written to one slot and read from another.
+        store.setActiveProvider(AiProviderType.ANTHROPIC)
     }
 
     @After

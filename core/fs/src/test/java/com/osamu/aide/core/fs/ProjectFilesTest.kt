@@ -30,12 +30,30 @@ class ProjectFilesTest {
         listOf("build", ".git", ".gradle", "node_modules", "src").forEach {
             java.io.File(root, it).mkdirs()
         }
+        // What makes `build` output rather than a folder of the user's.
+        java.io.File(root, "build.gradle.kts").writeText("")
 
         val names = ProjectFiles
             .childrenOf(FileNode(root, isDirectory = true, depth = 0))
             .map { it.name }
 
-        assertEquals(listOf("src"), names)
+        assertEquals(listOf("src", "build.gradle.kts"), names)
+    }
+
+    /** A package named `build` is source; hiding it hid the user's code. */
+    @Test
+    fun `a source package called build is shown`() {
+        val root = temp.newFolder("project")
+        java.io.File(root, "build.gradle.kts").writeText("")
+        val sources = java.io.File(root, "java").apply { mkdirs() }
+        java.io.File(sources, "build").mkdirs()
+        java.io.File(sources, "Main.kt").writeText("")
+
+        val names = ProjectFiles
+            .childrenOf(FileNode(sources, isDirectory = true, depth = 1))
+            .map { it.name }
+
+        assertEquals(listOf("build", "Main.kt"), names)
     }
 
     @Test
@@ -105,7 +123,9 @@ class ProjectFilesTest {
         // either as a second child would un-fold a chain the user sees as
         // single -- which is why the filter runs before the count.
         java.io.File(root, "src/.DS_Store").writeText("")
-        java.io.File(root, "src/build").mkdirs()
+        // Always generated. Not `build`: with no build script beside it, a
+        // folder of that name is the user's -- see GeneratedDirectories.
+        java.io.File(root, "src/node_modules").mkdirs()
 
         val child = ProjectFiles.childrenOf(FileNode(root, isDirectory = true, depth = 0)).single()
 

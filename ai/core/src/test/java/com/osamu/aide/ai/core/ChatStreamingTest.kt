@@ -36,13 +36,6 @@ class ChatStreamingTest {
     private lateinit var projectDir: File
     private lateinit var storeRoot: File
 
-    private val unconfined = object : DispatcherProvider {
-        override val main: CoroutineDispatcher get() = Dispatchers.Unconfined
-        override val default: CoroutineDispatcher get() = Dispatchers.Unconfined
-        override val io: CoroutineDispatcher get() = Dispatchers.Unconfined
-        override val compiler: CoroutineDispatcher get() = Dispatchers.Unconfined
-    }
-
     @Before
     fun setUp() {
         projectDir = File.createTempFile("chat-project", "").let { file ->
@@ -117,7 +110,7 @@ class ChatStreamingTest {
                 aiClient = client,
                 toolset = ProjectToolset(ProjectFiles(projectDir), extraTools),
                 approver = Approver { _, _ -> approve },
-                dispatchers = unconfined,
+                dispatchers = unconfinedDispatchers,
             )
 
             override fun completer(): InlineCompleter? = null
@@ -131,6 +124,9 @@ class ChatStreamingTest {
         )
     }
 
+    /** Real time, not virtual: the card's clock is `System.nanoTime`. */
+    private val SLOW_TOOL_MS = 60L
+
     /** Long enough that billing it to the tool would be unmistakable. */
     private val APPROVAL_PAUSE_MS = 300L
 
@@ -141,17 +137,47 @@ class ChatStreamingTest {
 
     @Test
     fun `prose accumulates into one entry that keeps its id`() = runTest {
-        val controller = newController(Turn(listOf("Hello", " there", "!")), scope = this)
+        // The id is read after **every** token, from inside the stream. The
+        // finished list alone cannot tell an entry that kept its id from one
+        // replaced per token by a new entry with the same text -- and the
+        // latter is the bug: the LazyColumn re-keys the bubble on every token
+        // and collapses the tool cards above it.
+        lateinit var controller: ChatController
+        val ids = mutableListOf<Long>()
+        val client = object : AiClient {
+            override val provider = AiProviderType.OPENAI
+            override val model = "fake"
+            override suspend fun send(request: AiClientRequest) = AiClientResponse(listOf(AiPart.Text("Hello there!")))
+            override suspend fun send(
+                request: AiClientRequest,
+                onTextDelta: (String) -> Unit,
+            ): AiClientResponse {
+                listOf("Hello", " there", "!").forEach { delta ->
+                    onTextDelta(delta)
+                    ids += controller.state.value.entries.last().id
+                }
+                return AiClientResponse(listOf(AiPart.Text("Hello there!")))
+            }
+
+            override suspend fun complete(context: CompletionContext): String? = null
+        }
+        val assistant = object : Assistant() {
+            override fun session(projectDir: File, approver: Approver, extraTools: List<AideTool>) =
+                AiSession(client, ProjectToolset(ProjectFiles(projectDir)), Approver { _, _ -> true }, unconfinedDispatchers)
+
+            override fun completer(): InlineCompleter? = null
+        }
+        controller = ChatController(assistant, projectDir, this, io = Dispatchers.Unconfined)
 
         controller.send("hi")
         advanceUntilIdle()
 
-        val assistant = controller.state.value.entries.filterIsInstance<ChatEntry.FromAssistant>()
-        assertEquals(1, assistant.size)
-        assertEquals("Hello there!", assistant.single().text)
-        // The id a LazyColumn keys on must not change per token, or every tool
-        // card above it is rebuilt and loses its expanded state.
-        assertFalse("the finished bubble is still marked streaming", assistant.single().streaming)
+        assertEquals("the bubble changed id between tokens: $ids", 1, ids.distinct().size)
+        val assistantEntries = controller.state.value.entries.filterIsInstance<ChatEntry.FromAssistant>()
+        assertEquals(1, assistantEntries.size)
+        assertEquals("Hello there!", assistantEntries.single().text)
+        assertEquals("the finished bubble is not the one that streamed", ids.first(), assistantEntries.single().id)
+        assertFalse("the finished bubble is still marked streaming", assistantEntries.single().streaming)
     }
 
     @Test
@@ -178,7 +204,7 @@ class ChatStreamingTest {
         }
         val assistant = object : Assistant() {
             override fun session(projectDir: File, approver: Approver, extraTools: List<AideTool>) =
-                AiSession(client, ProjectToolset(ProjectFiles(projectDir)), Approver { _, _ -> true }, unconfined)
+                AiSession(client, ProjectToolset(ProjectFiles(projectDir)), Approver { _, _ -> true }, unconfinedDispatchers)
 
             override fun completer(): InlineCompleter? = null
         }
@@ -243,17 +269,38 @@ class ChatStreamingTest {
 
     @Test
     fun `a tool card carries how long it took`() = runTest {
-        val controller = newController(
-            Turn(emptyList(), listOf(AiPart.FunctionCall("1", "list_files", emptyMap()))),
-            Turn(listOf("done")),
-            scope = this,
+        // A tool that takes a known, real time. `durationMs >= 0` -- what this
+        // asserted -- is true of a duration never measured at all, since the
+        // field defaults to 0.
+        val slow = AideTool(
+            name = "slow_tool",
+            description = "Takes a while.",
+            risk = ToolRisk.READ_ONLY,
+            parameters = emptyMap(),
+            required = emptyList(),
+        ) {
+            Thread.sleep(SLOW_TOOL_MS)
+            ProjectFiles.Outcome.Ok("done")
+        }
+        val client = FakeClient(
+            listOf(
+                Turn(emptyList(), listOf(AiPart.FunctionCall("1", "slow_tool", emptyMap()))),
+                Turn(listOf("done")),
+            ),
         )
+        val assistant = object : Assistant() {
+            override fun session(projectDir: File, approver: Approver, extraTools: List<AideTool>) =
+                AiSession(client, ProjectToolset(ProjectFiles(projectDir), listOf(slow)), approver, unconfinedDispatchers)
+
+            override fun completer(): InlineCompleter? = null
+        }
+        val controller = ChatController(assistant, projectDir, this, io = Dispatchers.Unconfined)
 
         controller.send("look")
         advanceUntilIdle()
 
         val card = controller.state.value.entries.filterIsInstance<ChatEntry.Tool>().single()
-        assertTrue("duration was not measured", card.durationMs >= 0)
+        assertTrue("a ${SLOW_TOOL_MS}ms tool was timed at ${card.durationMs}ms", card.durationMs >= SLOW_TOOL_MS)
     }
 
     /**
@@ -270,7 +317,7 @@ class ChatStreamingTest {
         val client = FakeClient(listOf(Turn(emptyList(), calls), Turn(listOf("done"))))
         val assistant = object : Assistant() {
             override fun session(projectDir: File, approver: Approver, extraTools: List<AideTool>) =
-                AiSession(client, ProjectToolset(ProjectFiles(projectDir), extraTools), approver, unconfined)
+                AiSession(client, ProjectToolset(ProjectFiles(projectDir), extraTools), approver, unconfinedDispatchers)
 
             override fun completer(): InlineCompleter? = null
         }
@@ -310,7 +357,7 @@ class ChatStreamingTest {
         }
         val assistant = object : Assistant() {
             override fun session(projectDir: File, approver: Approver, extraTools: List<AideTool>) =
-                AiSession(client, ProjectToolset(ProjectFiles(projectDir)), Approver { _, _ -> true }, unconfined)
+                AiSession(client, ProjectToolset(ProjectFiles(projectDir)), Approver { _, _ -> true }, unconfinedDispatchers)
 
             override fun completer(): InlineCompleter? = null
         }
@@ -392,7 +439,7 @@ class ChatStreamingTest {
         }
         val assistant = object : Assistant() {
             override fun session(projectDir: File, approver: Approver, extraTools: List<AideTool>) =
-                AiSession(client, ProjectToolset(ProjectFiles(projectDir)), Approver { _, _ -> true }, unconfined)
+                AiSession(client, ProjectToolset(ProjectFiles(projectDir)), Approver { _, _ -> true }, unconfinedDispatchers)
 
             override fun completer(): InlineCompleter? = null
         }
@@ -409,13 +456,42 @@ class ChatStreamingTest {
 
     @Test
     fun `a turn cancelled before any text leaves no empty bubble`() = runTest(StandardTestDispatcher()) {
-        val controller = newController(Turn(listOf("never sent")), scope = this)
+        // Stopped from inside the request, once the turn is live and before a
+        // token has arrived. Cancelling straight after send() -- what this did
+        // -- stops a coroutine that has not started, so the turn never ran and
+        // there was nothing that could have left a bubble behind.
+        lateinit var controller: ChatController
+        var reached = false
+        val client = object : AiClient {
+            override val provider = AiProviderType.OPENAI
+            override val model = "fake"
+            override suspend fun send(request: AiClientRequest) = AiClientResponse(emptyList())
+            override suspend fun send(
+                request: AiClientRequest,
+                onTextDelta: (String) -> Unit,
+            ): AiClientResponse {
+                reached = true
+                controller.cancelSend()
+                throw kotlinx.coroutines.CancellationException("stopped")
+            }
+
+            override suspend fun complete(context: CompletionContext): String? = null
+        }
+        val assistant = object : Assistant() {
+            override fun session(projectDir: File, approver: Approver, extraTools: List<AideTool>) =
+                AiSession(client, ProjectToolset(ProjectFiles(projectDir)), Approver { _, _ -> true }, unconfinedDispatchers)
+
+            override fun completer(): InlineCompleter? = null
+        }
+        controller = ChatController(assistant, projectDir, this, io = Dispatchers.Unconfined)
 
         controller.send("go")
-        controller.cancelSend()
         advanceUntilIdle()
 
-        assertTrue(controller.state.value.assistantTexts.none { it.isBlank() })
+        assertTrue("the turn never reached the provider", reached)
+        assertEquals(emptyList<String>(), controller.state.value.assistantTexts)
+        assertNull(controller.state.value.streamingEntryId)
+        assertFalse(controller.state.value.sending)
     }
 
     // -- redoing a turn ------------------------------------------------------
@@ -465,15 +541,23 @@ class ChatStreamingTest {
     fun `a conversation-wide approval is not asked for twice`() = runTest(StandardTestDispatcher()) {
         var prompts = 0
         lateinit var controller: ChatController
-        val calls = listOf(AiPart.FunctionCall("1", "edit_file", mapOf("path" to "Main.kt", "content" to "x")))
-        val client = FakeClient(listOf(Turn(emptyList(), calls), Turn(emptyList(), calls), Turn(listOf("done"))))
+        // Two different edits, for the reason the next test gives: an identical
+        // repeat is answered by the session's dedup guard and never reaches the
+        // approver, so this used to pass with the grant ignored entirely.
+        val client = FakeClient(
+            listOf(
+                Turn(emptyList(), listOf(AiPart.FunctionCall("1", "edit_file", mapOf("path" to "A.kt", "content" to "x")))),
+                Turn(emptyList(), listOf(AiPart.FunctionCall("2", "edit_file", mapOf("path" to "B.kt", "content" to "y")))),
+                Turn(listOf("done")),
+            ),
+        )
         val assistant = object : Assistant() {
             override fun session(projectDir: File, approver: Approver, extraTools: List<AideTool>) =
                 AiSession(
                     client,
                     ProjectToolset(ProjectFiles(projectDir), extraTools),
                     approver,
-                    unconfined,
+                    unconfinedDispatchers,
                 )
 
             override fun completer(): InlineCompleter? = null
@@ -494,6 +578,8 @@ class ChatStreamingTest {
 
         assertEquals("asked more than once for a standing approval", 1, prompts)
         assertEquals(setOf("edit_file"), controller.state.value.standingApprovals)
+        // The second edit ran: approved by the grant, not stopped by the guard.
+        assertEquals("y", File(projectDir, "B.kt").readText())
     }
 
     @Test
@@ -513,7 +599,7 @@ class ChatStreamingTest {
         )
         val assistant = object : Assistant() {
             override fun session(projectDir: File, approver: Approver, extraTools: List<AideTool>) =
-                AiSession(client, ProjectToolset(ProjectFiles(projectDir), extraTools), approver, unconfined)
+                AiSession(client, ProjectToolset(ProjectFiles(projectDir), extraTools), approver, unconfinedDispatchers)
 
             override fun completer(): InlineCompleter? = null
         }
@@ -539,7 +625,7 @@ class ChatStreamingTest {
         val client = FakeClient(listOf(Turn(emptyList(), calls), Turn(listOf("done"))))
         val assistant = object : Assistant() {
             override fun session(projectDir: File, approver: Approver, extraTools: List<AideTool>) =
-                AiSession(client, ProjectToolset(ProjectFiles(projectDir), extraTools), approver, unconfined)
+                AiSession(client, ProjectToolset(ProjectFiles(projectDir), extraTools), approver, unconfinedDispatchers)
 
             override fun completer(): InlineCompleter? = null
         }
@@ -579,15 +665,22 @@ class ChatStreamingTest {
     }
 
     @Test
-    fun `a new chat does not destroy the one being left`() = runTest {
+    fun `a new chat does not destroy the one being left`() = runTest(StandardTestDispatcher()) {
+        // Left **mid-turn**: the question is on screen and nothing has saved it
+        // yet. A finished turn -- what this used to wait for -- saves itself, so
+        // the test passed with newChat's own save deleted.
         val store = ConversationStore(storeRoot, projectDir)
         val controller = newController(Turn(listOf("answer")), store = store, scope = this)
         controller.send("first chat")
-        advanceUntilIdle()
 
         controller.newChat()
+        advanceUntilIdle()
 
-        assertEquals(1, store.list().size)
+        val saved = store.list().single()
+        assertTrue(
+            "the question being asked was lost",
+            store.load(saved.id).any { it is ChatEntry.FromUser && it.text == "first chat" },
+        )
         assertEquals(1, controller.state.value.conversations.size)
     }
 

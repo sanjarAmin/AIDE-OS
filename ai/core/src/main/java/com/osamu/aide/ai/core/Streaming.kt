@@ -124,12 +124,12 @@ internal class OpenAiStreamAccumulator {
         if (choices.length() == 0) return null
         val choice = choices.getJSONObject(0)
 
-        choice.optString("finish_reason").takeIf { it.isNotBlank() && it != "null" }
+        choice.stringOrNull("finish_reason")?.takeIf { it.isNotBlank() }
             ?.let { finishReason = it }
 
         val delta = choice.optJSONObject("delta") ?: return null
 
-        val piece = delta.optString("content").takeIf { it.isNotBlank() && it != "null" }
+        val piece = delta.stringOrNull("content")?.takeIf { it.isNotBlank() }
         if (piece != null) text.append(piece)
 
         delta.optJSONArray("tool_calls")?.let { fragments ->
@@ -140,14 +140,13 @@ internal class OpenAiStreamAccumulator {
                 // every fragment on the floor.
                 val index = fragment.optInt("index", 0)
                 val partial = calls.getOrPut(index) { Partial() }
-                fragment.optString("id").takeIf { it.isNotBlank() }?.let { partial.id = it }
+                fragment.stringOrNull("id")?.takeIf { it.isNotBlank() }?.let { partial.id = it }
                 fragment.optJSONObject("function")?.let { function ->
-                    function.optString("name").takeIf { it.isNotBlank() }
+                    function.stringOrNull("name")?.takeIf { it.isNotBlank() }
                         ?.let { partial.name.append(it) }
-                    // `optString` returns "" for an absent key, so appending
-                    // unconditionally is safe and keeps empty fragments -- which
-                    // servers do send -- from needing a special case.
-                    partial.arguments.append(function.optString("arguments"))
+                    // An absent or null fragment adds nothing, and an empty one
+                    // -- which servers do send -- adds nothing either.
+                    function.stringOrNull("arguments")?.let(partial.arguments::append)
                 }
             }
         }
@@ -202,7 +201,7 @@ internal class GeminiStreamAccumulator {
         if (candidates.length() == 0) return null
         val candidate = candidates.getJSONObject(0)
 
-        candidate.optString("finishReason").takeIf { it.isNotBlank() && it != "null" }
+        candidate.stringOrNull("finishReason")?.takeIf { it.isNotBlank() }
             ?.let { finishReason = it }
 
         val parts = candidate.optJSONObject("content")?.optJSONArray("parts") ?: return null
@@ -211,18 +210,13 @@ internal class GeminiStreamAccumulator {
             val part = parts.getJSONObject(i)
 
             part.optJSONObject("functionCall")?.let { call ->
-                val args = mutableMapOf<String, String>()
-                call.optJSONObject("args")?.let { argsObject ->
-                    val keys = argsObject.keys()
-                    while (keys.hasNext()) {
-                        val key = keys.next()
-                        args[key] = argsObject.optString(key)
-                    }
+                val args = call.optJSONObject("args")?.stringArguments().orEmpty()
+                call.stringOrNull("name")?.takeIf { it.isNotBlank() }?.let { name ->
+                    calls += AiPart.FunctionCall(id = "", name = name, args = args)
                 }
-                calls += AiPart.FunctionCall(id = "", name = call.optString("name"), args = args)
             }
 
-            val piece = part.optString("text").takeIf { it.isNotBlank() }
+            val piece = part.stringOrNull("text")?.takeIf { it.isNotBlank() }
             if (piece != null) {
                 if (part.optBoolean("thought")) thoughts.append(piece) else added.append(piece)
             }
@@ -259,11 +253,36 @@ internal class GeminiStreamAccumulator {
 internal fun decodeArguments(raw: String): Map<String, String> {
     if (raw.isBlank()) return emptyMap()
     val json = runCatching { JSONObject(raw) }.getOrNull() ?: return emptyMap()
+    return json.stringArguments()
+}
+
+/**
+ * Every argument as a string, leaving out the ones that are JSON `null`.
+ *
+ * Left out rather than kept, because a tool reads a missing argument as
+ * "not given" -- and `{"path": null}` kept as `"null"` would read a file of
+ * that name.
+ */
+internal fun JSONObject.stringArguments(): Map<String, String> {
     val args = mutableMapOf<String, String>()
-    val keys = json.keys()
+    val keys = keys()
     while (keys.hasNext()) {
         val key = keys.next()
-        args[key] = json.optString(key)
+        stringOrNull(key)?.let { args[key] = it }
     }
     return args
 }
+
+/**
+ * The string at [key], or null when it is absent **or JSON `null`**.
+ *
+ * **The phone's org.json and the JVM's disagree about `null`.** Android's
+ * `optString` turns a JSON `null` into the four characters `"null"`; the
+ * org.json artifact the unit tests run against returns `""`. So every
+ * `optString` here passed its JVM test and, on a phone, a tool-call fragment
+ * carrying `"name": null` became `read_filenull`, a `null` id became the id
+ * `"null"`, and a `null` argument became a path. `isNull` means the same
+ * thing on both, which is why every string read from a provider goes through
+ * this instead of comparing with `"null"` case by case.
+ */
+internal fun JSONObject.stringOrNull(key: String): String? = if (isNull(key)) null else optString(key)

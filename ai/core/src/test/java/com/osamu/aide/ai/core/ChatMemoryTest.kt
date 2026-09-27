@@ -29,13 +29,6 @@ class ChatMemoryTest {
     private lateinit var projectDir: File
     private lateinit var storeRoot: File
 
-    private val unconfined = object : DispatcherProvider {
-        override val main: CoroutineDispatcher get() = Dispatchers.Unconfined
-        override val default: CoroutineDispatcher get() = Dispatchers.Unconfined
-        override val io: CoroutineDispatcher get() = Dispatchers.Unconfined
-        override val compiler: CoroutineDispatcher get() = Dispatchers.Unconfined
-    }
-
     @Before
     fun setUp() {
         projectDir = tempDir("chat-memory-project")
@@ -96,7 +89,7 @@ class ChatMemoryTest {
                     aiClient = client,
                     toolset = ProjectToolset(ProjectFiles(projectDir), extraTools),
                     approver = approver,
-                    dispatchers = unconfined,
+                    dispatchers = unconfinedDispatchers,
                 )
             }
 

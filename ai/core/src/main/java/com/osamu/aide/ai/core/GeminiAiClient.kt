@@ -242,7 +242,7 @@ class GeminiAiClient(
         if (candidates.length() == 0) return AiClientResponse(emptyList())
 
         val candidate = candidates.getJSONObject(0)
-        val finishReason = candidate.optString("finishReason")
+        val finishReason = candidate.stringOrNull("finishReason")
         val content = candidate.optJSONObject("content") ?: return AiClientResponse(emptyList(), finishReason)
         val partsArray = content.optJSONArray("parts") ?: return AiClientResponse(emptyList(), finishReason)
 
@@ -250,19 +250,12 @@ class GeminiAiClient(
         for (i in 0 until partsArray.length()) {
             val partObj = partsArray.getJSONObject(i)
             if (partObj.has("text")) {
-                resultParts += AiPart.Text(partObj.getString("text"))
+                partObj.stringOrNull("text")?.let { resultParts += AiPart.Text(it) }
             } else if (partObj.has("functionCall")) {
                 val callObj = partObj.getJSONObject("functionCall")
                 val name = callObj.getString("name")
                 val argsObj = callObj.optJSONObject("args")
-                val argsMap = mutableMapOf<String, String>()
-                if (argsObj != null) {
-                    val keys = argsObj.keys()
-                    while (keys.hasNext()) {
-                        val key = keys.next()
-                        argsMap[key] = argsObj.optString(key)
-                    }
-                }
+                val argsMap = argsObj?.stringArguments().orEmpty()
                 resultParts += AiPart.FunctionCall(
                     id = UUID.randomUUID().toString(),
                     name = name,

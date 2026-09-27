@@ -5,6 +5,8 @@ import com.osamu.aide.core.common.DispatcherProvider
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
@@ -18,8 +20,12 @@ import java.io.File
  * JSON. So the scripted text is not what the client receives, and the only way
  * to find out what is, is to ask the model.
  *
- * This runs the app's own path against the running server and writes down both
- * halves: what tools ran, and the reply. Read with
+ * This runs the app's own path against the running server -- including a
+ * `run_shell` declared as the app declares it, without which a written call
+ * to it can never be recovered, since recovery only accepts offered names --
+ * and asserts what the app promises: the request became a `run_shell` call,
+ * and no call reached the reply as text. The report is kept for when it does
+ * not. Read with
  * `adb shell run-as com.osamu.aide.ai.core.test cat files/live-written-call.txt`.
  *
  *     -e localBaseUrl http://127.0.0.1:PORT
@@ -49,9 +55,28 @@ class LiveWrittenCallTest {
             model = "qwen2.5-coder-1.5b",
             provider = AiProviderType.LOCAL,
         )
+        // The app's run_shell by name, description and parameter -- :ai:core
+        // cannot depend on :app -- recording the command instead of running it.
+        val commands = mutableListOf<String>()
+        val runShell = AideTool(
+            name = "run_shell",
+            description = "Execute a shell command inside the project root directory and capture stdout, " +
+                "stderr, and exit status. Use this for running custom scripts, checking directory " +
+                "structures, running build utilities, or inspecting the environment. " +
+                "Because shell commands can alter project files or system state, the user must " +
+                "confirm execution before it runs.",
+            risk = ToolRisk.MUTATING,
+            parameters = mapOf(
+                "command" to AideTool.Parameter("string", "The shell command line to execute (e.g. 'ls -la', 'find . -name *.xml')."),
+            ),
+            required = listOf("command"),
+        ) { input ->
+            commands += input["command"].orEmpty()
+            ProjectFiles.Outcome.Ok("total 8\n-rw-r--r-- 1 u u 13 Main.java")
+        }
         val session = AiSession(
             aiClient = client,
-            toolset = ProjectToolset(ProjectFiles(root)),
+            toolset = ProjectToolset(ProjectFiles(root), listOf(runShell)),
             approver = Approver { _, _ -> true },
             dispatchers = unconfined,
         )
@@ -81,5 +106,11 @@ class LiveWrittenCallTest {
         }
         File(context.filesDir, "live-written-call.txt").writeText(report)
         println(report)
+
+        assertTrue("the shell request never became a run_shell call:\n$report", commands.any { "ls" in it })
+        assertFalse(
+            "a tool call reached the reply as text:\n$report",
+            Regex(""""name"\s*:\s*"run_shell"""").containsMatchIn(reply.text),
+        )
     }
 }

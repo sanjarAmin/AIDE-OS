@@ -43,16 +43,34 @@ abstract class GenericSessionTest {
     protected var api: ScriptedProviderApi? = null
 
     /** Everything on the caller's thread: `runTest` then controls the clock. */
-    protected val unconfined = object : DispatcherProvider {
-        override val main: CoroutineDispatcher get() = Dispatchers.Unconfined
-        override val default: CoroutineDispatcher get() = Dispatchers.Unconfined
-        override val io: CoroutineDispatcher get() = Dispatchers.Unconfined
-        override val compiler: CoroutineDispatcher get() = Dispatchers.Unconfined
-    }
+    protected val unconfined = unconfinedDispatchers
 
     // -- what a provider has to supply ---------------------------------------
 
     protected abstract fun client(api: ScriptedProviderApi): AiClient
+
+    /**
+     * Whether turns go through the streaming path, as every chat turn does.
+     *
+     * The streaming subclasses set it, and every shared case then runs through
+     * the SSE parsers on the phone's org.json -- which the non-streaming run,
+     * with no listener, never reaches.
+     */
+    protected open val streaming: Boolean = false
+
+    /** What the streaming path handed the panel, to check it is not empty. */
+    protected val streamed = StringBuilder()
+
+    /** [AiSession.send], streamed when [streaming] is set. */
+    protected suspend fun AiSession.ask(projectContext: String, userText: String): Reply = send(
+        projectContext = projectContext,
+        userText = userText,
+        listener = if (!streaming) null else object : TurnListener {
+            override fun onTextDelta(delta: String) {
+                streamed.append(delta)
+            }
+        },
+    )
 
     /** A finished turn: prose, no calls. */
     protected abstract fun text(text: String): String
@@ -68,6 +86,26 @@ abstract class GenericSessionTest {
 
     /** Both results came back, in whatever shape this protocol requires. */
     protected abstract fun assertBothResultsReturned(body: String, first: String, second: String)
+
+    /**
+     * The request's tool results, parsed out of [body] -- by call id for
+     * OpenAI, by function name for Gemini, which has no ids.
+     *
+     * **Parsed, not searched.** These assertions used to be substring checks on
+     * the whole body, and the body also holds every tool's declaration, the
+     * system text and the replayed calls -- so "edit_file" and "one" were
+     * found whether or not a result or an earlier turn had been sent.
+     */
+    protected abstract fun toolResults(body: String): List<WireResult>
+
+    /** The text of every user turn in [body], in order. */
+    protected abstract fun userTexts(body: String): List<String>
+
+    /** The names of the tools [body] declares, and nothing else. */
+    protected abstract fun declaredTools(body: String): List<String>
+
+    /** One tool result as sent: the call it answers, and what it said. */
+    data class WireResult(val key: String, val content: String)
 
     // -- fixture -------------------------------------------------------------
 
@@ -108,7 +146,7 @@ abstract class GenericSessionTest {
 
     @Test
     fun a_plain_answer_needs_one_request() = runTest {
-        val reply = session(listOf(text("Nothing to do."))).send("ctx", "hello")
+        val reply = session(listOf(text("Nothing to do."))).ask("ctx", "hello")
 
         assertEquals("Nothing to do.", reply.text)
         assertTrue(reply.toolRuns.isEmpty())
@@ -123,14 +161,17 @@ abstract class GenericSessionTest {
                 toolCall(read("src/Main.kt")),
                 text("It prints hi."),
             ),
-        ).send("ctx", "what does Main.kt do?")
+        ).ask("ctx", "what does Main.kt do?")
 
         assertEquals("It prints hi.", reply.text)
         assertEquals(listOf("read_file"), reply.toolRuns.map { it.name })
         assertEquals(2, api!!.requestCount)
 
         val second = api!!.body(1)
-        assertTrue("the file's contents never reached the model:\n$second", "println" in second)
+        assertTrue(
+            "the file's contents never reached the model:\n$second",
+            toolResults(second).any { "println" in it.content },
+        )
     }
 
     /**
@@ -150,7 +191,7 @@ abstract class GenericSessionTest {
                 toolCall(ScriptedProviderApi.Call("call_1", "list_files", emptyMap())),
                 text("done"),
             ),
-        ).send("ctx", "what is in here?")
+        ).ask("ctx", "what is in here?")
 
         assertAssistantTurnReplayed(api!!.body(1))
     }
@@ -173,7 +214,7 @@ abstract class GenericSessionTest {
                 ),
                 text("both read"),
             ),
-        ).send("ctx", "read and search")
+        ).ask("ctx", "read and search")
 
         assertEquals(listOf("read_file", "grep"), reply.toolRuns.map { it.name })
         assertEquals(2, api!!.requestCount)
@@ -196,7 +237,7 @@ abstract class GenericSessionTest {
                 text("Understood, leaving it alone."),
             ),
             approver = Approver { _, _ -> false },
-        ).send("ctx", "empty out Main.kt")
+        ).ask("ctx", "empty out Main.kt")
 
         assertFalse("the edit should not have been approved", reply.toolRuns.single().approved)
         assertEquals(
@@ -210,10 +251,11 @@ abstract class GenericSessionTest {
         // the Anthropic protocol leaking into a shared case. OpenAI's id round
         // trip has its own test, where it is a real requirement.
         val second = api!!.body(1)
-        assertTrue("no result was sent for the declined call:\n$second", "edit_file" in second)
+        val results = toolResults(second)
+        assertEquals("expected one result for the declined call:\n$second", 1, results.size)
         assertTrue(
             "the model was not told why the call produced nothing:\n$second",
-            "not confirmed by the user" in second,
+            "not confirmed by the user" in results.single().content,
         )
     }
 
@@ -231,7 +273,7 @@ abstract class GenericSessionTest {
                 ),
                 text("Written."),
             ),
-        ).send("ctx", "add New.kt")
+        ).ask("ctx", "add New.kt")
 
         assertEquals("val answer = 42", File(root, "src/New.kt").readText())
     }
@@ -252,7 +294,7 @@ abstract class GenericSessionTest {
                 text("done"),
             ),
             approver = Approver { name, _ -> asked += name; true },
-        ).send("ctx", "look around")
+        ).ask("ctx", "look around")
 
         assertTrue("a read-only tool asked for confirmation: $asked", asked.isEmpty())
     }
@@ -279,7 +321,7 @@ abstract class GenericSessionTest {
                 toolCall(ScriptedProviderApi.Call("c3", "grep", mapOf("query" to "main"))),
             ),
             maxToolRounds = 3,
-        ).send("ctx", "go")
+        ).ask("ctx", "go")
 
         assertTrue("the loop should have reported being cut short", reply.truncated)
         assertEquals(3, api!!.requestCount)
@@ -295,12 +337,12 @@ abstract class GenericSessionTest {
     fun the_conversation_accumulates_across_turns() = runTest {
         val session = session(listOf(text("first"), text("second")))
 
-        session.send("ctx", "one")
-        session.send("ctx", "two")
+        session.ask("ctx", "one")
+        session.ask("ctx", "two")
 
         assertEquals(4, session.history.size)
         val second = api!!.body(1)
-        assertTrue("the first turn was not carried forward:\n$second", "one" in second)
+        assertEquals("the first turn was not carried forward:\n$second", listOf("one", "two"), userTexts(second).takeLast(2))
     }
 
     /**
@@ -313,7 +355,7 @@ abstract class GenericSessionTest {
      */
     @Test
     fun the_project_context_reaches_the_model() = runTest {
-        session(listOf(text("ok"))).send("PROJECT_CONTEXT_MARKER", "hello")
+        session(listOf(text("ok"))).ask("PROJECT_CONTEXT_MARKER", "hello")
 
         val first = api!!.body(0)
         assertTrue("the project context was not sent:\n$first", "PROJECT_CONTEXT_MARKER" in first)
@@ -330,11 +372,11 @@ abstract class GenericSessionTest {
      */
     @Test
     fun the_tools_are_declared_or_the_model_can_never_call_one() = runTest {
-        session(listOf(text("ok"))).send("ctx", "hello")
+        session(listOf(text("ok"))).ask("ctx", "hello")
 
         val first = api!!.body(0)
         for (tool in listOf("list_files", "read_file", "grep", "edit_file")) {
-            assertTrue("$tool was not declared to the model:\n$first", tool in first)
+            assertTrue("$tool was not declared to the model:\n$first", tool in declaredTools(first))
         }
     }
 
@@ -359,7 +401,7 @@ abstract class GenericSessionTest {
                 toolCall(read("src/Main.kt", id = "call_2")),
                 text("It prints hi."),
             ),
-        ).send("ctx", "what does Main.kt do?")
+        ).ask("ctx", "what does Main.kt do?")
 
         assertEquals("It prints hi.", reply.text)
         assertEquals(
@@ -391,7 +433,7 @@ abstract class GenericSessionTest {
 
         val reply = session(
             listOf(toolCall(first), toolCall(transposed), text("Found it.")),
-        ).send("ctx", "where is main?")
+        ).ask("ctx", "where is main?")
 
         assertEquals(
             "the transposed call was treated as new",
@@ -412,7 +454,7 @@ abstract class GenericSessionTest {
     fun a_model_that_only_repeats_is_stopped_early() = runTest {
         val repeats = List(12) { toolCall(read("src/Main.kt", id = "call_$it")) }
 
-        val reply = session(repeats).send("ctx", "hello")
+        val reply = session(repeats).ask("ctx", "hello")
 
         assertTrue("the session should report it gave up", reply.truncated)
         assertEquals(
@@ -444,7 +486,7 @@ abstract class GenericSessionTest {
                 toolCall(read("src/Other.kt", id = "c2")),
                 text("Both read."),
             ),
-        ).send("ctx", "read both files")
+        ).ask("ctx", "read both files")
 
         assertEquals("Both read.", reply.text)
         assertEquals(2, reply.toolRuns.size)

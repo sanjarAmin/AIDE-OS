@@ -825,3 +825,47 @@ as deleted: YAML lists, `--flags` and negative numbers read as removals, and
 nothing actually being removed was shown. It is now a real line diff against
 the file on disk, handed over as classified rows (`DiffLine`), so no text is
 ever inspected for a leading sign.
+
+## 16. The phone's org.json reads `null` as text, and the tests could not see it
+
+Found by a review of this module's tests. The larger finding was about the
+tests, and a production bug sat inside it.
+
+**Android's `optString` turns a JSON `null` into the four characters `"null"`.**
+The org.json artifact the JVM tests run against returns `""`. So the prose and
+`finish_reason` reads, which compared with `"null"` by hand, were guarded, and
+the tool-call `id`, `name` and `arguments` reads were not. On a phone, a later
+fragment carrying `"name": null` would have produced `read_filenull`, and a
+`null` argument became a path called "null". Every JVM test passed. The
+device suite never ran a streaming parser either, because the scripted
+Gemini/OpenAI server only answered with JSON while the chat always streams.
+Every string read from a provider now goes through `stringOrNull`, which uses
+`isNull` and behaves the same on both. `StreamNullOnDeviceTest` pins the
+platform's behaviour. The scripted server now streams when asked, including
+null continuation fragments, and `OpenAiStreamedSessionTest` /
+`GeminiStreamedSessionTest` rerun every shared case through that path.
+
+**Most of the rest were tests that could not fail.** Each one was checked by
+putting its bug back and watching it fail, which is the only check that means
+anything here:
+
+- A substring of a request body proves nothing. The body holds every tool's
+  declaration and the system text: "one" matched `read_file`'s own "Read one
+  file in full", and `"thinking"` matched the adaptive-thinking setting.
+  Bodies are parsed now, and the specific block is asserted.
+- A shared counter makes an id collision impossible to stage with fixed ids,
+  since other tests have already moved it past 2. The fixture now asks the
+  counter for the ids it is about to hand out.
+- An identical repeated tool call never reaches the approver, because the
+  dedup guard answers it first. So a standing-approval test that repeats one
+  call asserts the guard, not the grant. `a once-only approval is asked
+  again` recorded this lesson; its sibling had not learned it.
+- `>= 0` on a field that defaults to 0; cancelling a coroutine that has not
+  started yet; saving a chat the turn had already saved; clearing an empty
+  controller. Each passed with the code it named deleted.
+
+And one in production code, found through a test fixture that never created
+the thing its name promised: every walker of a project skipped any directory
+called `build` at any depth, including the importer. A source package named
+`build` was left out of imports, hidden from the tree, and invisible to the
+assistant. `GeneratedDirectories` decides by what sits beside the folder.

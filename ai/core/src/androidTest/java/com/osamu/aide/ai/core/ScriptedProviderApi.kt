@@ -35,9 +35,17 @@ class ScriptedProviderApi(responses: List<String>) {
                 // should fail on the assertion that names the problem, not on a
                 // transport error thrown from inside the client.
                 val body = if (queued.size > 1) queued.removeFirst() else queued.first()
-                return MockResponse()
-                    .setHeader("Content-Type", "application/json")
-                    .setBody(body)
+                // **Streamed when the client asks to stream**, as the real
+                // endpoints do. This only ever answered with JSON, and the chat
+                // always streams -- so the streaming parsers, on the phone's own
+                // org.json, never ran in this suite. ScriptedApi does the same
+                // for Anthropic, for the same reason.
+                val path = request.path.orEmpty()
+                return when {
+                    ":streamGenerateContent" in path -> sse(geminiEvents(body))
+                    "\"stream\":true" in request.body.peek().readUtf8() -> sse(openAiEvents(body) + "[DONE]")
+                    else -> MockResponse().setHeader("Content-Type", "application/json").setBody(body)
+                }
             }
         }
         server.start()
@@ -86,6 +94,55 @@ class ScriptedProviderApi(responses: List<String>) {
 
     companion object {
         const val MODEL = "test-model"
+
+        private fun sse(events: List<String>) = MockResponse()
+            .setHeader("Content-Type", "text/event-stream")
+            .setBody(events.joinToString("") { "data: $it\n\n" })
+
+        /**
+         * A one-shot OpenAI response as the stream a server sends for it.
+         *
+         * Prose is split in two so there is more than one delta. A tool call is
+         * split the way servers do it -- the first fragment names the call and
+         * later ones carry only more arguments, with `"id"` and `"name"` sent as
+         * JSON `null` -- because that null is what the phone's org.json reads
+         * as the text "null", and nothing else in the suite would send it.
+         */
+        fun openAiEvents(response: String): List<String> {
+            val choice = org.json.JSONObject(response).getJSONArray("choices").getJSONObject(0)
+            val message = choice.getJSONObject("message")
+            val events = mutableListOf<String>()
+            val content = if (message.isNull("content")) "" else message.getString("content")
+            if (content.isNotEmpty()) {
+                val half = content.length / 2
+                listOf(content.substring(0, half), content.substring(half)).filter { it.isNotEmpty() }.forEach {
+                    events += """{"choices":[{"delta":{"content":${quote(it)}}}]}"""
+                }
+            }
+            val calls = message.optJSONArray("tool_calls")
+            if (calls != null) {
+                for (i in 0 until calls.length()) {
+                    val call = calls.getJSONObject(i)
+                    val function = call.getJSONObject("function")
+                    val arguments = function.getString("arguments")
+                    val half = arguments.length / 2
+                    events += """{"choices":[{"delta":{"content":null,"tool_calls":[{"index":$i,"id":${quote(call.getString("id"))},"type":"function","function":{"name":${quote(function.getString("name"))},"arguments":${quote(arguments.substring(0, half))}}}]}}]}"""
+                    events += """{"choices":[{"delta":{"tool_calls":[{"index":$i,"id":null,"function":{"name":null,"arguments":${quote(arguments.substring(half))}}}]}}]}"""
+                }
+            }
+            events += """{"choices":[{"delta":{},"finish_reason":${quote(choice.getString("finish_reason"))}}]}"""
+            return events
+        }
+
+        /** A one-shot Gemini response as its stream: one event per part, then the finish. */
+        fun geminiEvents(response: String): List<String> {
+            val candidate = org.json.JSONObject(response).getJSONArray("candidates").getJSONObject(0)
+            val parts = candidate.getJSONObject("content").getJSONArray("parts")
+            val events = (0 until parts.length()).map { i ->
+                """{"candidates":[{"content":{"role":"model","parts":[${parts.getJSONObject(i)}]}}]}"""
+            }
+            return events + """{"candidates":[{"content":{"role":"model","parts":[]},"finishReason":${quote(candidate.getString("finishReason"))}}]}"""
+        }
 
         fun quote(value: String) = "\"" + value
             .replace("\\", "\\\\")

@@ -154,6 +154,36 @@ class StreamAccumulatorTest {
         assertEquals(emptyList<AiPart>(), accumulator.parts())
     }
 
+    /**
+     * Null in every field a tool-call fragment has.
+     *
+     * This passes on the JVM whatever the code does with `optString` -- the
+     * org.json artifact reads a JSON null as "" -- so it is here for the shape;
+     * `StreamNullOnDeviceTest` runs the same fragments through the phone's own
+     * org.json, which reads it as "null" and is where the bug lived.
+     */
+    @Test
+    fun `null fields in a later tool call fragment add nothing`() {
+        val accumulator = OpenAiStreamAccumulator()
+        accumulator.accept(
+            """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read_file","arguments":"{\"path\":"}}]}}]}""",
+        )
+        accumulator.accept(
+            """{"choices":[{"delta":{"content":null,"tool_calls":[{"index":0,"id":null,"function":{"name":null,"arguments":"\"Main.kt\"}"}}]}}]}""",
+        )
+        accumulator.accept("""{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":null}}]}}]}""")
+
+        val call = accumulator.parts().single() as AiPart.FunctionCall
+        assertEquals("read_file", call.name)
+        assertEquals("call_1", call.id)
+        assertEquals(mapOf("path" to "Main.kt"), call.args)
+    }
+
+    @Test
+    fun `a null argument is left out rather than passed as text`() {
+        assertEquals(mapOf("path" to "Main.kt"), decodeArguments("""{"path":"Main.kt","limit":null}"""))
+    }
+
     @Test
     fun `an error mid-stream is raised rather than truncating the reply`() {
         val accumulator = OpenAiStreamAccumulator()

@@ -268,12 +268,12 @@ class OpenAiClient(
         if (choices.length() == 0) return AiClientResponse(emptyList())
 
         val choice = choices.getJSONObject(0)
-        val finishReason = choice.optString("finish_reason")
+        val finishReason = choice.stringOrNull("finish_reason")
         val message = choice.optJSONObject("message") ?: return AiClientResponse(emptyList(), finishReason)
 
         val parts = mutableListOf<AiPart>()
-        val content = message.optString("content")
-        if (content.isNotBlank() && content != "null") {
+        val content = message.stringOrNull("content")
+        if (!content.isNullOrBlank()) {
             parts += AiPart.Text(content)
         }
 
@@ -281,24 +281,15 @@ class OpenAiClient(
         if (toolCalls != null) {
             for (i in 0 until toolCalls.length()) {
                 val call = toolCalls.getJSONObject(i)
-                val id = call.optString("id")
+                val id = call.stringOrNull("id").orEmpty()
                 val fn = call.optJSONObject("function") ?: continue
-                val name = fn.getString("name")
-                val argsRaw = fn.optString("arguments")
-                val argsMap = mutableMapOf<String, String>()
-                runCatching {
-                    val argsObj = JSONObject(argsRaw)
-                    val keys = argsObj.keys()
-                    while (keys.hasNext()) {
-                        val key = keys.next()
-                        argsMap[key] = argsObj.optString(key)
-                    }
-                }
+                val name = fn.stringOrNull("name")?.takeIf { it.isNotBlank() } ?: continue
+                val argsMap = decodeArguments(fn.stringOrNull("arguments").orEmpty())
                 parts += AiPart.FunctionCall(id = id, name = name, args = argsMap)
             }
         }
 
-        return finalize(parts, content, finishReason, offered)
+        return finalize(parts, content.orEmpty(), finishReason, offered)
     }
 
     /**
@@ -393,21 +384,16 @@ class OpenAiClient(
 
         val parsed = candidates.firstNotNullOfOrNull { candidate ->
             runCatching { JSONObject(candidate) }.getOrNull()
-                ?.takeIf { it.optString("name") in names }
+                ?.takeIf { it.stringOrNull("name") in names }
         } ?: return null
 
-        val name = parsed.optString("name")
+        val name = parsed.stringOrNull("name") ?: return null
         // Either shape: an object, or the string OpenAI's own wire format uses.
         val arguments = parsed.optJSONObject("arguments")
-            ?: runCatching { JSONObject(parsed.optString("arguments")) }.getOrNull()
+            ?: runCatching { JSONObject(parsed.stringOrNull("arguments").orEmpty()) }.getOrNull()
             ?: return null
 
-        val args = mutableMapOf<String, String>()
-        val keys = arguments.keys()
-        while (keys.hasNext()) {
-            val key = keys.next()
-            args[key] = arguments.optString(key)
-        }
+        val args = arguments.stringArguments()
 
         // No id: this call was never registered with the server, so there is
         // nothing for a `tool_call_id` to refer back to. The generic loop

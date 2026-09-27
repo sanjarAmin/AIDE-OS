@@ -6,6 +6,7 @@ import android.provider.DocumentsContract
 import com.osamu.aide.core.common.AppError
 import com.osamu.aide.core.common.AppResult
 import com.osamu.aide.core.common.DispatcherProvider
+import com.osamu.aide.core.common.GeneratedDirectories
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -144,31 +145,38 @@ class ProjectImporter(
             val mimeColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
             val sizeColumn = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
 
+            // Read whole before deciding, because whether a `build` directory
+            // is output depends on what sits beside it -- see
+            // GeneratedDirectories. Skipping by name alone dropped a source
+            // package called `build` from every import.
+            val rows = mutableListOf<Row>()
             while (cursor.moveToNext()) {
-                val childId = cursor.getString(idColumn)
                 val childName = cursor.getString(nameColumn) ?: continue
-                val isDirectory =
-                    cursor.getString(mimeColumn) == DocumentsContract.Document.MIME_TYPE_DIR
-
-                if (childName in SKIPPED || childName.startsWith(".")) continue
-
-                node.children += if (isDirectory) {
-                    read(tree, childId, childName, depth + 1)
-                } else {
+                rows += Row(
+                    id = cursor.getString(idColumn),
+                    name = childName,
+                    isDirectory = cursor.getString(mimeColumn) == DocumentsContract.Document.MIME_TYPE_DIR,
                     // SIZE is documented as optional. Unknown counts as zero,
                     // which only means the size check under-counts a provider
                     // that does not report it.
-                    val size = if (sizeColumn >= 0 && !cursor.isNull(sizeColumn)) {
-                        cursor.getLong(sizeColumn)
-                    } else {
-                        0L
-                    }
-                    Node(childId, childName, isDirectory = false, size = size)
+                    size = if (sizeColumn >= 0 && !cursor.isNull(sizeColumn)) cursor.getLong(sizeColumn) else 0L,
+                )
+            }
+            val names by lazy { rows.map { it.name } }
+            for (row in rows) {
+                if (row.name.startsWith(".")) continue
+                if (row.isDirectory && GeneratedDirectories.isGenerated(row.name) { names }) continue
+                node.children += if (row.isDirectory) {
+                    read(tree, row.id, row.name, depth + 1)
+                } else {
+                    Node(row.id, row.name, isDirectory = false, size = row.size)
                 }
             }
         }
         return node
     }
+
+    private class Row(val id: String, val name: String, val isDirectory: Boolean, val size: Long)
 
     private fun copy(tree: Uri, node: Node, target: File) {
         check(target.mkdirs() || target.isDirectory) { "Could not create ${target.absolutePath}" }
@@ -214,9 +222,6 @@ class ProjectImporter(
          * fill a phone before anyone notices.
          */
         const val DEFAULT_MAXIMUM_BYTES = 200L * MEGABYTE
-
-        /** Regenerable or irrelevant, and between them most of a project's bytes. */
-        private val SKIPPED = setOf(".git", "build", ".gradle", ".idea", "node_modules")
 
         private const val MAX_DEPTH = 24
         private const val FALLBACK_NAME = "Imported project"

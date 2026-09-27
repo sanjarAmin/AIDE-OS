@@ -60,7 +60,10 @@ internal sealed interface LiveApiOutcome {
             val code = match.groupValues[1]
             val body = match.groupValues[2].trim()
             return when {
-                code == "429" -> Unpaid
+                // 402 is Gemini's newer word for the same thing: "Your
+                // prepayment credits are depleted". Read as anything else it
+                // failed four tests that say nothing about the code.
+                code == "429" || code == "402" -> Unpaid
                 code == "404" && body.isEmpty() -> Inconclusive("empty 404, probably throttled")
                 code == "404" -> Unknown(body)
                 else -> Inconclusive(message)

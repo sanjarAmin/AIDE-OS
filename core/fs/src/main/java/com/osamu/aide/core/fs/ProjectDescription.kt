@@ -1,5 +1,6 @@
 package com.osamu.aide.core.fs
 
+import com.osamu.aide.core.common.GeneratedDirectories
 import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
 
@@ -27,8 +28,6 @@ object ProjectDescription {
     private val SETTINGS = listOf("settings.gradle.kts", "settings.gradle")
     private val BUILD_FILES = setOf("build.gradle.kts", "build.gradle")
 
-    /** Not project content, and not worth walking. Matches the importer's skip list. */
-    private val SKIPPED = setOf(".git", "build", ".gradle", ".idea", "node_modules")
 
     fun isGradleRoot(directory: File): Boolean = SETTINGS.any { File(directory, it).isFile }
 
@@ -83,7 +82,7 @@ object ProjectDescription {
     private fun projectFiles(rootDir: File, maxDepth: Int = Int.MAX_VALUE): Sequence<File> =
         rootDir.walkTopDown()
             .maxDepth(maxDepth)
-            .onEnter { it == rootDir || (it.name !in SKIPPED && !it.name.startsWith(".")) }
+            .onEnter { it == rootDir || (!GeneratedDirectories.isGenerated(it) && !it.name.startsWith(".")) }
             .filter { it.isFile }
 
     /**

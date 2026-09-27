@@ -30,9 +30,15 @@ class AssistantTest {
         // visible setting -- so a test that sets one would otherwise leak it
         // into whatever runs next on the same device.
         keys.saveBaseUrl(Endpoint.Default)
+        // Pinned for the reason ApiKeyStoreTest gives: session() routes on the
+        // active provider, and another suite may have left a different one.
+        keys.setActiveProvider(AiProviderType.ANTHROPIC)
         root = File(context.cacheDir, "assistant-${System.nanoTime()}").apply { mkdirs() }
         File(root, "src/Main.kt").apply { parentFile?.mkdirs() }.writeText("fun main() = Unit")
         File(root, "build/generated/Junk.kt").apply { parentFile?.mkdirs() }.writeText("x")
+        // What makes that `build/` output rather than the user's own folder;
+        // see GeneratedDirectories.
+        File(root, "build.gradle.kts").writeText("plugins {}")
     }
 
     @After
@@ -52,7 +58,6 @@ class AssistantTest {
         clientFactory = { _, _ -> ScriptedApi(listOf(ScriptedApi.text("hi"))).also { api = it }.client() },
     )
 
-    /** No key is the state every user starts in, so it must not be an error. */
     /**
      * Custom with a key but no address has no session and no completer.
      *
@@ -79,6 +84,7 @@ class AssistantTest {
         assertNotNull(assistant().session(root, Approver { _, _ -> true }))
     }
 
+    /** No key is the state every user starts in, so it must not be an error. */
     @Test
     fun there_is_no_session_without_a_key() {
         assertNull(assistant().session(root, Approver { _, _ -> true }))

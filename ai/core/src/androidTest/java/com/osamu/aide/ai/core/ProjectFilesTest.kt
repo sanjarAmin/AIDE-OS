@@ -6,6 +6,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -39,6 +40,16 @@ class ProjectFilesTest {
         write("src/main/res/values/strings.xml", "<resources><string name=\"a\">A</string></resources>")
         write("build/generated/Junk.java", "// derived, should never be listed")
         write("README.md", "hello")
+        // What makes the `build/` above output: the script that produced it.
+        write("build.gradle.kts", "plugins {}")
+        write(".git/HEAD", "ref: refs/heads/main // version control, should never be listed")
+        // A source package that happens to be called `build`.
+        write("src/main/java/com/example/build/BuildTool.java", "class BuildTool { void compileAll() {} }")
+    }
+
+    @After
+    fun tearDown() {
+        root.deleteRecursively()
     }
 
     private fun write(path: String, content: String) {
@@ -142,7 +153,28 @@ class ProjectFilesTest {
 
         assertTrue("the source file is missing from:\n$listing", "src/main/java/com/example/Main.java" in listing)
         assertTrue("README.md is missing from:\n$listing", "README.md" in listing)
-        assertFalse("build output was listed:\n$listing", "build/" in listing)
+        assertFalse("build output was listed:\n$listing", "Junk.java" in listing)
+        assertFalse("version control was listed:\n$listing", ".git" in listing)
+    }
+
+    /**
+     * A package called `build` is source, not output.
+     *
+     * Every directory named `build` used to be skipped at any depth, so a
+     * project with `com/example/build/` -- this repository has one -- had that
+     * code hidden from the assistant, which then insisted it did not exist.
+     */
+    @Test
+    fun a_source_package_called_build_is_listed_and_searched() {
+        val listing = ok(files.list())
+        assertTrue(
+            "a source package named build was hidden:\n$listing",
+            "src/main/java/com/example/build/BuildTool.java" in listing,
+        )
+        assertTrue(
+            "grep skipped a source package named build",
+            ok(files.grep("compileAll")).contains("BuildTool.java:1:"),
+        )
     }
 
     @Test

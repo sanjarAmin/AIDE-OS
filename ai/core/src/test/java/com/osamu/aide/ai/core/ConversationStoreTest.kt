@@ -1,6 +1,7 @@
 package com.osamu.aide.ai.core
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -109,11 +110,17 @@ class ConversationStoreTest {
         // ids a freshly started process hands out.
         store().save("seed", listOf(ChatEntry.FromUser("seed")))
         val directory = File(root, "chats").listFiles()!!.single()
+        // **The ids this process will mint next**, not 1 and 2. The counter is
+        // shared by every test in the JVM and is far past 2 by the time this
+        // runs, so planting 1 and 2 could never collide -- and the test passed
+        // with the fix reverted. Asking the counter makes the collision certain
+        // unless ids are re-minted on load.
+        val next = ChatEntry.nextId() + 1
         File(directory, "c-1.json").writeText(
             """
             {"id":"c-1","title":"from a previous run","updatedAt":1,"entries":[
-              {"kind":"user","id":1,"at":1,"text":"asked last week"},
-              {"kind":"assistant","id":2,"at":2,"text":"answered last week"}
+              {"kind":"user","id":$next,"at":1,"text":"asked last week"},
+              {"kind":"assistant","id":${next + 1},"at":2,"text":"answered last week"}
             ]}
             """.trimIndent(),
         )
@@ -216,7 +223,17 @@ class ConversationStoreTest {
         // traversal here would write outside the store.
         store().save("../../escape", listOf(ChatEntry.FromUser("hi")))
 
-        assertTrue(File(root, "chats").listFiles()!!.isNotEmpty())
-        assertTrue(File(root.parentFile, "escape.json").exists().not())
+        // Every file under the store's root must be inside its own directory.
+        // `chats/<key>/../../escape.json` resolves to `<root>/escape.json`; the
+        // old check looked one level above that, so it could not fail. (Only
+        // the root is walked: its parent is the shared temp directory, where
+        // other tests' stores live.)
+        val store = File(root, "chats").listFiles()!!.single { it.isDirectory }.canonicalFile
+        val written = root.walkTopDown().filter { it.isFile && it.extension == "json" }.toList()
+        assertFalse("escaped past the root", File(root.parentFile, "escape.json").exists())
+        assertTrue("nothing was saved", written.isNotEmpty())
+        written.forEach {
+            assertTrue("$it escaped the store", it.canonicalPath.startsWith(store.path + File.separator))
+        }
     }
 }

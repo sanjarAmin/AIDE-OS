@@ -12,9 +12,9 @@ import org.junit.runner.RunWith
 /**
  * The endpoint the assistant talks to.
  *
- * Two halves. The first is [parseEndpoint], which is pure and would be a JVM
- * test in a module that had a JVM source set; it lives here for the same reason
- * `cleanCompletion`'s tests do -- this module is instrumented throughout.
+ * Two halves. The first is [parseEndpoint], which is pure; it was written here
+ * before this module had a JVM source set, and `LocalProviderTest` now covers
+ * part of it on the JVM as well.
  *
  * The second half is the one that could not be a unit test at all: that the SDK
  * appends `/v1/messages` to whatever base URL it is given. Every rejection and
@@ -110,9 +110,11 @@ class EndpointTest {
     /**
      * The rejection that is about the key rather than about URLs.
      *
-     * Cleartext would put a billable credential on the wire in plaintext, and
-     * `:app` ships no `network-security-config`, so it would fail anyway --
-     * with a platform error naming neither the setting nor the fix.
+     * Cleartext would put a billable credential on the wire in plaintext. `:app`
+     * permits cleartext only to loopback -- its `network-security-config` names
+     * 127.0.0.1, localhost and ::1, for the on-device model -- so to any real
+     * host it would fail anyway, with a platform error naming neither the
+     * setting nor the fix.
      */
     @Test
     fun http_is_refused_and_the_reason_names_the_key() {

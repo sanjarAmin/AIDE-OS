@@ -32,7 +32,7 @@ import org.junit.runner.RunWith
  * **Needs a real key**, passed as an instrumentation argument so it is never
  * written to disk and never committed:
  *
- *     ./gradlew :spike:ai:connectedDebugAndroidTest \
+ *     ./gradlew :ai:core:connectedDebugAndroidTest \
  *       -Pandroid.testInstrumentationRunnerArguments.geminiApiKey=...
  *
  * Every test skips without one.
@@ -67,10 +67,9 @@ class GeminiOnDeviceTest {
      * failure, because those are the questions this suite exists to ask.
      */
     private fun skipIfTheAccountCannotAnswer(failure: Throwable) {
-        val message = failure.message.orEmpty()
         assumeTrue(
-            "the Gemini account cannot serve requests: $message",
-            !(message.contains("(429)") && message.contains("RESOURCE_EXHAUSTED")),
+            "the Gemini account cannot serve requests: ${failure.message}",
+            LiveApiOutcome.of(failure) !is LiveApiOutcome.Unpaid,
         )
     }
 
@@ -120,7 +119,7 @@ class GeminiOnDeviceTest {
                 AiClientRequest(
                     systemInstruction = "Reply with exactly: ok",
                     messages = listOf(AiMessage(AiRole.USER, "Reply with exactly: ok")),
-                    maxTokens = 16L,
+                    maxTokens = PROBE_TOKENS,
                 ),
             )
         }
@@ -135,7 +134,7 @@ class GeminiOnDeviceTest {
     private fun probe() = AiClientRequest(
         systemInstruction = "Reply with exactly: ok",
         messages = listOf(AiMessage(AiRole.USER, "Reply with exactly: ok")),
-        maxTokens = 16L,
+        maxTokens = PROBE_TOKENS,
     )
 
     /**
@@ -185,13 +184,24 @@ class GeminiOnDeviceTest {
      */
     @Test
     fun a_retired_model_is_told_apart_from_an_unpayable_one() = runBlocking {
-        val retired = runCatching { client("gemini-2.5-pro").send(probe()) }
+        fun outcome(model: String) = runCatching { runBlocking { client(model).send(probe()) } }
             .fold(onSuccess = { LiveApiOutcome.Answered }, onFailure = { LiveApiOutcome.of(it) })
 
+        val retired = outcome("gemini-2.5-pro")
+        // The rate limiter's empty 404 is neither answer; it says nothing about
+        // the oracle, so it is a skip rather than a failure of it.
+        assumeTrue("the probe was throttled: $retired", retired !is LiveApiOutcome.Inconclusive)
         assertTrue(
             "a model FINDINGS section 15 records as retired came back as $retired",
             retired is LiveApiOutcome.Unknown,
         )
+
+        // The other half this promised and never checked: a live model must
+        // *not* classify as unknown, whether or not the account can pay for it.
+        delay(PROBE_SPACING_MS)
+        val live = outcome(AiProviderType.GEMINI.defaultModel)
+        assumeTrue("the probe was throttled: $live", live !is LiveApiOutcome.Inconclusive)
+        assertTrue("the default model was classified as $live", live is LiveApiOutcome.Answered || live is LiveApiOutcome.Unpaid)
     }
 
     /**
@@ -203,22 +213,26 @@ class GeminiOnDeviceTest {
      */
     @Test
     fun every_offered_model_answers() = runBlocking {
-        val dead = AiProviderType.GEMINI.availableModels.filter { model ->
-            val text = runCatching {
-                client(model).send(
-                    AiClientRequest(
-                        systemInstruction = "Reply with exactly: ok",
-                        messages = listOf(AiMessage(AiRole.USER, "Reply with exactly: ok")),
-                        maxTokens = 16L,
-                    ),
-                ).text
-            }.getOrElse { failure ->
+        // **Dead means the API says so**, not "this request did not come back
+        // with text". Back-to-back probes earn the rate limiter's empty 404s,
+        // and those were counted as dead models -- the false accusation
+        // [LiveApiOutcome.Inconclusive] exists to prevent. So each probe is
+        // classified, spaced, and only an unknown model or a successful reply
+        // with no text counts against the picker.
+        val dead = mutableListOf<String>()
+        for (model in AiProviderType.GEMINI.availableModels) {
+            val result = runCatching { client(model).send(probe()) }
+            result.exceptionOrNull()?.let { failure ->
                 skipIfTheAccountCannotAnswer(failure)
-                Log.w(TAG, "model $model failed: ${failure.message}")
-                ""
+                val outcome = LiveApiOutcome.of(failure)
+                Log.w(TAG, "model $model -> $outcome")
+                if (outcome is LiveApiOutcome.Unknown) dead += "$model (${outcome.detail.take(120)})"
             }
-            Log.i(TAG, "model $model -> '${text.take(40)}'")
-            text.isBlank()
+            result.getOrNull()?.let { response ->
+                Log.i(TAG, "model $model -> '${response.text.take(40)}' finish=${response.finishReason}")
+                if (response.text.isBlank()) dead += "$model (answered with no text, finish=${response.finishReason})"
+            }
+            delay(PROBE_SPACING_MS)
         }
 
         assertEquals("models offered in the picker that do not answer", emptyList<String>(), dead)
@@ -272,5 +286,12 @@ class GeminiOnDeviceTest {
 
         /** Enough space between probes that the rate limiter stays quiet. */
         const val PROBE_SPACING_MS = 400L
+
+        /**
+         * Room to answer. Sixteen, as these used, is spent by a thinking model
+         * before it writes a word, and an empty MAX_TOKENS reply read as a dead
+         * model on an account that could pay for it.
+         */
+        const val PROBE_TOKENS = 256L
     }
 }

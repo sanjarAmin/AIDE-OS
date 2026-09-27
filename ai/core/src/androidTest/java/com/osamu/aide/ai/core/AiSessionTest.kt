@@ -6,6 +6,7 @@ import com.osamu.aide.core.common.DispatcherProvider
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -33,12 +34,6 @@ class AiSessionTest {
     private var api: ScriptedApi? = null
 
     /** Everything on the caller's thread: `runTest` then controls the clock. */
-    private val dispatchers = object : DispatcherProvider {
-        override val main: CoroutineDispatcher get() = Dispatchers.Unconfined
-        override val default: CoroutineDispatcher get() = Dispatchers.Unconfined
-        override val io: CoroutineDispatcher get() = Dispatchers.Unconfined
-        override val compiler: CoroutineDispatcher get() = Dispatchers.Unconfined
-    }
 
     @Before
     fun setUp() {
@@ -67,7 +62,7 @@ class AiSessionTest {
             assembler = PromptAssembler(toolset),
             toolset = toolset,
             approver = approver,
-            dispatchers = dispatchers,
+            dispatchers = unconfinedDispatchers,
             maxToolRounds = maxToolRounds,
         )
     }
@@ -98,8 +93,9 @@ class AiSessionTest {
         assertEquals(2, api!!.requestCount)
 
         val second = api!!.body(1)
-        assertTrue("the tool result never reached the model:\n$second", "tu_1" in second)
-        assertTrue("the file's contents were not sent back", "println" in second)
+        val result = toolResults(second).single()
+        assertEquals("the result answers the wrong call:\n$second", "tu_1", result.id)
+        assertTrue("the file's contents were not sent back:\n$second", "println" in result.content)
     }
 
     /**
@@ -122,8 +118,13 @@ class AiSessionTest {
         ).send("ctx", "what is in here?")
 
         val second = api!!.body(1)
-        assertTrue("the thinking block was dropped from the replayed turn:\n$second", "\"thinking\"" in second)
-        assertTrue("the thinking block's signature was not replayed", "sig_test" in second)
+        // Inside the replayed assistant turn. `"thinking"` alone also matches
+        // the request's own adaptive-thinking setting, so it could not fail.
+        val thinking = messages(second).filter { it.optString("role") == "assistant" }
+            .flatMap(::blocks)
+            .filter { it.optString("type") == "thinking" }
+        assertEquals("the thinking block was dropped from the replayed turn:\n$second", 1, thinking.size)
+        assertEquals("the thinking block's signature was not replayed", "sig_test", thinking.single().optString("signature"))
     }
 
     /**
@@ -149,12 +150,13 @@ class AiSessionTest {
         // Three messages, not four: user, assistant, and one user turn holding
         // both results.
         val second = api!!.body(1)
+        val turns = messages(second)
+        assertEquals("expected user, assistant, and one turn of results:\n$second", 3, turns.size)
         assertEquals(
             "the two tool results were not sent in one message:\n$second",
-            3,
-            second.split("\"role\"").size - 1,
+            listOf("tu_1", "tu_2"),
+            blocks(turns.last()).filter { it.optString("type") == "tool_result" }.map { it.optString("tool_use_id") },
         )
-        assertTrue("tu_1" in second && "tu_2" in second)
     }
 
     /** Detail 3: a refusal is still a result, or the next request is a 400. */
@@ -182,8 +184,9 @@ class AiSessionTest {
         )
 
         val second = api!!.body(1)
-        assertTrue("no tool_result was sent for the declined call:\n$second", "tu_1" in second)
-        assertTrue("the refusal was not flagged as an error", "is_error" in second)
+        val result = toolResults(second).single()
+        assertEquals("no tool_result was sent for the declined call:\n$second", "tu_1", result.id)
+        assertTrue("the refusal was not flagged as an error:\n$second", result.isError)
     }
 
     /** And approval really does let the write through. */
@@ -259,6 +262,43 @@ class AiSessionTest {
 
         assertEquals(4, session.history.size)
         val second = api!!.body(1)
-        assertTrue("the first turn was not carried forward:\n$second", "one" in second)
+        // The user turns themselves. "one" alone matched read_file's own
+        // description, "Read one file in full", in every request.
+        val userTexts = messages(second).filter { it.optString("role") == "user" }.map(::textOf)
+        assertEquals("the first turn was not carried forward:\n$second", listOf("one", "two"), userTexts)
     }
+
+    // -- reading a request body ---------------------------------------------
+    //
+    // Parsed rather than searched: a request also carries every tool's
+    // declaration, the system text and the replayed calls, so a substring of
+    // the body is found whether or not the thing asserted was sent.
+
+    private class Result(val id: String, val content: String, val isError: Boolean)
+
+    private fun messages(body: String): List<JSONObject> {
+        val array = JSONObject(body).getJSONArray("messages")
+        return (0 until array.length()).map { array.getJSONObject(it) }
+    }
+
+    /** A message's content blocks; a plain string content has none. */
+    private fun blocks(message: JSONObject): List<JSONObject> {
+        val content = message.optJSONArray("content") ?: return emptyList()
+        return (0 until content.length()).map { content.getJSONObject(it) }
+    }
+
+    private fun textOf(message: JSONObject): String =
+        message.optJSONArray("content")?.let { _ ->
+            blocks(message).filter { it.optString("type") == "text" }.joinToString("") { it.optString("text") }
+        } ?: message.optString("content")
+
+    private fun toolResults(body: String): List<Result> = messages(body)
+        .flatMap(::blocks)
+        .filter { it.optString("type") == "tool_result" }
+        .map { block ->
+            val content = block.optJSONArray("content")?.let { parts ->
+                (0 until parts.length()).joinToString("") { parts.getJSONObject(it).optString("text") }
+            } ?: block.optString("content")
+            Result(block.optString("tool_use_id"), content, block.optBoolean("is_error"))
+        }
 }
