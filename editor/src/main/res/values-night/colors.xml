@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="completion_kind_method">#81C784</color>
+    <color name="completion_kind_field">#64B5F6</color>
+    <color name="completion_kind_variable">#4DD0E1</color>
+    <color name="completion_kind_class">#FFB74D</color>
+    <color name="completion_kind_interface">#FFD54F</color>
+    <color name="completion_kind_enum">#FF8A65</color>
+    <color name="completion_kind_keyword">#F06292</color>
+    <color name="completion_kind_snippet">#BA68C8</color>
+</resources>
