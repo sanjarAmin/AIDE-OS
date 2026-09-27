@@ -14,6 +14,7 @@ import androidx.compose.ui.test.performTextInput
 import com.osamu.aide.core.fs.MonoCollectionsApp
 import com.osamu.aide.core.fs.NodeHttpServer
 import com.osamu.aide.core.fs.ProjectTemplate
+import com.osamu.aide.core.fs.SourceLanguage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -172,12 +173,16 @@ class CreateProjectDialogTest {
             )
         }
 
-        // And no language is headed that has no templates under it.
-        assertEquals(
-            "a language appears in the catalog more than once as a group",
-            languages.size,
-            languages.distinct().size,
-        )
+        // And no language is headed that has no templates under it. (This
+        // compared `languages` with its own distinct(), which is already
+        // distinct, and so could not fail.)
+        SourceLanguage.entries.filter { it !in languages }.forEach { language ->
+            assertEquals(
+                "${language.displayName} is headed but offers no template",
+                0,
+                compose.onAllNodesWithText(language.displayName).fetchSemanticsNodes().size,
+            )
+        }
     }
 
     /**

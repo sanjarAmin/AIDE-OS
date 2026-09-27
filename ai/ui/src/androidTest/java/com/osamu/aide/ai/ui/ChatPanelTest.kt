@@ -116,7 +116,13 @@ class ChatPanelTest {
         compose.onNodeWithTag(IDENTITY_TAG).performClick()
 
         compose.onNodeWithText("Anthropic").assertIsDisplayed()
-        assertTrue(compose.onAllNodesWithText("Needs setup").fetchSemanticsNodes().isNotEmpty())
+        // Every provider but the configured one, exactly. "At least one" --
+        // what this checked -- held with the marking inverted, and with it on
+        // every provider including the one that works.
+        assertEquals(
+            AiProviderType.entries.size - 1,
+            compose.onAllNodesWithText("Needs setup").fetchSemanticsNodes().size,
+        )
     }
 
     /** A long model name must not push the actions off the row. */
@@ -258,7 +264,12 @@ class ChatPanelTest {
         // The same control in a row with a short label, which is the only
         // comparison a Row's own bounds cannot fake: against the container an
         // edge test is true whatever the layout does.
-        val chevrons = compose.onAllNodesWithContentDescription("Show details")
+        //
+        // **The unmerged tree, or this measures the row.** The chevron sits in
+        // the card's clickable Surface, which merges its descendants, so the
+        // merged query returned the two full-width cards -- equal whatever the
+        // chevron did, and the test passed with the path's weight removed.
+        val chevrons = compose.onAllNodesWithContentDescription("Show details", useUnmergedTree = true)
         assertEquals(2, chevrons.fetchSemanticsNodes().size)
         val besideLongPath = chevrons[0].widthDp()
         val besideShortPath = chevrons[1].widthDp()

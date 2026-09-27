@@ -102,7 +102,10 @@ class FileTreePaneTest {
     fun a_long_name_does_not_squeeze_the_unsaved_marker() {
         paneAt(width = 360)
 
-        val markers = compose.onAllNodesWithContentDescription("Unsaved changes")
+        // The unmerged tree: the marker sits inside the row's clickable
+        // Surface, and the merged query returned the two fillMaxWidth rows --
+        // equal whatever the marker did, so this could never fail.
+        val markers = compose.onAllNodesWithContentDescription("Unsaved changes", useUnmergedTree = true)
             .fetchSemanticsNodes()
             .map { it.boundsInRoot }
         assertEquals("expected a marker on both open files", 2, markers.size)
@@ -127,13 +130,24 @@ class FileTreePaneTest {
     fun the_header_survives_the_narrow_pane() {
         paneAt(width = 260)
 
-        val badge = compose.onNodeWithText("JAVA").fetchSemanticsNode().boundsInRoot
-        assertTrue("the language badge wrapped: ${badge.height} dp tall", badge.height < 60f)
+        // **In dp.** boundsInRoot is in pixels, and these thresholds were
+        // written as dp against it -- so a one-line badge failed at xxxhdpi and
+        // a squeezed button passed there, and the verdict depended on the
+        // phone's density rather than on the layout.
+        val density = compose.density.density
+        // "Java": the badges went to sentence case, and this still looked for
+        // "JAVA", so it failed on the first line and measured nothing.
+        val badge = compose.onNodeWithText("Java").fetchSemanticsNode().boundsInRoot
+        val badgeHeight = badge.height / density
+        assertTrue("the language badge wrapped: $badgeHeight dp tall", badgeHeight < 30f)
         val button = compose.onNodeWithContentDescription("Collapse all folders")
             .fetchSemanticsNode().boundsInRoot
-        assertTrue("collapse was squeezed to ${button.width}", button.width > 60f)
+        val buttonWidth = button.width / density
+        // Declared 36 dp in FileTreePane; anything well short of that was
+        // measured in what the name left over.
+        assertTrue("collapse was squeezed to $buttonWidth dp", buttonWidth > 32f)
         // A square button is one that was measured in the space it asked for.
-        assertEquals(button.height, button.width, 2f)
+        assertEquals(button.height / density, buttonWidth, 2f)
         compose.onNodeWithText("Demo").assertIsDisplayed()
     }
 

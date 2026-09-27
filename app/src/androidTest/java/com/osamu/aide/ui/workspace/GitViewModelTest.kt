@@ -60,8 +60,9 @@ class GitViewModelTest {
             mkdirs()
         }
         workspaceRoot = File(root, "workspace").apply { mkdirs() }
-        identities = GitIdentityStore(context).apply { clear() }
-        credentials = GitCredentialStore(context).apply { clear() }
+        // Namespaced, not the app's own: see ApiKeyStore's constructor.
+        identities = GitIdentityStore(context, namespace = "test").apply { clear() }
+        credentials = GitCredentialStore(context, namespace = "test").apply { clear() }
         git = GitWorkspace(context, DefaultDispatcherProvider(), identities, credentials)
 
         repoDir = File(workspaceRoot, "project")
@@ -93,7 +94,11 @@ class GitViewModelTest {
     private suspend fun await(what: String, condition: () -> Boolean) {
         val deadline = System.currentTimeMillis() + 30_000
         while (System.currentTimeMillis() < deadline) {
-            if (condition()) return
+            // **And settled.** The view model publishes an operation's result
+            // just before it clears busy, so a condition could hold while the
+            // panel was still busy -- and the test's next call was refused by
+            // the busy guard and silently dropped.
+            if (condition() && !viewModel.state.value.isBusy) return
             // A real wait: `delay` under runTest is virtual and returns at once,
             // and the view model runs on real dispatchers.
             withContext(Dispatchers.Default) { delay(25) }
@@ -296,9 +301,6 @@ class GitViewModelTest {
         await("the file") { viewModel.state.value.status.untracked.isNotEmpty() }
         viewModel.stage(listOf("app/notes.txt"))
         await("staging") { viewModel.state.value.status.staged.isNotEmpty() }
-        viewModel.commit()
-        // No message set, so that commit is refused -- which is fine, the point
-        // is the file is tracked. Commit it properly.
         viewModel.setMessage("add notes")
         viewModel.commit()
         await("the commit") { viewModel.state.value.recent.firstOrNull()?.summary == "add notes" }

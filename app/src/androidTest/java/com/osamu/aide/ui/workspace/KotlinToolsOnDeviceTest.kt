@@ -1,5 +1,6 @@
 package com.osamu.aide.ui.workspace
 
+import android.content.ContextWrapper
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.osamu.aide.ai.core.ProjectFiles
@@ -50,10 +51,33 @@ class KotlinToolsOnDeviceTest {
         buildOutputRoot = File(context.cacheDir, "builds-kotlin-tools-test"),
     )
 
+    /**
+     * Services over a files directory with nothing installed in it.
+     *
+     * **Not the real toolchain root.** An earlier test in the same sweep
+     * extracts the Kotlin components there, so on the emulator the service
+     * existed, check_kotlin returned real diagnostics, and the refusal this test
+     * is named for never ran -- while it still passed. LanguageServiceRoutingTest
+     * was fixed for the same reason the same way.
+     */
+    private fun servicesWithNothingInstalled(): LanguageServices {
+        val bare = object : ContextWrapper(context) {
+            private val empty = File(context.cacheDir, "no-toolchains-${System.nanoTime()}").apply { mkdirs() }
+
+            override fun getFilesDir(): File = empty
+        }
+        return LanguageServices(
+            native = NativeToolchainProvider(bare, dispatchers),
+            toolchain = ToolchainManager(bare, dispatchers),
+            dispatchers = dispatchers,
+            buildOutputRoot = File(context.cacheDir, "builds-kotlin-tools-test"),
+        )
+    }
+
     @Test
     fun without_its_components_check_kotlin_refuses_instead_of_reporting_a_clean_file() =
         runBlocking {
-            val services = realServices()
+            val services = servicesWithNothingInstalled()
             val root = File(context.cacheDir, "kt-tools-${System.nanoTime()}").apply { mkdirs() }
             File(root, "Main.kt").writeText("fun broken(): String = 1")
 
@@ -79,22 +103,14 @@ class KotlinToolsOnDeviceTest {
                 services.release()
             }
 
-            // `Main.kt` does not type-check. Either a real service says so, or
-            // no service exists and the tool refuses. What must never happen is
-            // the third answer.
-            val clean = outcome is ProjectFiles.Outcome.Ok &&
-                outcome.content.startsWith("No problems")
+            // With nothing installed there is no service, so the one right
+            // answer is a refusal -- and "No problems" about code that does
+            // not type-check is the wrong one this exists to rule out.
+            assertTrue("expected a refusal with no Kotlin service, got: $outcome", outcome is ProjectFiles.Outcome.Refused)
             assertTrue(
-                "check_kotlin called code that does not type-check clean: $outcome",
-                !clean,
+                "a refusal has to tell the model what to do instead: ${(outcome as ProjectFiles.Outcome.Refused).reason}",
+                "run_build" in outcome.reason,
             )
-
-            if (outcome is ProjectFiles.Outcome.Refused) {
-                assertTrue(
-                    "a refusal has to tell the model what to do instead: ${outcome.reason}",
-                    "run_build" in outcome.reason,
-                )
-            }
         }
 
     /**

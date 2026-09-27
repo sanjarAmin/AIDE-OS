@@ -38,9 +38,22 @@ import javax.crypto.spec.GCMParameterSpec
  * transport exceptions can carry the remote URL; anything surfacing one to the
  * user should go through [redact].
  */
-class GitCredentialStore(context: Context) {
+class GitCredentialStore(
+    context: Context,
+    /**
+     * Keeps a second, separate store beside the real one, for tests.
+     *
+     * **The app's own device tests run in the app's process**, where the real
+     * store lives, and they clear it before and after every test -- so a
+     * targeted run on a phone, which CLAUDE.md recommends, erased the user's
+     * saved git tokens. Restoring afterwards cannot work: clearing deletes the Keystore key
+     * the saved values are encrypted with. A test passes a namespace, and both
+     * the preferences file and the Keystore alias are then its own.
+     */
+    private val namespace: String? = null,
+) {
 
-    private val preferences = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+    private val preferences = context.getSharedPreferences(namespaced(FILE), Context.MODE_PRIVATE)
 
     /** True when a token is stored for [host]. Does not decrypt, so it is cheap. */
     fun hasToken(host: String): Boolean = preferences.contains(ciphertextKey(host))
@@ -113,16 +126,20 @@ class GitCredentialStore(context: Context) {
      */
     fun clear() {
         preferences.edit().clear().commit()
-        runCatching { keyStore().deleteEntry(ALIAS) }
+        runCatching { keyStore().deleteEntry(alias) }
     }
 
     private fun ciphertextKey(host: String) = "$PREFIX${host.lowercase()}$CIPHERTEXT_SUFFIX"
     private fun ivKey(host: String) = "$PREFIX${host.lowercase()}$IV_SUFFIX"
 
+    private val alias: String get() = namespaced(ALIAS)
+
+    private fun namespaced(name: String) = namespace?.let { "$name.$it" } ?: name
+
     private fun keyStore(): KeyStore = KeyStore.getInstance(PROVIDER).apply { load(null) }
 
     private fun existingSecretKey(): SecretKey? =
-        runCatching { keyStore().getKey(ALIAS, null) as? SecretKey }.getOrNull()
+        runCatching { keyStore().getKey(alias, null) as? SecretKey }.getOrNull()
 
     private fun secretKey(): SecretKey = existingSecretKey() ?: generateSecretKey()
 
@@ -130,7 +147,7 @@ class GitCredentialStore(context: Context) {
         KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, PROVIDER).apply {
             init(
                 KeyGenParameterSpec.Builder(
-                    ALIAS,
+                    alias,
                     KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
                 )
                     .setBlockModes(KeyProperties.BLOCK_MODE_GCM)

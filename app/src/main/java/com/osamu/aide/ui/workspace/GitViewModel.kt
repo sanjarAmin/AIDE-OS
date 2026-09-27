@@ -147,9 +147,8 @@ class GitViewModel(
      */
     fun initialise() {
         val directory = projectDir ?: return
-        if (_state.value.isBusy || _state.value.isRepository == true) return
+        if (_state.value.isRepository == true || !claimBusy()) return
         viewModelScope.launch {
-            _state.update { it.copy(isBusy = true, errorMessage = null, notice = null) }
             when (val created = git.init(directory)) {
                 is AppResult.Success -> {
                     repository = created.value
@@ -298,9 +297,8 @@ class GitViewModel(
      */
     fun push() {
         val repo = repository ?: return
-        if (_state.value.isBusy) return
+        if (!claimBusy()) return
         viewModelScope.launch {
-            _state.update { it.copy(isBusy = true, errorMessage = null, notice = null) }
             val result = repo.push { progress ->
                 _state.update { it.copy(progress = progress.describe()) }
             }
@@ -331,9 +329,8 @@ class GitViewModel(
         block: suspend (GitRepository) -> AppResult<*>,
     ) {
         val repo = repository ?: return
-        if (_state.value.isBusy) return
+        if (!claimBusy()) return
         viewModelScope.launch {
-            _state.update { it.copy(isBusy = true, errorMessage = null, notice = null) }
             when (val result = block(repo)) {
                 is AppResult.Success -> onSuccess()
                 is AppResult.Failure ->
@@ -342,6 +339,24 @@ class GitViewModel(
             reload()
             _state.update { it.copy(isBusy = false) }
         }
+    }
+
+    /**
+     * Marks the panel busy if it was not, and says whether this call did.
+     *
+     * **Before the coroutine exists, in one step.** Busy used to be checked
+     * here and set inside the launched coroutine, so two calls in quick
+     * succession -- Commit tapped twice -- could both pass the check before
+     * either had set it, and two git operations ran on one repository at once.
+     * `update` makes the check and the set a single atomic step.
+     */
+    private fun claimBusy(): Boolean {
+        var claimed = false
+        _state.update { current ->
+            claimed = !current.isBusy
+            if (claimed) current.copy(isBusy = true, errorMessage = null, notice = null) else current
+        }
+        return claimed
     }
 
     private fun GitProgress.describe(): String = when (this) {

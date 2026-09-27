@@ -18,7 +18,6 @@ import kotlinx.coroutines.withContext
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -54,8 +53,9 @@ class ProjectsCloneTest {
             mkdirs()
         }
         workspaceRoot = File(root, "workspace").apply { mkdirs() }
-        identities = GitIdentityStore(context).apply { clear() }
-        credentials = GitCredentialStore(context).apply { clear() }
+        // Namespaced, not the app's own: see ApiKeyStore's constructor.
+        identities = GitIdentityStore(context, namespace = "test").apply { clear() }
+        credentials = GitCredentialStore(context, namespace = "test").apply { clear() }
 
         val dispatchers = DefaultDispatcherProvider()
         git = GitWorkspace(context, dispatchers, identities, credentials)
@@ -125,7 +125,11 @@ class ProjectsCloneTest {
             File(workspaceRoot, "upstream").canonicalFile,
             git.enclosingRepository(project.rootDir, ceiling = workspaceRoot),
         )
-        assertNull("a status was left showing", viewModel.state.value.cloneStatus)
+        // Waited for, not read: the project is on disk before the view model
+        // has finished reloading and cleared "Finishing…", so reading it at
+        // once failed now and then with the flow working. A status that never
+        // clears still fails, by timing out.
+        awaitUntil("the clone status to clear") { viewModel.state.value.cloneStatus == null }
     }
 
     /** A repository whose module is at the top level is adopted as itself. */

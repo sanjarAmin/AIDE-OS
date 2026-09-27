@@ -9,6 +9,7 @@ import com.osamu.aide.toolchain.manager.ToolchainManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
+import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -33,6 +34,15 @@ class JavaCompletionSourceTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
     private lateinit var projectRoot: File
     private lateinit var services: LanguageServices
+
+    /**
+     * Released, or its warm compiler and threads outlive the test in the one
+     * instrumentation process -- every class that builds services adds to it.
+     */
+    @After
+    fun releaseServices() {
+        services.release()
+    }
 
     @Before
     fun setUp() {

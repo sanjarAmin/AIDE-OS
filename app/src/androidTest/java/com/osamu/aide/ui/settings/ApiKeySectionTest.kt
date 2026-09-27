@@ -45,7 +45,9 @@ class ApiKeySectionTest {
 
     @Before
     fun setUp() {
-        keys = ApiKeyStore(InstrumentationRegistry.getInstrumentation().targetContext)
+        // A namespace of its own: this runs in the app's process, and clear()
+        // on the real store erased every saved key on the phone it ran on.
+        keys = ApiKeyStore(InstrumentationRegistry.getInstrumentation().targetContext, namespace = "test")
         reset()
     }
 

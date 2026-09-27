@@ -43,9 +43,10 @@ class GitSectionTest {
     @Before
     fun setUp() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        identities = GitIdentityStore(context)
-        credentials = GitCredentialStore(context)
-        tokenFile = File(context.dataDir, "shared_prefs/aide-git-credentials.xml")
+        // Namespaced, not the app's own: see ApiKeyStore's constructor.
+        identities = GitIdentityStore(context, namespace = "test")
+        credentials = GitCredentialStore(context, namespace = "test")
+        tokenFile = File(context.dataDir, "shared_prefs/aide-git-credentials.test.xml")
         identities.clear()
         credentials.clear()
     }

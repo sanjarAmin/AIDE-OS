@@ -103,10 +103,14 @@ class TerminalViewModelTest {
 
         viewModel.type("echo PARTI")
         await("the echo of a partial line") { "PARTI" in screen }
-        assertFalse("something ran without a newline", "PARTIAL-DONE" in screen)
+        assertFalse("something ran without a newline", "PARTIAL-2" in screen)
 
-        viewModel.type("AL-DONE\n")
-        await("the completed command") { screen.count { it == 'P' } >= 2 }
+        // **Output no echo contains.** The shell prints `PARTIAL-2`; the line
+        // as typed reads `PARTIAL-$((1+1))`. This used to wait for two 'P's,
+        // which the screen held before the second half was typed at all -- the
+        // echo false positive the class comment warns about.
+        viewModel.type("AL-$((1+1))\n")
+        await("the completed command") { "PARTIAL-2" in screen }
     }
 
     /**
@@ -165,13 +169,18 @@ class TerminalViewModelTest {
     @Test
     fun opening_twice_keeps_one_shell() = runTest(timeout = 3.minutes) {
         ready()
-        run("true", "FIRST-SHELL")
+        // State only the first shell has. A running shell that answers -- all
+        // this checked before -- is also what a replacement looks like.
+        run("export AIDE_SAME=$((20+22))", "FIRST-SHELL")
 
         viewModel.open(directory)
         withContext(Dispatchers.Default) { delay(500) }
 
-        assertTrue("the shell was replaced", viewModel.state.value.isRunning)
-        run("true", "SAME-SHELL")
+        assertTrue("the shell stopped", viewModel.state.value.isRunning)
+        // `SAME-42` is printed only by the shell that holds the variable; the
+        // typed line reads `SAME-$AIDE_SAME`, and a new shell prints `SAME-`.
+        viewModel.type("echo SAME-${'$'}AIDE_SAME\n")
+        await("the first shell's variable") { "SAME-42" in screen }
     }
 
     /**

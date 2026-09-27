@@ -115,7 +115,9 @@ class LanguageServiceRoutingTest {
      * component installer the app uses, then asks the same question -- so a
      * wiring break cannot hide behind an absent toolchain.
      *
-     * Slow: it downloads 152 MiB the first time and is a no-op after.
+     * Slow: it downloads 152 MiB. Only the first time on a phone driven with
+     * `am instrument` -- a Gradle sweep uninstalls the app when it finishes,
+     * which empties `cacheDir`, so there it downloads on every sweep.
      */
     @Test
     fun installing_the_toolchain_makes_cpp_route_to_clangd() {

@@ -1,5 +1,8 @@
 package com.osamu.aide.ui.workspace
 
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.osamu.aide.build.BuildRunner
@@ -66,6 +69,7 @@ class WorkspaceViewModelTest {
 
     @Before
     fun setUp() = runBlocking {
+        buildOutput.deleteRecursively()
         workspaceRoot = File(context.cacheDir, "workspace-test-${System.nanoTime()}")
         repository = FileProjectRepository(workspaceRoot, dispatchers)
 
@@ -109,7 +113,7 @@ class WorkspaceViewModelTest {
             outputRoot = File(context.cacheDir, "builds-test"),
         )
 
-        viewModel = WorkspaceViewModel(
+        val built = WorkspaceViewModel(
             dispatchers = dispatchers,
             projects = repository,
             documents = DocumentStore(dispatchers),
@@ -131,13 +135,38 @@ class WorkspaceViewModelTest {
             dependencies = projectDependencies,
             languages = EditorLanguages(context),
         )
+        // **Through a store, so it can be cleared.** Constructed directly, its
+        // onCleared never ran: each test's warm nb-javac, clangd and node
+        // services and its viewModelScope jobs -- a build included -- lived on
+        // in the one instrumentation process, thirty tests' worth, and a build
+        // one test started went on writing while the next ran.
+        viewModel = ViewModelProvider(
+            store,
+            object : ViewModelProvider.Factory {
+                @Suppress("UNCHECKED_CAST")
+                override fun <T : ViewModel> create(modelClass: Class<T>): T = built as T
+            },
+        )[WorkspaceViewModel::class.java]
         Unit
     }
 
+    private val store = ViewModelStore()
+
     @After
     fun tearDown() {
+        onMain { store.clear() }
         workspaceRoot.deleteRecursively()
+        buildOutput.deleteRecursively()
     }
+
+    /**
+     * Shared by every test: each project is called Demo-App, so each builds
+     * into the same directory, and LanguageServices reads its generated
+     * sources. Left from one run, an `R.java` there satisfied the next run's
+     * "R does not exist" precondition before anything was built. Emptied at
+     * both ends, so no test inherits another's output.
+     */
+    private val buildOutput: File get() = File(context.cacheDir, "builds-test")
 
     /**
      * Puts an `android.jar` where [ToolchainManager] looks for one.
@@ -148,16 +177,55 @@ class WorkspaceViewModelTest {
      * see that module's FINDINGS on what is and is not in git.
      */
     private fun stagePlatformJar() {
-        val target = File(
-            context.filesDir,
-            "toolchains/platforms-android-36/android.jar",
-        )
+        unparkPlatform()
+        val target = platformJar
         if (target.isFile) return
         target.parentFile?.mkdirs()
+        // Into a sibling and renamed, so a copy cut short -- which runCatching
+        // used to swallow -- never leaves a truncated jar that isFile then
+        // takes as installed.
+        val partial = File(target.parentFile, "android.jar.partial")
         runCatching {
             InstrumentationRegistry.getInstrumentation().context.assets
                 .open("android.jar")
-                .use { input -> target.outputStream().use { input.copyTo(it) } }
+                .use { input -> partial.outputStream().use { input.copyTo(it) } }
+            check(partial.renameTo(target))
+        }.onFailure { partial.delete() }
+    }
+
+    /** Where [ToolchainManager] looks for the platform; the app's real one. */
+    private val platformJar: File
+        get() = File(context.filesDir, "toolchains/platforms-android-36/android.jar")
+
+    /** Where the real platform waits while a test needs a device without one. */
+    private val parkedJar: File
+        get() = File(context.filesDir, "toolchains/android.jar.parked-by-test")
+
+    /**
+     * Runs [block] on a device with no platform, and gives the real one back.
+     *
+     * **Moved aside, never deleted.** These tests used to delete the app's
+     * real `android.jar` -- a 63 MB download on a phone -- and restore it by
+     * copying the test APK's asset, which a clean clone does not have: the
+     * restore did nothing, the download was gone, and every later test that
+     * needs a platform skipped. A rename is the user's own file coming back,
+     * and a run killed half way is repaired by [unparkPlatform] in the next.
+     */
+    private fun withoutPlatform(block: () -> Unit) {
+        unparkPlatform()
+        val parked = platformJar.isFile && platformJar.renameTo(parkedJar)
+        try {
+            block()
+        } finally {
+            if (parked) check(parkedJar.renameTo(platformJar)) { "could not restore the real android.jar" }
+        }
+    }
+
+    /** Puts back a platform an interrupted run left parked. */
+    private fun unparkPlatform() {
+        if (parkedJar.isFile && !platformJar.isFile) {
+            platformJar.parentFile?.mkdirs()
+            parkedJar.renameTo(platformJar)
         }
     }
 
@@ -385,11 +453,8 @@ class WorkspaceViewModelTest {
      * for the user to press Build, which is a different question.
      */
     @Test
-    fun opening_java_without_the_platform_offers_it() {
-        val jar = File(context.filesDir, "toolchains/platforms-android-36/android.jar")
-        val staged = jar.isFile
-        if (staged) jar.delete()
-        try {
+    fun opening_java_without_the_platform_offers_it() = withoutPlatform {
+        run {
             onMain { viewModel.open(project.rootDir) }
             onMain { viewModel.openDocument(mainActivitySource) }
 
@@ -399,8 +464,6 @@ class WorkspaceViewModelTest {
                 "the prompt does not say what it is for: $offer",
                 offer.rationale.contains("Java"),
             )
-        } finally {
-            if (staged) stagePlatformJar()
         }
     }
 
@@ -506,10 +569,7 @@ class WorkspaceViewModelTest {
         // The platform is what a release build waits for, so this test is about
         // a device that has none -- which is every device before the first
         // build.
-        val jar = File(context.filesDir, "toolchains/platforms-android-36/android.jar")
-        val staged = jar.isFile
-        if (staged) jar.delete()
-        try {
+        withoutPlatform {
             onMain { viewModel.open(project.rootDir) }
             onMain { viewModel.build(debuggable = false) }
 
@@ -519,8 +579,6 @@ class WorkspaceViewModelTest {
                 AfterInstall.BUILD_RELEASE,
                 viewModel.afterInstall,
             )
-        } finally {
-            if (staged) stagePlatformJar()
         }
     }
 
@@ -719,14 +777,13 @@ class WorkspaceViewModelTest {
     }
 
     @Test
-    fun building_without_the_platform_offers_to_download_it_rather_than_failing() {
+    fun building_without_the_platform_offers_to_download_it_rather_than_failing() = withoutPlatform {
         // A device that has never built anything is the state every install
         // starts in. It has to lead somewhere the user can act on.
-        if (ToolchainManager(context, dispatchers).canBuild()) {
-            // The platform is already installed on this device from an earlier
-            // run, so there is nothing to offer. Nothing to assert either.
-            return
-        }
+        //
+        // It used to *return* when a platform was installed -- which setUp
+        // always arranges where the asset exists -- and so passed on every
+        // sweep having asserted nothing, without even counting as a skip.
 
         // Deliberately without waiting first: tapping Build the instant the
         // screen opens must still work.
@@ -992,19 +1049,19 @@ class WorkspaceViewModelTest {
         awaitState("the descriptor to be read") { it.projectName == "Hello Sharp" }
         onMain { viewModel.build() }
 
-        if (ToolchainManager(context, dispatchers).monoRoot() == null) {
-            awaitState("the Mono prompt") { it.platform != null }
-            val prompt = viewModel.state.value.platform!!
-            assertEquals("the prompt is for something else", "mono-6", prompt.component.id)
-            assertFalse("Mono should need no SDK licence", prompt.component.requiresSdkLicense)
-            assertFalse("a build started anyway", viewModel.state.value.build.isRunning)
-            return@runBlocking
-        }
+        // (A branch for a device without Mono sat here, unreachable after the
+        // assumeTrue above; that case has its own test's worth of assertions
+        // and should get one, not a dead branch.)
 
         // Compiling is slower than starting node: mcs is itself an assembly, so
         // the runtime starts twice before a line of the program is printed.
+        //
+        // The template's own last line, which only the running program prints.
+        // This waited for "Hello from" -- the old template's greeting -- and
+        // timed out once the C# template became the temperature table, with the
+        // program's output sitting in the log it was reading.
         awaitState("the program's output", timeoutMillis = 120_000L) { state ->
-            state.build.log.any { "Hello from" in it }
+            state.build.log.any { it.startsWith("coldest ") && "hottest" in it }
         }
         awaitState("the run to finish", timeoutMillis = 60_000L) {
             !it.build.isRunning && it.build.outcome != null

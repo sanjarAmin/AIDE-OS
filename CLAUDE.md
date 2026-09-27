@@ -163,6 +163,19 @@ failed to load still produces a clean compile.
   census taken afterwards silently omits the module. That is how the floor was
   first recorded as nineteen.
 
+- **`:app`'s device tests run inside the real app, and can destroy its data.**
+  A library module's `targetContext` is its own test package; `:app`'s is
+  `com.osamu.aide` itself. So a store a test clears is the user's store:
+  `ApiKeySectionTest` erased every provider key and the Keystore key they were
+  encrypted with, and the git tests erased the saved tokens -- on any phone
+  given the targeted `am instrument` runs recommended above. Restoring
+  afterwards cannot work once the Keystore key is gone. The credential stores
+  take a `namespace` for tests; anything else a test touches in `filesDir` is
+  parked by rename and put back, never deleted and re-copied
+  (`WorkspaceViewModelTest.withoutPlatform`). And never `startKoin` there: the
+  app has already started it, and `stopKoin()` tears the app's own down --
+  use `koinApplication {}`.
+
 - **`adb shell run-as` is not the app.** It runs in `runas_app`, which *may*
   `execve` out of app-private storage — so a hand probe through it will
   cheerfully do things the app is forbidden to do, and appear to disprove a

@@ -8,6 +8,7 @@ import com.osamu.aide.core.common.DefaultDispatcherProvider
 import com.osamu.aide.toolchain.manager.ToolchainManager
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
@@ -85,11 +86,15 @@ class LocalServerDeathWatchTest {
      */
     @Test
     fun a_stale_watch_does_not_withdraw_a_newer_address() {
+        // **One address for both**, as a restart on the same port has. With
+        // different addresses the address check alone kept the new one, so
+        // the process-identity guard this is about was never reached -- and
+        // the test passed with it deleted.
+        val live = "http://127.0.0.1:2"
         val first = shortLived()
-        server.adopt(first, "http://127.0.0.1:1")
+        server.adopt(first, live)
 
         val second = ProcessBuilder("/system/bin/sleep", "30").redirectErrorStream(true).start()
-        val live = "http://127.0.0.1:2"
         server.adopt(second, live)
         keys.saveLocalBaseUrl(live)
 
@@ -97,6 +102,9 @@ class LocalServerDeathWatchTest {
         Thread.sleep(SETTLE_MS)
 
         assertEquals("the old watch withdrew the new server's address", live, keys.localBaseUrl())
+        // And forgot the new process: then isRunning reads false while it is
+        // alive, and the next Start launches a second llama-server.
+        assertTrue("the old watch forgot the running server", server.isRunning)
         second.destroyForcibly()
     }
 

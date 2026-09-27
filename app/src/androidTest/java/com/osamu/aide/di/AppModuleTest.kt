@@ -19,8 +19,7 @@ import org.junit.After
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Test
-import org.koin.core.context.startKoin
-import org.koin.core.context.stopKoin
+import org.koin.dsl.koinApplication
 import org.koin.dsl.module
 import java.io.File
 
@@ -41,15 +40,27 @@ import java.io.File
  */
 class AppModuleTest {
 
-    @After
-    fun tearDown() = stopKoin()
-
-    private fun koin() = startKoin {
+    /**
+     * **An isolated Koin, not the global one.** This runs in the app's process,
+     * where `AideApplication` has already started Koin globally: `startKoin`
+     * here threw KoinApplicationAlreadyStartedException when this test ran
+     * alone, and passed in a full run only because the other test in the class
+     * happened to run first -- and its `stopKoin()` then tore down the
+     * application's own Koin, so every later test that composes a
+     * `koinInject()` caller failed with "KoinApplication has not been started".
+     * `koinApplication {}` builds the same graph without registering it.
+     */
+    private val application = koinApplication {
         modules(
             module { single { InstrumentationRegistry.getInstrumentation().targetContext } },
             appModule,
         )
-    }.koin
+    }
+
+    @After
+    fun tearDown() = application.close()
+
+    private fun koin() = application.koin
 
     @Test
     fun the_graph_a_workspace_needs_resolves_with_no_toolchain_installed() {

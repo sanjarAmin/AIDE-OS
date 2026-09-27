@@ -92,9 +92,22 @@ data class GitIdentity(val name: String, val email: String) {
  * are the opposite of a secret, and encrypting them would imply otherwise.
  * [GitCredentialStore] is where the thing that *is* secret lives.
  */
-class GitIdentityStore(context: Context) {
+class GitIdentityStore(
+    context: Context,
+    /**
+     * Keeps a second, separate store beside the real one, for tests.
+     *
+     * **The app's own device tests run in the app's process**, where the real
+     * store lives, and they clear it before and after every test -- so a
+     * targeted run on a phone, which CLAUDE.md recommends, erased the user's
+     * commit name and email. Restoring afterwards cannot work: clearing deletes the Keystore key
+     * the saved values are encrypted with. A test passes a namespace, and both
+     * the preferences file and the Keystore alias are then its own.
+     */
+    private val namespace: String? = null,
+) {
 
-    private val preferences = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+    private val preferences = context.getSharedPreferences(namespace?.let { "$FILE.$it" } ?: FILE, Context.MODE_PRIVATE)
 
     /** Null when the user has not set one, which is the signal to ask. */
     fun read(): GitIdentity? {

@@ -19,9 +19,22 @@ import javax.crypto.spec.GCMParameterSpec
  *
  * Backward-compatible with earlier single-provider methods ([read], [save], [baseUrl]).
  */
-class ApiKeyStore(context: Context) {
+class ApiKeyStore(
+    context: Context,
+    /**
+     * Keeps a second, separate store beside the real one, for tests.
+     *
+     * **The app's own device tests run in the app's process**, where the real
+     * store lives, and they clear it before and after every test -- so a
+     * targeted run on a phone, which CLAUDE.md recommends, erased the user's
+     * provider keys, Google sign-in and endpoints. Restoring afterwards cannot work: clearing deletes the Keystore key
+     * the saved values are encrypted with. A test passes a namespace, and both
+     * the preferences file and the Keystore alias are then its own.
+     */
+    private val namespace: String? = null,
+) {
 
-    private val preferences = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+    private val preferences = context.getSharedPreferences(namespaced(FILE), Context.MODE_PRIVATE)
 
     // -- Active Provider & Model Settings -----------------------------------
 
@@ -367,7 +380,7 @@ class ApiKeyStore(context: Context) {
             .remove(KEY_GOOGLE_USER_NAME)
             .remove(KEY_GOOGLE_GRANTED_SCOPES)
             .commit()
-        runCatching { keyStore().deleteEntry(ALIAS) }
+        runCatching { keyStore().deleteEntry(alias) }
     }
 
     // -- Keystore AES-GCM Encryption / Decryption ---------------------------
@@ -398,10 +411,14 @@ class ApiKeyStore(context: Context) {
         }.getOrNull()
     }
 
+    private val alias: String get() = namespaced(ALIAS)
+
+    private fun namespaced(name: String) = namespace?.let { "$name.$it" } ?: name
+
     private fun keyStore(): KeyStore = KeyStore.getInstance(PROVIDER).apply { load(null) }
 
     private fun existingSecretKey(): SecretKey? =
-        runCatching { keyStore().getKey(ALIAS, null) as? SecretKey }.getOrNull()
+        runCatching { keyStore().getKey(alias, null) as? SecretKey }.getOrNull()
 
     private fun secretKey(): SecretKey = existingSecretKey() ?: generateSecretKey()
 
@@ -409,7 +426,7 @@ class ApiKeyStore(context: Context) {
         KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, PROVIDER).apply {
             init(
                 KeyGenParameterSpec.Builder(
-                    ALIAS,
+                    alias,
                     KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
                 )
                     .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
