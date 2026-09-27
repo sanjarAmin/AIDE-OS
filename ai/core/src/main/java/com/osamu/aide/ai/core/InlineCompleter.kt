@@ -25,12 +25,19 @@ class InlineCompleter(
     private val client: AnthropicClient?,
     private val dispatchers: DispatcherProvider,
     private val aiClient: AiClient? = null,
+    /** The picked Anthropic model; see `PromptAssembler` for why it is passed. */
+    private val model: String = PromptAssembler.DEFAULT_MODEL,
 ) {
 
-    constructor(client: AnthropicClient, dispatchers: DispatcherProvider) : this(
+    constructor(
+        client: AnthropicClient,
+        dispatchers: DispatcherProvider,
+        model: String = PromptAssembler.DEFAULT_MODEL,
+    ) : this(
         client = client,
         dispatchers = dispatchers,
         aiClient = null,
+        model = model,
     )
 
     constructor(aiClient: AiClient, dispatchers: DispatcherProvider) : this(
@@ -60,12 +67,16 @@ class InlineCompleter(
         return cleanCompletion(raw).takeIf { it.isNotEmpty() }
     }
 
-    private fun request(context: CompletionContext): MessageCreateParams =
-        MessageCreateParams.builder()
-            .model(MODEL)
+    private fun request(context: CompletionContext): MessageCreateParams {
+        val builder = MessageCreateParams.builder()
+            .model(model)
             .maxTokens(MAX_TOKENS)
-            .thinking(ThinkingConfigParam.ofAdaptive(ThinkingConfigAdaptive.builder().build()))
-            .outputConfig(OutputConfig.builder().effort(OutputConfig.Effort.LOW).build())
+        if (takesAdaptiveThinking(model)) {
+            builder
+                .thinking(ThinkingConfigParam.ofAdaptive(ThinkingConfigAdaptive.builder().build()))
+                .outputConfig(OutputConfig.builder().effort(OutputConfig.Effort.LOW).build())
+        }
+        return builder
             .system(INSTRUCTIONS)
             .addUserMessage(
                 buildString {
@@ -79,9 +90,9 @@ class InlineCompleter(
                 },
             )
             .build()
+    }
 
     private companion object {
-        const val MODEL = "claude-opus-5"
         const val MAX_TOKENS = 256L
         const val WINDOW_BEFORE = 4_000
         const val WINDOW_AFTER = 1_000

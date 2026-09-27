@@ -789,3 +789,39 @@ token chosen for its name can carry a meaning nobody intended.
 quietest divider, it is effectively invisible on this phone at hairline widths.
 The chat panel's turn rail -- its whole structural device -- used it and did not
 render. `outline` is still quiet and actually appears.
+
+## 15. The transcript is not the conversation, and Stop does not stop
+
+Found by a review of this module, and both invisible to every test that existed
+because every test asserted on the transcript.
+
+**The panel and the model had different histories.** `AiSession` holds what the
+model is sent; `ChatController` holds what the person sees. They agree only
+while one session lives, and the controller throws the session away far more
+often than it looks: regenerate, edit a message, reopen a saved chat, switch
+provider or model, and Stop. Each of those rebuilt it empty. The screen showed
+the whole conversation and the model received one message, so "shorter, please"
+after a regenerate had nothing to refer to, and a reopened chat was a new one
+wearing old text. A rebuilt session is now seeded from the transcript
+(`AiSession.seed`, `ChatEntry.priorTurns`), as words only: a `tool_use` needs
+its `tool_result` and, with thinking on, its thinking blocks verbatim, and the
+transcript keeps none of them. Replaying calls as prose is worse than dropping
+them, since it teaches a local model to write calls out as text (§4 of
+`tools/localai/FINDINGS.md`). `ChatMemoryTest` asserts on the requests.
+
+**Cancelling the coroutine does not cancel the request.** The HTTP call is a
+blocking read on an IO thread, and coroutine cancellation is only noticed at a
+suspension point. After Stop, the answer kept streaming into the transcript,
+and a question sent straight away ran on the same session concurrently. The
+stopped turn's clean-up, which ran whenever the read eventually finished, then
+marked the new turn as done while it was still being answered. The fix numbers each turn: callbacks from a stale turn throw
+from inside the provider's read loop, which is the one place a blocking stream
+can be interrupted from, and closing it drops the connection. A stale turn's
+clean-up leaves the live one alone.
+
+**The approval "diff" was the new file.** `edit_file` sends whole contents, and
+the prompt drew them through a viewer that coloured any line starting with `-`
+as deleted: YAML lists, `--flags` and negative numbers read as removals, and
+nothing actually being removed was shown. It is now a real line diff against
+the file on disk, handed over as classified rows (`DiffLine`), so no text is
+ever inspected for a leading sign.

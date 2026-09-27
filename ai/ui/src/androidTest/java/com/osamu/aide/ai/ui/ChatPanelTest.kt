@@ -20,6 +20,7 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.unit.dp
 import com.osamu.aide.ai.core.AiProviderType
 import com.osamu.aide.ai.core.ApprovalRequest
+import com.osamu.aide.ai.core.DiffLine
 import com.osamu.aide.ai.core.ApprovalScope
 import com.osamu.aide.ai.core.ChatEntry
 import com.osamu.aide.ai.core.ChatUiState
@@ -364,13 +365,39 @@ class ChatPanelTest {
                 pendingApproval = ApprovalRequest(
                     toolName = "edit_file",
                     path = "Main.kt",
-                    preview = "+ fun main() = println(42)",
+                    preview = "",
+                    diff = listOf(
+                        // Unchanged, and beginning with a minus: the prompt
+                        // used to read the leading `-` and draw it as deleted.
+                        DiffLine(DiffLine.Kind.CONTEXT, "- a list item", 1),
+                        DiffLine(DiffLine.Kind.REMOVED, "fun main() = Unit", null),
+                        DiffLine(DiffLine.Kind.ADDED, "fun main() = println(42)", 2),
+                    ),
                 ),
             ),
         )
 
         compose.onNodeWithText("Change Main.kt?").assertIsDisplayed()
+        compose.onNodeWithText("- fun main() = Unit").assertIsDisplayed()
         compose.onNodeWithText("+ fun main() = println(42)").assertIsDisplayed()
+        // Drawn with the unchanged row's blank sign in front of its own text.
+        compose.onNodeWithText("  - a list item").assertIsDisplayed()
+    }
+
+    @Test
+    fun a_write_that_changes_nothing_says_so() {
+        show(
+            ChatUiState(
+                pendingApproval = ApprovalRequest(
+                    toolName = "edit_file",
+                    path = "Main.kt",
+                    preview = "",
+                    diff = emptyList(),
+                ),
+            ),
+        )
+
+        compose.onNodeWithText("No changes: the file already has exactly this content.").assertIsDisplayed()
     }
 
     @Test

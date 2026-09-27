@@ -127,6 +127,7 @@ class ChatStreamingTest {
             projectDir = projectDir,
             scope = scope,
             store = store,
+            io = Dispatchers.Unconfined,
         )
     }
 
@@ -181,7 +182,7 @@ class ChatStreamingTest {
 
             override fun completer(): InlineCompleter? = null
         }
-        controller = ChatController(assistant, projectDir, this)
+        controller = ChatController(assistant, projectDir, this, io = Dispatchers.Unconfined)
 
         controller.send("hi")
         advanceUntilIdle()
@@ -273,7 +274,7 @@ class ChatStreamingTest {
 
             override fun completer(): InlineCompleter? = null
         }
-        val controller = ChatController(assistant, projectDir, this)
+        val controller = ChatController(assistant, projectDir, this, io = Dispatchers.Unconfined)
 
         controller.send("edit it")
         advanceUntilIdle()
@@ -313,7 +314,7 @@ class ChatStreamingTest {
 
             override fun completer(): InlineCompleter? = null
         }
-        val controller = ChatController(assistant, projectDir, this)
+        val controller = ChatController(assistant, projectDir, this, io = Dispatchers.Unconfined)
 
         controller.send("read it")
         advanceUntilIdle()
@@ -395,7 +396,7 @@ class ChatStreamingTest {
 
             override fun completer(): InlineCompleter? = null
         }
-        controller = ChatController(assistant, projectDir, this)
+        controller = ChatController(assistant, projectDir, this, io = Dispatchers.Unconfined)
 
         controller.send("go")
         advanceUntilIdle()
@@ -477,7 +478,7 @@ class ChatStreamingTest {
 
             override fun completer(): InlineCompleter? = null
         }
-        controller = ChatController(assistant, projectDir, this)
+        controller = ChatController(assistant, projectDir, this, io = Dispatchers.Unconfined)
 
         controller.send("edit it")
         // Answer each prompt as it appears, granting for the conversation the
@@ -516,7 +517,7 @@ class ChatStreamingTest {
 
             override fun completer(): InlineCompleter? = null
         }
-        val controller = ChatController(assistant, projectDir, this)
+        val controller = ChatController(assistant, projectDir, this, io = Dispatchers.Unconfined)
 
         controller.send("edit it")
         repeat(8) {
@@ -542,7 +543,7 @@ class ChatStreamingTest {
 
             override fun completer(): InlineCompleter? = null
         }
-        val controller = ChatController(assistant, projectDir, this)
+        val controller = ChatController(assistant, projectDir, this, io = Dispatchers.Unconfined)
 
         controller.send("edit it")
         advanceUntilIdle()

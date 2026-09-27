@@ -2,8 +2,12 @@ package com.osamu.aide.ai.core
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -12,6 +16,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
@@ -86,6 +91,46 @@ sealed interface ChatEntry {
          */
         @Synchronized
         fun nextId(): Long = ++counter
+
+        /**
+         * A transcript as the alternating turns [AiSession.seed] takes.
+         *
+         * The transcript is not already that shape. One answer is several
+         * bubbles when tool cards interrupt it, so neighbouring assistant text is
+         * joined; tool cards carry no words and are skipped (see `seed`). A
+         * stopped turn can leave a question with no answer, and two user turns
+         * in a row would be merged by some providers and rejected by others --
+         * so it gets an answer that says what happened, which is also true.
+         */
+        fun priorTurns(entries: List<ChatEntry>): List<PriorTurn> {
+            val turns = mutableListOf<PriorTurn>()
+            for (entry in entries) {
+                val (fromUser, text) = when (entry) {
+                    is FromUser -> true to entry.text
+                    is FromAssistant -> false to entry.text
+                    is Tool -> continue
+                }
+                if (text.isBlank()) continue
+                val last = turns.lastOrNull()
+                when {
+                    // A conversation starts with the user; an assistant turn
+                    // before any question has nothing to answer.
+                    last == null && !fromUser -> continue
+                    last != null && last.fromUser == fromUser && !fromUser ->
+                        turns[turns.lastIndex] = last.copy(text = last.text + "\n\n" + text)
+                    last != null && last.fromUser && fromUser -> {
+                        turns += PriorTurn(fromUser = false, text = NO_ANSWER)
+                        turns += PriorTurn(fromUser = true, text = text)
+                    }
+                    else -> turns += PriorTurn(fromUser, text)
+                }
+            }
+            if (turns.lastOrNull()?.fromUser == true) turns += PriorTurn(fromUser = false, text = NO_ANSWER)
+            return turns
+        }
+
+        /** Stands in for an answer that was stopped before it produced any text. */
+        const val NO_ANSWER = "(No answer: this turn was stopped before I replied.)"
     }
 }
 
@@ -110,7 +155,13 @@ enum class ApprovalScope {
 data class ApprovalRequest(
     val toolName: String,
     val path: String,
+    /** The command, for a tool that runs one. Blank for a file write. */
     val preview: String,
+    /**
+     * The change, for a tool that writes a file: rows against what is on disk
+     * now. Null for anything else; empty when the write would change nothing.
+     */
+    val diff: List<DiffLine>? = null,
 )
 
 data class ChatUiState(
@@ -197,6 +248,12 @@ class ChatController(
      * panel behaves exactly as it did before history existed.
      */
     private val store: ConversationStore? = null,
+    /**
+     * Where the approval prompt reads the file it diffs against. Injectable
+     * because a test's virtual clock does not wait for the real IO pool, and
+     * the prompt would appear after the test had already looked for it.
+     */
+    private val io: CoroutineDispatcher = Dispatchers.IO,
 ) {
 
     private fun initialState(): ChatUiState {
@@ -219,6 +276,20 @@ class ChatController(
     private var session: AiSession? = null
     private var awaitingUser: CompletableDeferred<Boolean>? = null
     private var sendJob: Job? = null
+
+    /**
+     * Which turn is live. Bumped by every new turn and by [cancelSend].
+     *
+     * **Cancelling a turn does not stop it.** The request is a blocking call on
+     * an IO thread, and coroutine cancellation is only noticed at a suspension
+     * point -- so a stopped answer went on streaming into the transcript, and a
+     * question sent straight after it ran concurrently on the same session.
+     * Each turn's callbacks and clean-up check this against the number they
+     * were started with, and a stale one stops rather than writing to the
+     * panel. Volatile because the streaming callbacks arrive on an IO thread.
+     */
+    @Volatile
+    private var liveTurn = 0L
 
     /**
      * Tools approved for the rest of this conversation.
@@ -317,6 +388,18 @@ class ChatController(
         added: ChatEntry.FromUser?,
         keep: List<ChatEntry>? = null,
     ) {
+        // What the model should already know when this message arrives: the
+        // transcript up to the message, not including it. Only used when the
+        // session is rebuilt -- a live one already holds it, with its tool calls.
+        val before = keep ?: _state.value.entries
+        val history = if (added == null) before.dropLast(1) else before
+        val turn = ++liveTurn
+        // Captured now, not read when the reply lands: the provider can be
+        // switched while this turn is still answering, and the reply was
+        // written by the one that was active when it started.
+        val provider = _state.value.activeProvider
+        val model = _state.value.activeModel
+
         _state.update {
             val base = keep ?: it.entries
             it.copy(
@@ -331,7 +414,10 @@ class ChatController(
 
         sendJob = scope.launch {
             val active = session
-                ?: assistant.session(projectDir, ::approve, extraTools)?.also { session = it }
+                ?: assistant.session(projectDir, ::approve, extraTools)?.also {
+                    it.seed(ChatEntry.priorTurns(history))
+                    session = it
+                }
             if (active == null) {
                 _state.update { it.copy(sending = false, activeStatus = null, needsKey = true) }
                 return@launch
@@ -347,11 +433,16 @@ class ChatController(
                 val done = active.send(
                     projectContext = contextString,
                     userText = message,
-                    listener = LiveTurn(),
+                    listener = LiveTurn(turn, provider, model),
                 )
-                _state.update { it.render(done) }
+                if (turn != liveTurn) return@launch
+                _state.update { it.render(done, provider, model) }
                 persist()
             } catch (cancellation: CancellationException) {
+                // A stale turn unwinding late must not settle the one that
+                // replaced it: this ran after the next question had been sent,
+                // and marked it finished while it was still being answered.
+                if (turn != liveTurn) throw cancellation
                 // The half-written answer is kept, not discarded. A user who
                 // stops a long reply usually wants to read what arrived before
                 // they lost patience with it.
@@ -364,6 +455,7 @@ class ChatController(
                 persist()
                 throw cancellation
             } catch (failure: Throwable) {
+                if (turn != liveTurn) return@launch
                 _state.update {
                     it.settle().copy(
                         entries = it.entries.closeStreaming(),
@@ -373,7 +465,9 @@ class ChatController(
                 }
                 persist()
             } finally {
-                sendJob = null
+                // Only its own: a stale turn finishing late would otherwise
+                // forget the live one, and Stop would then do nothing.
+                if (sendJob === currentCoroutineContext()[Job]) sendJob = null
             }
         }
     }
@@ -386,12 +480,31 @@ class ChatController(
      * finished, so a minute of work looked identical to a hang -- which is
      * exactly what it looked like on the phone with a local model.
      */
-    private inner class LiveTurn : TurnListener {
+    private inner class LiveTurn(
+        private val turn: Long,
+        private val provider: AiProviderType?,
+        private val model: String?,
+    ) : TurnListener {
+        /**
+         * Stops a turn that is no longer live.
+         *
+         * Thrown from inside the provider's read loop, which is the one place
+         * a blocking stream can be interrupted from: the exception unwinds
+         * through the reader, which closes the response and drops the
+         * connection, instead of the answer arriving in full into a panel
+         * that has moved on.
+         */
+        private fun ensureLive() {
+            if (turn != liveTurn) throw CancellationException("turn $turn was stopped")
+        }
+
         override fun onStatus(status: String) {
+            ensureLive()
             _state.update { it.copy(activeStatus = status) }
         }
 
         override fun onTextDelta(delta: String) {
+            ensureLive()
             _state.update { current ->
                 val last = current.entries.lastOrNull()
                 val entries = if (last is ChatEntry.FromAssistant && last.streaming) {
@@ -402,8 +515,8 @@ class ChatController(
                     current.entries + ChatEntry.FromAssistant(
                         text = delta,
                         streaming = true,
-                        provider = current.activeProvider,
-                        model = current.activeModel,
+                        provider = provider,
+                        model = model,
                     )
                 }
                 current.copy(entries = entries)
@@ -419,6 +532,7 @@ class ChatController(
          * a tool call it had written out as prose.
          */
         override fun onTextSettled(text: String) {
+            ensureLive()
             _state.update { current ->
                 val open = current.entries.lastOrNull() as? ChatEntry.FromAssistant
                 if (open == null || !open.streaming || open.text == text) return@update current
@@ -432,6 +546,7 @@ class ChatController(
         }
 
         override fun onToolRun(run: ToolRun) {
+            ensureLive()
             // Only a change that actually landed: a declined call and a refused
             // one both leave the file as it was, and re-reading for them would
             // flash a highlight over nothing.
@@ -467,6 +582,12 @@ class ChatController(
     }
 
     fun cancelSend() {
+        liveTurn++
+        // The stopped turn may still be using this session from its IO
+        // thread. Dropping it means the next message builds a fresh one,
+        // seeded from the transcript -- including whatever the stopped answer
+        // had written, which the model then sees as its own.
+        session = null
         sendJob?.cancel()
         sendJob = null
         awaitingUser?.let {
@@ -651,7 +772,20 @@ class ChatController(
      * the previous one.
      */
     private suspend fun approve(toolName: String, input: Map<String, String>): Boolean {
+        // A stopped turn can reach here before it notices it was stopped, and
+        // would put a prompt in front of the person for a turn they cancelled.
+        currentCoroutineContext().ensureActive()
         if (toolName in standing) return true
+
+        val path = input["path"]
+        val content = input["content"]
+        // Any tool that writes a path with new content is a file write, and
+        // the question it asks is what changes -- not what the file will say.
+        val diff = if (path != null && content != null) {
+            withContext(io) { changeTo(path, content) }
+        } else {
+            null
+        }
 
         val answer = CompletableDeferred<Boolean>()
         awaitingUser = answer
@@ -663,8 +797,9 @@ class ChatController(
                 activeStatus = "Waiting for you to approve $toolName",
                 pendingApproval = ApprovalRequest(
                     toolName = toolName,
-                    path = input["path"] ?: input["command"].orEmpty(),
-                    preview = (input["content"] ?: input["command"]).orEmpty().take(PREVIEW_CHARS),
+                    path = path ?: input["command"].orEmpty(),
+                    preview = if (diff == null) input["command"].orEmpty().take(PREVIEW_CHARS) else "",
+                    diff = diff,
                 ),
             )
         }
@@ -686,7 +821,33 @@ class ChatController(
      * Earlier bubbles in the same turn are left exactly as they streamed,
      * because `reply.text` only ever holds the final block.
      */
-    private fun ChatUiState.render(reply: Reply): ChatUiState {
+    /**
+     * What writing [content] to [path] would change.
+     *
+     * Read through [ProjectFiles.resolve], so a path the tool would refuse is
+     * not read here either; the tool reports the refusal after approval.
+     */
+    private fun changeTo(path: String, content: String): List<DiffLine> {
+        val file = ProjectFiles(projectDir).resolve(path)?.takeIf { it.isFile }
+            ?: return LineDiff.of(null, content)
+        if (file.length() > MAX_DIFF_BYTES) {
+            return listOf(
+                DiffLine(
+                    DiffLine.Kind.GAP,
+                    "The file is too large to compare. This is its new content in full.",
+                    null,
+                ),
+            ) + LineDiff.of(null, content)
+        }
+        val old = runCatching { file.readText() }.getOrNull() ?: return LineDiff.of(null, content)
+        return LineDiff.of(old, content)
+    }
+
+    private fun ChatUiState.render(
+        reply: Reply,
+        provider: AiProviderType?,
+        model: String?,
+    ): ChatUiState {
         val open = entries.lastOrNull() as? ChatEntry.FromAssistant
         val entries = when {
             open != null && open.streaming -> {
@@ -697,8 +858,8 @@ class ChatController(
             // turn that produced only tool calls and then a guard message.
             reply.text.isNotBlank() -> entries + ChatEntry.FromAssistant(
                 text = reply.text,
-                provider = activeProvider,
-                model = activeModel,
+                provider = provider,
+                model = model,
             )
             else -> entries
         }
@@ -720,6 +881,9 @@ class ChatController(
 
     private companion object {
         const val PREVIEW_CHARS = 2_000
+
+        /** Past this, comparing costs more than the prompt is worth. */
+        const val MAX_DIFF_BYTES = 1_024L * 1_024
 
         /**
          * Marks the last entry finished, if one was still being written to.

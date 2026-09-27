@@ -3,6 +3,7 @@ package com.osamu.aide.ai.core
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.osamu.aide.core.common.DispatcherProvider
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -78,7 +79,7 @@ class ChatControllerTest {
             },
             clientFactory = { _, _ -> ScriptedApi(responses).also { api = it }.client() },
         )
-        return ChatController(assistant, root, this)
+        return ChatController(assistant, root, this, io = Dispatchers.Unconfined)
     }
 
     /**
@@ -101,7 +102,7 @@ class ChatControllerTest {
             },
             clientFactory = { _, _ -> ScriptedApi(emptyList()).also { api = it }.client() },
         )
-        return ChatController(assistant, root, this, keys = keys)
+        return ChatController(assistant, root, this, keys = keys, io = Dispatchers.Unconfined)
     }
 
     /**
@@ -225,7 +226,17 @@ class ChatControllerTest {
         assertNotNull("no approval was requested for a mutating tool", pending)
         assertEquals("edit_file", pending!!.toolName)
         assertEquals("src/Main.kt", pending.path)
-        assertTrue("the prompt should show what would be written", "println(42)" in pending.preview)
+        // A change, not the new text: what goes and what replaces it. Showing
+        // only the new file asked the person to remember the old one.
+        val diff = pending.diff!!
+        assertTrue(
+            "the prompt should show the line being replaced: $diff",
+            DiffLine(DiffLine.Kind.REMOVED, "fun main() = Unit", null) in diff,
+        )
+        assertTrue(
+            "the prompt should show what would be written: $diff",
+            DiffLine(DiffLine.Kind.ADDED, "fun main() = println(42)", 1) in diff,
+        )
 
         assertEquals(
             "the file was written before the user answered",

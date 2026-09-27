@@ -21,6 +21,17 @@ fun assistantTurn(text: String): MessageParam = MessageParam.builder()
     .build()
 
 /**
+ * Whether [model] takes adaptive thinking and an effort level.
+ *
+ * Every Anthropic model the picker offers does except Haiku 4.5, which rejects
+ * `effort` with an error and only thinks with a fixed token budget. It went
+ * unnoticed while every request was sent to Opus 5 whatever the picker said;
+ * the moment the choice was honoured, picking Haiku would have failed every
+ * turn. Haiku is sent neither, and answers without extended thinking.
+ */
+fun takesAdaptiveThinking(model: String): Boolean = !model.startsWith("claude-haiku-4")
+
+/**
  * Builds requests in the order prompt caching requires.
  *
  * **The layout here is a cost decision, not a style one.** Caching is
@@ -42,7 +53,15 @@ fun assistantTurn(text: String): MessageParam = MessageParam.builder()
  * is the only way to see it, and `PromptAssemblerTest` pins the prefix stability
  * that makes a hit possible in the first place.
  */
-class PromptAssembler(private val toolset: ProjectToolset) {
+class PromptAssembler(
+    private val toolset: ProjectToolset,
+    /**
+     * The model the user picked. It used to be a constant here, so choosing
+     * Sonnet or Haiku in the panel changed the label and nothing else -- every
+     * turn went to, and was billed as, Opus 5.
+     */
+    private val model: String = DEFAULT_MODEL,
+) {
 
     /**
      * A request for one turn.
@@ -66,10 +85,14 @@ class PromptAssembler(private val toolset: ProjectToolset) {
         instructions: String = STANDING_INSTRUCTIONS,
     ): MessageCreateParams {
         val builder = MessageCreateParams.builder()
-            .model(MODEL)
+            .model(model)
             .maxTokens(maxTokens)
-            .thinking(ThinkingConfigParam.ofAdaptive(ThinkingConfigAdaptive.builder().build()))
-            .outputConfig(OutputConfig.builder().effort(effort).build())
+        if (takesAdaptiveThinking(model)) {
+            builder
+                .thinking(ThinkingConfigParam.ofAdaptive(ThinkingConfigAdaptive.builder().build()))
+                .outputConfig(OutputConfig.builder().effort(effort).build())
+        }
+        builder
             .tools(toolset.definitions().map(ToolUnion::ofTool))
             .systemOfTextBlockParams(systemBlocks(instructions, projectContext))
             // Passed as a list rather than left to default, because the builder
@@ -108,8 +131,9 @@ class PromptAssembler(private val toolset: ProjectToolset) {
     private fun contextBlock(projectContext: String): String =
         "Here is the project you are working in.\n\n$projectContext"
 
-    private companion object {
-        const val MODEL = "claude-opus-5"
+    companion object {
+        /** The default for a harness that does not choose; the app always passes one. */
+        const val DEFAULT_MODEL = "claude-opus-5"
 
         /** Streaming is used for everything, so this can be generous. */
         const val DEFAULT_MAX_TOKENS = 8_192L

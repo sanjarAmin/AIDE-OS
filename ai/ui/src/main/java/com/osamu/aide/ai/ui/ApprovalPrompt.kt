@@ -26,7 +26,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -36,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.osamu.aide.ai.core.ApprovalRequest
 import com.osamu.aide.ai.core.ApprovalScope
+import com.osamu.aide.ai.core.DiffLine
 import com.osamu.aide.core.ui.theme.CodeTextStyle
 
 /**
@@ -102,7 +102,17 @@ internal fun ApprovalPrompt(
                 )
             }
 
-            if (request.preview.isNotBlank()) {
+            val diff = request.diff
+            if (diff != null && diff.isEmpty()) {
+                // Said rather than shown as an empty box: approving a write
+                // that changes nothing is harmless, but the person should know
+                // that is what they are approving.
+                Text(
+                    "No changes: the file already has exactly this content.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.onSurfaceVariant,
+                )
+            } else if (request.preview.isNotBlank() || diff != null) {
                 Box(
                     Modifier
                         .fillMaxWidth()
@@ -121,8 +131,8 @@ internal fun ApprovalPrompt(
                             )
                             Text(request.preview, style = CodeTextStyle, color = colors.onSurface)
                         }
-                    } else {
-                        DiffViewer(request.preview)
+                    } else if (diff != null) {
+                        DiffViewer(diff)
                     }
                 }
             }
@@ -160,15 +170,14 @@ internal fun ApprovalPrompt(
 }
 
 /**
- * A unified diff, coloured.
+ * The change, coloured.
  *
- * Line numbers are the file's, counted over context and additions only, because
- * a deleted line has no number in the result and numbering it implies the file
- * still has it.
+ * Rows arrive already classified -- see `DiffLine` for why the text is never
+ * inspected for a leading `+` or `-`. Line numbers are the file's as it will
+ * be, so a removed line has none: numbering it implies the file still has it.
  */
 @Composable
-private fun DiffViewer(preview: String) {
-    val lines = remember(preview) { preview.lines() }
+private fun DiffViewer(lines: List<DiffLine>) {
     val colors = MaterialTheme.colorScheme
     // Fixed rather than theme colours: red and green mean added and removed
     // everywhere a developer has ever seen a diff, and `error`/`primary` here
@@ -179,11 +188,18 @@ private fun DiffViewer(preview: String) {
     val removeBackground = Color(0x1AF43F5E)
 
     Column {
-        var number = 0
         for (line in lines) {
-            val added = line.startsWith("+")
-            val removed = line.startsWith("-")
-            if (!removed) number++
+            if (line.kind == DiffLine.Kind.GAP) {
+                Text(
+                    text = "⋯ ${line.text}",
+                    style = CodeTextStyle.copy(fontSize = 11.sp),
+                    color = colors.onSurfaceVariant.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(vertical = 2.dp, horizontal = 2.dp),
+                )
+                continue
+            }
+            val added = line.kind == DiffLine.Kind.ADDED
+            val removed = line.kind == DiffLine.Kind.REMOVED
             Row(
                 modifier = Modifier
                     .background(
@@ -197,12 +213,18 @@ private fun DiffViewer(preview: String) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
-                    text = if (removed) "   " else number.toString().padStart(3),
+                    text = line.number?.toString()?.padStart(4) ?: "    ",
                     style = CodeTextStyle.copy(fontSize = 11.sp),
                     color = colors.onSurfaceVariant.copy(alpha = 0.45f),
                 )
+                // The sign is drawn, not part of the text, so a line that
+                // itself begins with `-` still reads as what it is.
                 Text(
-                    text = line,
+                    text = when {
+                        added -> "+ "
+                        removed -> "- "
+                        else -> "  "
+                    } + line.text,
                     style = CodeTextStyle.copy(fontSize = 11.5.sp),
                     color = when {
                         added -> addText

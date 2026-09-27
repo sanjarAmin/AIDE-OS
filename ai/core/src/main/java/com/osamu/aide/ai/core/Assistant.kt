@@ -83,7 +83,7 @@ open class Assistant(
                 val key = keys.read() ?: return null
                 AiSession(
                     client = clientFactory(key, keys.baseUrl()),
-                    assembler = PromptAssembler(toolset),
+                    assembler = PromptAssembler(toolset, keys.activeModel(AiProviderType.ANTHROPIC)),
                     toolset = toolset,
                     approver = approver,
                     dispatchers = dispatchers,
@@ -144,7 +144,11 @@ open class Assistant(
             }
             AiProviderType.ANTHROPIC -> {
                 val key = keys.read() ?: return null
-                InlineCompleter(clientFactory(key, keys.baseUrl()), dispatchers)
+                InlineCompleter(
+                    clientFactory(key, keys.baseUrl()),
+                    dispatchers,
+                    keys.activeModel(AiProviderType.ANTHROPIC),
+                )
             }
         }
     }

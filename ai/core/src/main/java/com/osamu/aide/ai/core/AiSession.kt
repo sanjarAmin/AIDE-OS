@@ -105,6 +105,13 @@ data class ToolRun(
     val durationMs: Long = 0,
 )
 
+/**
+ * One finished turn from before this session existed, replayed as plain text.
+ *
+ * See [AiSession.seed] for why only the words survive.
+ */
+data class PriorTurn(val fromUser: Boolean, val text: String)
+
 /** The end of one user turn. */
 data class Reply(
     val text: String,
@@ -170,6 +177,45 @@ class AiSession(
     val history: List<Any>
         get() = if (client != null) anthropicMessages.toList() else genericMessages.toList()
 
+    /**
+     * Starts this session part-way through a conversation.
+     *
+     * **A session used to begin empty every time it was rebuilt**, and it is
+     * rebuilt far more often than it looks: regenerating an answer, editing an
+     * earlier message, reopening a saved chat, switching model or provider. Each
+     * of those showed the whole conversation on screen while the model saw only
+     * the next message, so "make it shorter" after a regenerate had nothing to
+     * refer to.
+     *
+     * **Only the words, not the tool calls.** A `tool_use` has to be answered by
+     * its `tool_result` in the next message and, with thinking on, the
+     * assistant message carrying it must go back with its thinking blocks
+     * verbatim -- none of which the transcript keeps. Describing the calls in
+     * prose instead would teach a local model that writing a call out as text
+     * is how tools are used, which is the failure `tools/localai/FINDINGS.md` §4
+     * exists to undo. What the model loses is which files it read; it can read
+     * them again.
+     *
+     * [turns] must alternate, start with the user and end with the assistant --
+     * the next [send] adds the user turn. `ChatEntry.priorTurns` shapes a
+     * transcript that way.
+     */
+    fun seed(turns: List<PriorTurn>) {
+        check(anthropicMessages.isEmpty() && genericMessages.isEmpty()) {
+            "seed() is for a fresh session; this one already has history"
+        }
+        for (turn in turns) {
+            if (client != null) {
+                anthropicMessages += if (turn.fromUser) userTurn(turn.text) else assistantTurn(turn.text)
+            } else {
+                genericMessages += AiMessage(
+                    if (turn.fromUser) AiRole.USER else AiRole.ASSISTANT,
+                    turn.text,
+                )
+            }
+        }
+    }
+
     suspend fun send(
         projectContext: String,
         userText: String,
@@ -200,12 +246,16 @@ class AiSession(
                 if (listener == null) {
                     client!!.messages().create(request)
                 } else {
-                    // **Accumulated by the SDK, for the reason
-                    // `AnthropicAiClient` gives**: thinking blocks have to go
-                    // back verbatim with their signature or the next turn is
-                    // rejected, and reassembling them by hand is how that
-                    // breaks. Only text deltas are forwarded -- streaming
-                    // thinking into the bubble shows reasoning as the answer.
+                    // **Accumulated by the SDK's `MessageAccumulator`**, not by
+                    // hand. Rebuilding a message from `content_block_start`,
+                    // `input_json_delta` and `content_block_stop` means
+                    // re-deriving how they compose into a tool call, and getting
+                    // it subtly wrong for thinking blocks -- which have to go
+                    // back verbatim, signature included, or the next turn is
+                    // rejected. Only text deltas are forwarded: streaming
+                    // thinking into the bubble shows reasoning as the answer,
+                    // then replaces it, which reads as the assistant changing
+                    // its mind mid-sentence.
                     val accumulator = MessageAccumulator.create()
                     client!!.messages().createStreaming(request).use { stream ->
                         stream.stream().forEach { event ->
