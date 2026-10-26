@@ -132,6 +132,22 @@ class GitCredentialStoreTest {
     }
 
     /**
+     * What Settings is typed agrees with what clone looks up.
+     *
+     * Settings used to store the typed text as it was, so a token saved for
+     * `https://gitlab.example.com` or `github.com/` was listed and never found.
+     */
+    @Test
+    fun a_typed_host_is_keyed_the_way_a_clone_looks_it_up() {
+        val clone = GitCredentialStore.hostOf("https://gitlab.example.com/team/r.git")
+        listOf("gitlab.example.com", " GitLab.example.com ", "https://gitlab.example.com", "gitlab.example.com/").forEach {
+            assertEquals("typed as '$it'", clone, GitCredentialStore.normaliseHost(it))
+        }
+        assertEquals("git.example.com:8443", GitCredentialStore.normaliseHost("git.example.com:8443"))
+        assertNull(GitCredentialStore.normaliseHost("   "))
+    }
+
+    /**
      * JGit's transport exceptions quote the URL they were given, and
      * `https://token@host/repo.git` is a shape users paste. Every path from a
      * transport failure to a screen or a log goes through [redact].

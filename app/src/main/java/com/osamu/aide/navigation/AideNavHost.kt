@@ -94,7 +94,7 @@ fun AideNavHost(navController: NavHostController = rememberNavController()) {
             val path = runCatching { Routes.decodeWorkspacePath(encoded) }.getOrDefault(encoded)
             WorkspaceScreen(
                 projectDir = File(path),
-                onNavigateBack = { navController.popBackStack() },
+                onNavigateBack = { navController.popIfNotStart() },
                 onOpenSettings = { category -> navController.navigate(Routes.settings(category)) },
                 viewModel = koinViewModel(),
             )
@@ -113,14 +113,24 @@ fun AideNavHost(navController: NavHostController = rememberNavController()) {
             val catParam = entry.arguments?.getString(ARG_CATEGORY)
             val initialCategory = SettingsCategory.fromRouteKey(catParam)
             SettingsScreen(
-                onNavigateBack = { navController.popBackStack() },
+                onNavigateBack = { navController.popIfNotStart() },
                 initialCategory = initialCategory,
                 onOpenBenchmark = { navController.navigate(Routes.BENCHMARK) },
             )
         }
 
         composable(Routes.BENCHMARK) {
-            com.osamu.aide.ui.benchmark.BenchmarkScreen(onNavigateBack = { navController.popBackStack() })
+            com.osamu.aide.ui.benchmark.BenchmarkScreen(onNavigateBack = { navController.popIfNotStart() })
         }
     }
+}
+
+/**
+ * Back, unless this is the first screen.
+ *
+ * A back arrow tapped twice quickly popped twice: the second pop took the start
+ * destination itself, and the NavHost was left with nothing to show.
+ */
+private fun NavHostController.popIfNotStart() {
+    if (previousBackStackEntry != null) popBackStack()
 }

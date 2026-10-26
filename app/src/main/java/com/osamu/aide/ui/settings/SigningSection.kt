@@ -24,6 +24,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,15 +53,34 @@ import java.text.DateFormat
 @Composable
 fun SigningSection(store: ReleaseKeystoreStore, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    var info by remember { mutableStateOf(store.describe()) }
-    var configured by remember { mutableStateOf(store.isConfigured()) }
+    // **Everything the store does is slow, so none of it runs here.**
+    // Generating is a 4096-bit RSA keypair and a PKCS#12 write; importing reads
+    // a content provider that may be downloading the file from Drive; and
+    // describe() decrypts and opens the keystore -- all of which ran on the
+    // main thread, from click handlers and from composition, long enough on a
+    // mid-range phone to trip the five-second input ANR.
+    val scope = rememberCoroutineScope()
+    var info by remember { mutableStateOf<ReleaseKeyInfo?>(null) }
+    var configured by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var prompt by remember { mutableStateOf<Prompt?>(null) }
     var confirmingRemoval by remember { mutableStateOf(false) }
+    var working by remember { mutableStateOf(false) }
 
-    fun refresh() {
-        configured = store.isConfigured()
-        info = store.describe()
+    suspend fun refresh() {
+        configured = withContext(Dispatchers.IO) { store.isConfigured() }
+        info = withContext(Dispatchers.IO) { store.describe() }
+    }
+    LaunchedEffect(store) { refresh() }
+
+    /** Runs [action] off the main thread and reports what it says. */
+    fun perform(action: () -> String) {
+        scope.launch {
+            working = true
+            message = withContext(Dispatchers.IO) { runCatching(action).getOrElse { it.message ?: "That did not work." } }
+            refresh()
+            working = false
+        }
     }
 
     val importFile = rememberLauncherForActivityResult(
@@ -69,10 +93,12 @@ fun SigningSection(store: ReleaseKeystoreStore, modifier: Modifier = Modifier) {
         ActivityResultContracts.CreateDocument("application/x-pkcs12"),
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        message = runCatching {
-            context.contentResolver.openOutputStream(uri)?.use { store.exportTo(it) }
-            "Keystore exported. Keep it somewhere that is not this phone."
-        }.getOrElse { "Could not export the keystore: ${it.message}" }
+        perform {
+            runCatching {
+                context.contentResolver.openOutputStream(uri)?.use { store.exportTo(it) }
+                "Keystore exported. Keep it somewhere that is not this phone."
+            }.getOrElse { "Could not export the keystore: ${it.message}" }
+        }
     }
 
     Column(
@@ -100,6 +126,7 @@ fun SigningSection(store: ReleaseKeystoreStore, modifier: Modifier = Modifier) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = { exportFile.launch("aide-os-release.p12") },
+                    enabled = !working,
                     modifier = Modifier.semantics { contentDescription = "Export the keystore" },
                 ) { Text("Export") }
                 TextButton(onClick = { confirmingRemoval = true }) { Text("Remove") }
@@ -116,6 +143,7 @@ fun SigningSection(store: ReleaseKeystoreStore, modifier: Modifier = Modifier) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = { prompt = Prompt.Generate },
+                    enabled = !working,
                     modifier = Modifier.semantics { contentDescription = "Generate a release key" },
                 ) { Text("Generate") }
                 TextButton(
@@ -123,11 +151,12 @@ fun SigningSection(store: ReleaseKeystoreStore, modifier: Modifier = Modifier) {
                     // a filter that guesses wrong hides the file the user came
                     // to pick.
                     onClick = { importFile.launch(arrayOf("*/*")) },
+                    enabled = !working,
                 ) { Text("Import") }
             }
         }
 
-        message?.let {
+        (if (working) "Working…" else message)?.let {
             Text(
                 text = it,
                 style = MaterialTheme.typography.bodySmall,
@@ -141,7 +170,8 @@ fun SigningSection(store: ReleaseKeystoreStore, modifier: Modifier = Modifier) {
             prompt = pending,
             onDismiss = { prompt = null },
             onConfirm = { passphrase, name, remember ->
-                message = runCatching {
+                prompt = null
+                perform {
                     when (pending) {
                         Prompt.Generate -> {
                             store.generate(passphrase, name, remember)
@@ -156,9 +186,7 @@ fun SigningSection(store: ReleaseKeystoreStore, modifier: Modifier = Modifier) {
                             "Keystore imported."
                         }
                     }
-                }.getOrElse { it.message ?: "That did not work." }
-                prompt = null
-                refresh()
+                }
             },
         )
     }
@@ -177,10 +205,11 @@ fun SigningSection(store: ReleaseKeystoreStore, modifier: Modifier = Modifier) {
             confirmButton = {
                 TextButton(
                     onClick = {
-                        store.remove()
                         confirmingRemoval = false
-                        message = "Release key removed."
-                        refresh()
+                        perform {
+                            store.remove()
+                            "Release key removed."
+                        }
                     },
                 ) { Text("Remove") }
             },

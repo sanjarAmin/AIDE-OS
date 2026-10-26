@@ -2,6 +2,7 @@ package com.osamu.aide.ui.workspace
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.osamu.aide.build.BuildRunner
 import com.osamu.aide.ai.core.AiProviderType
 import com.osamu.aide.ai.core.ApiKeyStore
 import com.osamu.aide.ai.core.Assistant
@@ -34,7 +35,15 @@ import java.io.File
  */
 class AssistantViewModel(
     private val assistant: Assistant,
-    private val builder: ProjectBuilder,
+    /**
+     * The runner the Build button uses, **not the builder**: that one compiles
+     * in this process. The assistant's run_build held ProjectBuilder, so every
+     * build it started ran kotlinc and D8 in the editor's own heap -- an OOM
+     * took the editor and its unsaved buffers with it, which is the risk the
+     * :build process exists to remove -- and a Run tapped meanwhile compiled
+     * the same project into the same output from the other process at once.
+     */
+    private val builder: BuildRunner,
     private val projects: ProjectRepository,
     /**
      * The same instance the editor uses, so the assistant asks a session that
@@ -82,7 +91,7 @@ class AssistantViewModel(
             projectDir = projectDir,
             scope = viewModelScope,
             extraTools = buildTools(
-                runBuild = { target -> builder.build(target).toList().summarise(target.rootDir) },
+                runBuild = { target -> builder.build(target, debuggable = true).toList().summarise(target.rootDir) },
                 project = { openProject },
                 lastBuild = lastBuild,
             ) + kotlinTools(

@@ -235,8 +235,11 @@ private fun TokenFields(credentials: GitCredentialStore) {
     Button(
         enabled = host.isNotBlank() && token.isNotBlank(),
         onClick = {
-            val normalised = host.trim().lowercase()
-            credentials.save(normalised, token)
+            // The key clone and push will look it up by -- see normaliseHost --
+            // and the token without the space a paste tends to bring, which the
+            // server rejects as a different token.
+            val normalised = GitCredentialStore.normaliseHost(host) ?: return@Button
+            credentials.save(normalised, token.trim())
             if (normalised !in hosts) hosts.add(normalised)
             hosts.sort()
             // Cleared rather than left on screen. The field is the only place

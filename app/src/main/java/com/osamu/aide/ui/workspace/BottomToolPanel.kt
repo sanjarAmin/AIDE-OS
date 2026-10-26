@@ -143,17 +143,6 @@ fun BottomToolDock(
         if (debugFocus > 0) selectedTab = ToolTab.DEBUG
     }
 
-    val infiniteTransition = rememberInfiniteTransition(label = "dockPulse")
-    val buildGlowAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(800),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "buildGlowAlpha",
-    )
-
     val animatedHeight by animateDpAsState(
         targetValue = if (selectedTab in TALL_TABS) 340.dp else 200.dp,
         animationSpec = tween(250),
@@ -212,14 +201,7 @@ fun BottomToolDock(
                             ) {
                                 if (tab == ToolTab.BUILD && buildState.isRunning) {
                                     Box(contentAlignment = Alignment.Center) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(14.dp)
-                                                .background(
-                                                    MaterialTheme.colorScheme.secondary.copy(alpha = buildGlowAlpha * 0.4f),
-                                                    CircleShape,
-                                                ),
-                                        )
+                                        BuildGlow()
                                         CircularProgressIndicator(
                                             modifier = Modifier.size(12.dp),
                                             strokeWidth = 1.5.dp,
@@ -570,4 +552,27 @@ private fun severityStyle(severity: DiagnosticSeverity): SeverityStyle {
         DiagnosticSeverity.INFO ->
             SeverityStyle("INFO", colors.surfaceVariant, colors.onSurfaceVariant, colors.onSurfaceVariant)
     }
+}
+
+/**
+ * The pulse behind the Build tab's spinner.
+ *
+ * **Its own composable, so it exists only while a build does.** The infinite
+ * transition used to sit at the top of the dock, where it ran a frame every
+ * sixteen milliseconds for as long as the dock was on screen -- building or
+ * not, and nothing read the value when not.
+ */
+@Composable
+private fun BuildGlow() {
+    val alpha by rememberInfiniteTransition(label = "dockPulse").animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(animation = tween(800), repeatMode = RepeatMode.Reverse),
+        label = "buildGlowAlpha",
+    )
+    Box(
+        modifier = Modifier
+            .size(14.dp)
+            .background(MaterialTheme.colorScheme.secondary.copy(alpha = alpha * 0.4f), CircleShape),
+    )
 }

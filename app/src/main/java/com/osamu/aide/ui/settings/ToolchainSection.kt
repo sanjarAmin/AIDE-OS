@@ -14,6 +14,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -23,6 +24,8 @@ import androidx.compose.ui.unit.dp
 import com.osamu.aide.core.common.DispatcherProvider
 import com.osamu.aide.toolchain.manager.InstalledToolchain
 import com.osamu.aide.toolchain.manager.ToolchainManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -46,6 +49,7 @@ fun ToolchainSection(
 ) {
     var installed by remember { mutableStateOf<List<InstalledToolchain>?>(null) }
     var confirming by remember { mutableStateOf<InstalledToolchain?>(null) }
+    val scope = rememberCoroutineScope()
     var reload by remember { mutableStateOf(0) }
 
     // Walking directories to add up file sizes is disk work, and clang is
@@ -111,9 +115,15 @@ fun ToolchainSection(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        toolchain.storage.removeInstalled(entry)
                         confirming = null
-                        reload++
+                        // Off the main thread like the measurement above it:
+                        // removing clang or the JDK unlinks tens of thousands
+                        // of files, which froze the one screen meant for
+                        // freeing space, up to an ANR.
+                        scope.launch {
+                            withContext(Dispatchers.IO) { toolchain.storage.removeInstalled(entry) }
+                            reload++
+                        }
                     },
                 ) { Text("Remove") }
             },

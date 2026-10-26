@@ -23,7 +23,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        handleOAuthRedirect(intent)
+        // Only on a real launch. Recreated -- rotated -- the activity is handed
+        // the same launch intent again, and exchanging the redirect's one-time
+        // code a second time failed: "Sign-in failed" after a sign-in that had
+        // worked.
+        if (savedInstanceState == null) handleOAuthRedirect(intent)
         enableEdgeToEdge()
         setContent {
             AideTheme {

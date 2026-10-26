@@ -34,10 +34,13 @@ fun ProjectTemplate.preview(
     engine: BuildEngine = BuildEngine.FAST,
 ): List<TemplateFile> {
     val effectiveName = name.trim().ifEmpty { "Demo" }
-    // Named for the template so two previews cannot race into one directory,
-    // and cleared first because a previous run's files would read as this
-    // template's.
-    val root = File(scratch, "preview-$id").apply {
+    // **One directory per call**, not per template. Named for the template
+    // alone, two previews of the *same* one -- every keystroke in the name
+    // field starts another, and a superseded one's IO is not interrupted --
+    // shared it: one cleared or deleted it while the other was listing, and
+    // the list came up empty or half-written. Cleared first anyway, in case an
+    // earlier process died before its finally ran.
+    val root = File(scratch, "preview-$id-${System.nanoTime()}").apply {
         deleteRecursively()
         mkdirs()
     }

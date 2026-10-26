@@ -176,6 +176,30 @@ failed to load still produces a clean compile.
   app has already started it, and `stopKoin()` tears the app's own down --
   use `koinApplication {}`.
 
+- **The app is two processes, and each gets its own copy of everything.**
+  Builds run in `:build`. `Application.onCreate` runs in *both*, so startup
+  work written for the app ran again whenever a build started: it withdrew
+  the address of a local model server the main process was using. And a
+  `SharedPreferences` object is cached per process and never reloaded, so
+  `:build` signed release builds with whatever the signing settings were
+  when it first started. Gate startup work on the main process
+  (`AideApplication.isMainProcess`), read anything `:build` shares with
+  Settings with `MODE_MULTI_PROCESS` on every access (`ReleaseKeystoreStore`),
+  and send builds -- the assistant's too -- through `BuildRunner`, never
+  `ProjectBuilder`, which compiles in whichever process holds it. Also:
+  a network call on the main thread throws, loopback included, and
+  `runCatching` quietly turns that into "not answering".
+
+- **A view model made in a test is made on the wrong thread.** Composition
+  makes view models on the main thread, where `viewModelScope`'s
+  `Main.immediate` runs a `launch` from `init` *inside the constructor* --
+  before any property declared below `init` has been assigned. Tests make them
+  on the instrumentation thread, where the same `launch` only posts, so they
+  cannot see it: `ProjectsViewModel` read a null map and the app crashed on
+  launch with every suite green. Declare state above `init`, and make a view
+  model under test with `runOnMainSync` when its `init` launches anything.
+  `ProjectsCloneTest`.
+
 - **`adb shell run-as` is not the app.** It runs in `runas_app`, which *may*
   `execve` out of app-private storage — so a hand probe through it will
   cheerfully do things the app is forbidden to do, and appear to disprove a

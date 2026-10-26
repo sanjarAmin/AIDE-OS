@@ -4,6 +4,7 @@ import com.osamu.aide.core.ui.fadingEdges
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -101,6 +102,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.osamu.aide.core.fs.Project
 import com.osamu.aide.core.fs.ProjectTemplate
@@ -122,6 +124,14 @@ fun ProjectsScreen(
     viewModel: ProjectsViewModel = koinViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // Reloaded on every return, not only when the view model is made: the
+    // list is sorted by when each project was last opened, and coming back
+    // from the one just worked in -- or from changing its engine -- has to
+    // show that without a restart.
+    LifecycleResumeEffect(Unit) {
+        viewModel.refresh()
+        onPauseOrDispose { }
+    }
     val snackbarHostState = remember { SnackbarHostState() }
     var showCreateDialog by remember { mutableStateOf(false) }
     var showCloneDialog by remember { mutableStateOf(false) }
@@ -303,6 +313,7 @@ fun ProjectsScreen(
                         ProjectRow(
                             project = project,
                             index = index,
+                            sizeOf = viewModel::sizeOf,
                             onClick = { onOpenProject(project.rootDir) },
                             onDelete = { confirmingDelete = project },
                         )
@@ -361,17 +372,16 @@ fun ProjectsScreen(
 private fun ProjectRow(
     project: Project,
     index: Int,
+    sizeOf: suspend (Project) -> Long,
     onClick: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val projectSize by produceState(initialValue = "…", project.rootDir) {
-        value = withContext(Dispatchers.IO) {
-            val bytes = project.rootDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
-            when {
-                bytes < 1024 -> "$bytes B"
-                bytes < 1024 * 1024 -> "${bytes / 1024} KB"
-                else -> String.format(java.util.Locale.US, "%.1f MB", bytes.toDouble() / (1024 * 1024))
-            }
+        val bytes = sizeOf(project)
+        value = when {
+            bytes < 1024 -> "$bytes B"
+            bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+            else -> String.format(java.util.Locale.US, "%.1f MB", bytes.toDouble() / (1024 * 1024))
         }
     }
     val dummyFile = remember(project.language) {
@@ -389,7 +399,10 @@ private fun ProjectRow(
     val iconInfo = FileIcons.infoFor(dummyFile, isDirectory = false)
 
     AnimatedVisibility(
-        visible = true,
+        // **Hidden, then shown**, so the entry actually plays. `visible = true`
+        // starts out visible and there is nothing to animate from: the stagger
+        // below was written and never ran.
+        visibleState = remember { MutableTransitionState(false).apply { targetState = true } },
         enter = fadeIn(animationSpec = tween(280 + index * 50)) +
             slideInVertically(animationSpec = tween(280 + index * 50)) { 24 },
     ) {

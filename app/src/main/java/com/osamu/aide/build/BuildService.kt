@@ -17,12 +17,11 @@ import com.osamu.aide.ui.workspace.ProjectBuilder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.cancel
 import org.koin.android.ext.android.inject
 
 /**
@@ -61,7 +60,13 @@ class BuildService : Service() {
     private lateinit var thread: HandlerThread
     private lateinit var messenger: Messenger
     private lateinit var scope: CoroutineScope
+    // Written on the handler thread and read in onDestroy on the main one.
+    @Volatile
     private var running: Job? = null
+
+    /** Who asked for [running], so it can be told when it is replaced. */
+    @Volatile
+    private var runningFor: Messenger? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -73,7 +78,14 @@ class BuildService : Service() {
     override fun onBind(intent: Intent?): IBinder = messenger.binder
 
     override fun onDestroy() {
-        runBlocking { running?.cancelAndJoin() }
+        // **Cancelled, not waited for.** This blocked the main thread in
+        // runBlocking until the build finished -- but ECJ, D8 and kotlinc are
+        // blocking calls that cancellation does not interrupt, so cancelling a
+        // Kotlin build part way held onDestroy for the rest of the compile,
+        // past the service timeout, and Android killed :build for an ANR. The
+        // engine's own lock keeps a later build out of the workspace until
+        // this one has actually unwound.
+        scope.cancel()
         thread.quitSafely()
         super.onDestroy()
     }
@@ -84,7 +96,10 @@ class BuildService : Service() {
             true
         }
         BuildProtocol.MSG_CANCEL -> {
-            running?.cancel()
+            // Only from the client that owns the running build. A cancel
+            // carries its sender now: without one, a late cancel from a client
+            // whose build had already been replaced stopped the new one.
+            if (message.replyTo != null && message.replyTo == runningFor) running?.cancel()
             true
         }
         else -> false
@@ -107,9 +122,26 @@ class BuildService : Service() {
             }
 
         // One build at a time. A second request while one is running is the
-        // user tapping Build twice, and two compilers in one process is the
-        // memory problem this service exists to avoid.
+        // user tapping Build twice -- or Run while the assistant is building --
+        // and two compilers in one process is the memory problem this service
+        // exists to avoid.
+        //
+        // **The replaced build's client is told.** It used to be cancelled in
+        // silence and never sent `Finished`, so whoever was waiting on it --
+        // the assistant's run_build, since it builds here too -- waited for
+        // ever.
+        if (running?.isActive == true) {
+            runningFor?.let { previous ->
+                send(
+                    previous,
+                    BuildEvent.Finished(
+                        BuildResult.Failure(stage = null, message = "Stopped: a newer build started.", durationMillis = 0),
+                    ),
+                )
+            }
+        }
         running?.cancel()
+        runningFor = reply
         running = scope.launch {
             builder.build(project, debuggable, debugger)
                 // **A build that throws must say what it threw.** Uncaught
@@ -135,9 +167,23 @@ class BuildService : Service() {
         // A client that has gone away is an ordinary outcome -- the activity was
         // closed mid-build -- and not a reason to bring the build process down
         // with an unhandled RemoteException.
-        runCatching {
+        val sent = runCatching {
             reply.send(Message.obtain(null, BuildProtocol.MSG_EVENT).apply { this.data = data })
         }
+        // **The last event must arrive.** `Finished` repeats every diagnostic,
+        // and a Gradle build with a thousand warnings made it larger than a
+        // oneway binder transaction may be: TransactionTooLargeException, which
+        // this swallowed, so the client -- still connected -- waited on a
+        // spinner for ever. The diagnostics already arrived one at a time, so
+        // the result is resent without them rather than lost.
+        if (sent.isFailure && event is BuildEvent.Finished && event.result.diagnostics.isNotEmpty()) {
+            send(reply, BuildEvent.Finished(event.result.withoutDiagnostics()))
+        }
+    }
+
+    private fun BuildResult.withoutDiagnostics(): BuildResult = when (this) {
+        is BuildResult.Success -> copy(diagnostics = emptyList())
+        is BuildResult.Failure -> copy(diagnostics = emptyList())
     }
 
     companion object {

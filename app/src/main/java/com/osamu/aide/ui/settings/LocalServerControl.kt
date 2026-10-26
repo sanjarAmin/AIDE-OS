@@ -18,6 +18,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -33,6 +34,7 @@ import com.osamu.aide.ai.core.ApiKeyStore
 import com.osamu.aide.toolchain.manager.ToolchainComponent
 import com.osamu.aide.toolchain.manager.ToolchainManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -66,8 +68,19 @@ internal fun LocalServerControl(
     // here: `Assistant` reads the same value, and a local boolean could say
     // running while the provider reported itself unusable.
     var address by remember { mutableStateOf(keys.localBaseUrl()) }
-    var busy by remember { mutableStateOf(false) }
+    // From the server, not only from this screen: a load started, then left,
+    // is still loading when the screen comes back.
+    var busy by remember { mutableStateOf(server.isStarting) }
     var notice by remember { mutableStateOf<String?>(null) }
+
+    // Came back to a server that is still loading: follow it to the end, or
+    // the control would say "Not running" beside a server that then answered.
+    LaunchedEffect(Unit) {
+        if (!server.isStarting) return@LaunchedEffect
+        while (server.isStarting) delay(STARTING_POLL_MS)
+        busy = false
+        address = keys.localBaseUrl()
+    }
 
     // Which size to start. Defaults to whatever the provider is set to, so the
     // model picker above this and this control cannot disagree.
@@ -231,3 +244,6 @@ private const val ABLITERATED = "abliterated"
 internal const val LOCAL_SERVER_STATUS_TAG = "local-server-status"
 internal const val LOCAL_SERVER_START_TAG = "local-server-start"
 internal const val LOCAL_SERVER_STOP_TAG = "local-server-stop"
+
+/** How often a returning screen checks on a load it did not start. */
+private const val STARTING_POLL_MS = 500L

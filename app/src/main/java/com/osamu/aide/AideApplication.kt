@@ -14,17 +14,27 @@ class AideApplication : Application() {
             modules(appModule)
         }
 
-        // **A server the last run started is not this run's to assume.** The
-        // address outlives the process that published it -- force-stopping the
-        // app kills `llama-server` but runs no code to withdraw it -- so
-        // without this the on-device provider reports itself ready and the
-        // first message goes to a port nobody is listening on. Probed rather
-        // than blindly cleared, because a crashed app can leave a working
-        // server behind. Found by driving the app; `LocalModelServer`.
+        // **A server the last run left behind is not this run's.** See
+        // LocalModelServer.reapOrphanedServers for why it is ended, not kept.
         //
-        // On the main thread deliberately: it is one loopback probe with a
-        // one-second timeout, and doing it later would mean a window where the
-        // provider still lies about being ready.
-        koinApp.koin.get<LocalModelServer>().adoptOrForgetExistingServer()
+        // Only in the main process: onCreate runs in every process, and the
+        // build process starting up used to withdraw the address of a server
+        // the main process was using at that moment. And off the main thread,
+        // where Android throws on any network call -- loopback included --
+        // which is how the old probe always failed.
+        if (isMainProcess()) {
+            val server = koinApp.koin.get<LocalModelServer>()
+            Thread({ server.reapOrphanedServers() }, "reap-local-servers").start()
+        }
+    }
+
+    /** The app's own process, not `:build` or any other it declares. */
+    private fun isMainProcess(): Boolean {
+        val name = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            getProcessName()
+        } else {
+            runCatching { java.io.File("/proc/self/cmdline").readText().trimEnd('\u0000') }.getOrNull()
+        }
+        return name == packageName
     }
 }

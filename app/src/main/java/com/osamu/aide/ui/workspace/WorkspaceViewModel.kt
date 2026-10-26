@@ -435,6 +435,12 @@ class WorkspaceViewModel(
                             projectEngine = result.value.engine,
                         )
                     }
+                    // **What "Opened" on the Projects card means.** touch() was
+                    // written and never called, so every card said when the
+                    // project was *created*, and the list -- sorted by it --
+                    // never moved the project someone works in every day to
+                    // the top.
+                    projects.touch(result.value)
                 }
                 // Left null. Editing a directory that is not an AIDE-OS project
                 // is legitimate; building it is what is not, and build() says so.

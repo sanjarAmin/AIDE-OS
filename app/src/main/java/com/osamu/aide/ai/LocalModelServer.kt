@@ -45,26 +45,34 @@ class LocalModelServer(
     private val log = StringBuilder()
 
     /**
-     * Forgets an address left behind by a process that is gone.
+     * Ends any `llama-server` a previous run of the app left behind, and clears
+     * its address. Called once at startup, in the main process, off the main
+     * thread.
      *
-     * **Found by driving the app.** Force-stopping it kills the server, but
-     * nothing runs to clear the address it published, so the next launch read
-     * `local.baseUrl`, reported the provider ready, and sent the first message
-     * to a port nobody was listening on -- a connection refused where the
-     * honest answer is "start the server".
+     * **Found by driving the app.** Force-stopping it kills the server but
+     * runs nothing to clear the address it published, so the next launch
+     * reported the provider ready and sent the first message to a dead port.
+     * A crash is the opposite case: the server survives, holding a gigabyte of
+     * model.
      *
-     * Probed rather than assumed cleared, because the opposite case is real
-     * too: a `llama-server` is an ordinary child process and can outlive an app
-     * that crashed rather than being force-stopped. If it still answers it is
-     * still usable, and dropping the address would strand it holding a
-     * gigabyte of model with nothing able to stop it.
+     * **Reaped, not adopted.** This used to probe the old address and keep a
+     * server that answered -- but the probe ran on the main thread, where
+     * Android throws on any network call, loopback included, so it always
+     * failed and always cleared the address. And an adopted server would have
+     * had no process handle here: Stop could not stop it, and Start launched a
+     * second one beside it. So a server this run did not start is ended.
+     * `/proc` shows only this app's own processes, so nothing else can match.
      */
-    fun adoptOrForgetExistingServer() {
-        val address = keys.localBaseUrl()?.takeIf { it.isNotBlank() } ?: return
-        if (!answersHealth(address)) {
-            Log.i(TAG, "clearing stale address $address; nothing is listening")
-            keys.saveLocalBaseUrl(null)
+    fun reapOrphanedServers() {
+        val orphans = File("/proc").listFiles { dir -> dir.name.all(Char::isDigit) }.orEmpty().mapNotNull { dir ->
+            val command = runCatching { File(dir, "cmdline").readText() }.getOrNull() ?: return@mapNotNull null
+            dir.name.toIntOrNull()?.takeIf { SERVER_BINARY in command }
         }
+        orphans.forEach { pid ->
+            Log.i(TAG, "ending llama-server $pid left by an earlier run")
+            android.os.Process.killProcess(pid)
+        }
+        keys.saveLocalBaseUrl(null)
     }
 
     /** True while a server this class started is still alive. */
@@ -91,9 +99,35 @@ class LocalModelServer(
      * first request either way, and hiding that in a coroutine here would only
      * move the decision about which dispatcher to use away from the caller that
      * knows. Call it on IO.
+     *
+     * **Synchronized, so a second call waits for the first.** It used to find
+     * the first server running and return its address -- which is null until
+     * /health answers, minutes for the 7B -- so a second tap reported "The
+     * server did not start" beside a server that was still loading. Waiting
+     * returns the address the first call publishes.
      */
+    @Synchronized
     fun start(model: ToolchainComponent): String? {
         if (isRunning) return keys.localBaseUrl()
+        isStarting = true
+        try {
+            return launch(model)
+        } finally {
+            isStarting = false
+        }
+    }
+
+    /**
+     * True while [start] is waiting for a server to load.
+     *
+     * Here rather than in the screen: Settings kept its own "busy" flag, lost
+     * it when left, and on return offered Start beside a loading server.
+     */
+    @Volatile
+    var isStarting: Boolean = false
+        private set
+
+    private fun launch(model: ToolchainComponent): String? {
         val root = engineRoot() ?: return null
         val modelFile = toolchain.installedFile(model) ?: return null
 
@@ -196,7 +230,7 @@ class LocalModelServer(
      * **Measured, not anticipated.** After a termination run the app was still
      * up, `llama-server` was gone from `ps`, and `local.baseUrl` still named
      * port 46819 -- so `ApiKeyStore.isReady(LOCAL)` was true and the next
-     * message would have gone to a closed port. [adoptOrForgetExistingServer]
+     * message would have gone to a closed port. [reapOrphanedServers]
      * does not cover this: it runs at launch, and this app had not restarted.
      * A 1.5B holding a gigabyte on a phone with 218 MB free is a plausible lmkd
      * target, so the child dying mid-session is the normal case and not the
@@ -258,6 +292,9 @@ class LocalModelServer(
         /** Loopback only. The manifest's network-security-config permits this and no more. */
         const val HOST = "127.0.0.1"
         const val LINKER = "/system/bin/linker64"
+
+        /** What an orphan's command line contains; see [reapOrphanedServers]. */
+        const val SERVER_BINARY = "llama-server"
         const val CONTEXT_TOKENS = 4096
         const val HEALTH_TIMEOUT_MS = 180_000L
         const val LOG_LIMIT = 8_000

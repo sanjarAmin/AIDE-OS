@@ -17,6 +17,8 @@ import com.osamu.aide.engine.api.BuildResult
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.channels.Channel
 
 /**
  * A build, run in [BuildService]'s process and reported back here.
@@ -103,13 +105,22 @@ class RemoteBuildRunner(
         awaitClose {
             outgoing?.let { service ->
                 runCatching {
-                    service.send(Message.obtain(null, BuildProtocol.MSG_CANCEL))
+                    // Signed with this client's messenger, so the service
+                    // cancels only the build that is ours.
+                    service.send(Message.obtain(null, BuildProtocol.MSG_CANCEL).apply { replyTo = incoming })
                 }
             }
             runCatching { context.unbindService(connection) }
             thread.quitSafely()
         }
     }
+        // **Unlimited, or trySend drops.** callbackFlow's default buffer is 64
+        // events, and a build reporting a few hundred warnings while the main
+        // thread was busy filled it: every later event was dropped without a
+        // word -- diagnostics missing from Problems and, when it was `Finished`,
+        // a successful build reported as "Build stopped." and never installed.
+        // Blocking the replies thread instead would stall the binder.
+        .buffer(Channel.UNLIMITED)
 
     private fun kotlinx.coroutines.channels.ProducerScope<BuildEvent>.failed(message: String) {
         trySend(

@@ -57,9 +57,14 @@ class ProjectsCloneTest {
         identities = GitIdentityStore(context, namespace = "test").apply { clear() }
         credentials = GitCredentialStore(context, namespace = "test").apply { clear() }
 
+        git = GitWorkspace(context, DefaultDispatcherProvider(), identities, credentials)
+        viewModel = newViewModel()
+    }
+
+    private fun newViewModel(): ProjectsViewModel {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
         val dispatchers = DefaultDispatcherProvider()
-        git = GitWorkspace(context, dispatchers, identities, credentials)
-        viewModel = ProjectsViewModel(
+        return ProjectsViewModel(
             repository = FileProjectRepository(workspaceRoot, dispatchers),
             importer = ProjectImporter(context, workspaceRoot, dispatchers),
             git = git,
@@ -171,6 +176,23 @@ class ProjectsCloneTest {
 
         val clone = File(workspaceRoot, "no-module")
         assertTrue("the clone was thrown away", File(clone, "README.md").isFile)
+    }
+
+    /**
+     * Made on the main thread, the way composition makes it.
+     *
+     * Every other test here makes the view model on the instrumentation
+     * thread, where `viewModelScope.launch` only posts, so `init`'s reload ran
+     * after construction had finished. On the main thread `Main.immediate`
+     * runs it *inside* the constructor -- and it read a property declared
+     * below `init`, still null: the app crashed on its first screen with this
+     * whole class green.
+     */
+    @Test
+    fun made_on_the_main_thread_it_loads() = runTest(timeout = 1.minutes) {
+        lateinit var made: ProjectsViewModel
+        InstrumentationRegistry.getInstrumentation().runOnMainSync { made = newViewModel() }
+        awaitUntil("the list to load") { !made.state.value.isLoading }
     }
 
     /** The name comes from the URL, the way every git client does it. */

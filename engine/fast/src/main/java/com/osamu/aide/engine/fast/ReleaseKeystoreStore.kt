@@ -39,9 +39,24 @@ data class ReleaseKeyInfo(
  * uses for provider credentials. Not remembering it is a supported answer, not
  * a degraded one: the build asks instead.
  */
-class ReleaseKeystoreStore(context: Context) {
+class ReleaseKeystoreStore(private val context: Context) {
 
-    private val preferences = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+    /**
+     * Asked for on every read, with `MODE_MULTI_PROCESS`, rather than held.
+     *
+     * **This store is read in two processes**: Settings writes it in the app's,
+     * and the build signs with it in `:build`. Android caches a preferences
+     * object per process and never reloads it, so the build process went on
+     * seeing whatever was there when it first started -- no key, or the old
+     * alias and passphrase -- and refused a release build with "the passphrase
+     * is not remembered" while Settings said it was, until Android happened to
+     * kill `:build`. The flag is deprecated but still implemented: each
+     * `getSharedPreferences` call with it checks the file on disk and reloads a
+     * changed one, which is exactly this case.
+     */
+    @Suppress("DEPRECATION")
+    private val preferences
+        get() = context.getSharedPreferences(FILE, Context.MODE_PRIVATE or Context.MODE_MULTI_PROCESS)
     private val keystore = File(context.filesDir, "signing/release.p12")
 
     /** True when a keystore has been imported or generated. */

@@ -146,10 +146,13 @@ class LocalModelBenchmark(
     /**
      * Starts `llama-server` through the dynamic linker and waits for `/health`.
      *
-     * Two environment variables, each found by R16 failing without it:
-     * `LD_LIBRARY_PATH`, because the binary's RUNPATH is Termux's prefix; and
-     * `GGML_BACKEND_PATH`, because ggml looks for its CPU backend beside
-     * `/proc/self/exe` -- which under this launch is the linker.
+     * **Launched exactly as LocalModelServer launches it**, from `lib/` with
+     * `LD_LIBRARY_PATH` and no `GGML_BACKEND_PATH`. This used to pin the
+     * generic `libggml-cpu.so` by path from `filesDir` -- R16's first working
+     * recipe -- while the server runs from `lib/` so ggml can pick the CPU
+     * variant that suits the phone. A benchmark measuring a different backend
+     * from the one chat uses measures nothing anyone runs; LocalModelServer's
+     * KDoc has why `lib/` is where it has to start.
      */
     private fun startServer(): Long {
         port = ServerSocket(0).use { it.localPort }
@@ -164,10 +167,9 @@ class LocalModelBenchmark(
             "--jinja",
             "--no-webui",
         ).redirectErrorStream(true).apply {
-            directory(context.filesDir)
+            directory(File(llamaRoot, "lib"))
             environment().apply {
                 put("LD_LIBRARY_PATH", File(llamaRoot, "lib").absolutePath)
-                put("GGML_BACKEND_PATH", File(llamaRoot, "lib/libggml-cpu.so").absolutePath)
                 put("HOME", context.filesDir.absolutePath)
                 put("TMPDIR", context.cacheDir.absolutePath)
             }

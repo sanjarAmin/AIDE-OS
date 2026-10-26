@@ -473,11 +473,17 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                 Box {
                     ProviderProperty(
                         label = "Model",
-                        value = activeModel,
+                        // **On-device, the server control below chooses.** Its
+                        // chips and this menu both wrote the model, each kept
+                        // its own copy, and neither saw the other: pick the 7B
+                        // here, press Start below with the 1.5B chip still
+                        // selected, and the 1.5B served every message labelled
+                        // as the 7B. One chooser, and this row says which.
+                        value = if (activeProvider == AiProviderType.LOCAL) "Chosen with the server below" else activeModel,
                         // The menu covers the row, so there is no expanded
                         // state to show underneath it.
                         expanded = false,
-                        onToggle = { showModelDropdown = true },
+                        onToggle = if (activeProvider == AiProviderType.LOCAL) null else { { showModelDropdown = true } },
                         rowSemantics = "Model",
                     )
                     DropdownMenu(
@@ -510,7 +516,15 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                     // one that accepts an address and ignores it. The row still
                     // appears, saying where Gemini goes: a row that is missing
                     // reads as a setting hidden somewhere else.
-                    onToggle = if (activeProvider == AiProviderType.GEMINI) {
+                    //
+                    // **Nor for the on-device provider.** Its address is not a
+                    // setting but the server's own signal that it is running --
+                    // LocalModelServer publishes it once /health answers and
+                    // withdraws it when the server dies. Typed here, it made
+                    // the provider "ready" with nothing listening, and cleared
+                    // here it withdrew a live server's address while
+                    // llama-server went on holding its gigabytes.
+                    onToggle = if (activeProvider == AiProviderType.GEMINI || activeProvider == AiProviderType.LOCAL) {
                         null
                     } else {
                         { editingEndpoint = !editingEndpoint }
@@ -670,7 +684,10 @@ private fun ProviderProperty(
 private fun PropertyDivider() {
     HorizontalDivider(
         modifier = Modifier.padding(horizontal = 16.dp),
-        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+        // `outline` faded, not `outlineVariant` halved: that token is #283449
+        // on a #0B0E14 page, and at half alpha and a hairline it does not
+        // render on a phone at all -- CLAUDE.md's palette entry.
+        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
     )
 }
 
@@ -767,6 +784,10 @@ private fun whereToGetAKey(provider: AiProviderType): String = when (provider) {
 /** What the endpoint row reads when it is closed, which is most of the time. */
 private fun endpointValue(provider: AiProviderType, stored: String): String = when {
     provider == AiProviderType.GEMINI -> "Google's own, and fixed"
+    // Not `stored`: that was remembered when the screen opened, and went stale
+    // the moment the server below started or stopped. The server control shows
+    // the live address itself.
+    provider == AiProviderType.LOCAL -> "Set by the server below"
     stored.isNotEmpty() -> stored
     else -> "Default"
 }
@@ -784,6 +805,10 @@ private fun endpointValue(provider: AiProviderType, stored: String): String = wh
 private fun endpointDetail(provider: AiProviderType, stored: String): String? = when {
     provider == AiProviderType.GEMINI ->
         "Pick Custom to send requests to a service of your own."
+
+    // There is no key to send, which the line below would have claimed.
+    provider == AiProviderType.LOCAL ->
+        "This phone's own loopback address, while the server is running."
 
     stored.isNotEmpty() -> "Your key is sent here."
 

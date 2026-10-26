@@ -163,6 +163,22 @@ class GitCredentialStore(
 
     companion object {
         /**
+         * What a person typed as a host, as the key [hostOf] will look it up by.
+         *
+         * **The two have to agree, or a saved token is never found.** Settings
+         * stored whatever was typed, trimmed and lower-cased -- so
+         * `https://gitlab.example.com` or `github.com/` sat in the list while
+         * clone asked for `gitlab.example.com`, and private repositories failed
+         * as unauthenticated beside a token the screen said was saved. Parsed
+         * as a URL, with a scheme supplied when there is none.
+         */
+        fun normaliseHost(typed: String): String? {
+            val trimmed = typed.trim()
+            if (trimmed.isEmpty()) return null
+            return hostOf(if ("://" in trimmed) trimmed else "https://$trimmed")
+        }
+
+        /**
          * The host a remote URL's credential belongs to, or null.
          *
          * Lowercased because hosts are case-insensitive and a token stored for

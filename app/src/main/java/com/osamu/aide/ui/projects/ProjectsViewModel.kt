@@ -20,6 +20,9 @@ import com.osamu.aide.vcs.git.GitProgress
 import com.osamu.aide.vcs.git.GitWorkspace
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import com.osamu.aide.core.common.DiskUsage
 import java.io.File
 
 data class ProjectsUiState(
@@ -56,6 +59,17 @@ class ProjectsViewModel(
     /** Held so [cancelClone] has something to cancel. */
     private var cloneJob: Job? = null
 
+    /**
+     * What [sizeOf] has measured since the last reload.
+     *
+     * **Above `init`, and it has to be.** `init` reloads, and made on the main
+     * thread -- as composition makes it -- `viewModelScope`'s `Main.immediate`
+     * runs that reload inside the constructor, before any property declared
+     * below has been assigned. Declared further down, this was still null, and
+     * the app crashed on its first screen. `ProjectsCloneTest`.
+     */
+    private val sizes = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
     init {
         refresh()
     }
@@ -63,6 +77,18 @@ class ProjectsViewModel(
     fun refresh() {
         viewModelScope.launch { reload() }
     }
+
+    /**
+     * The bytes a project occupies, measured once per reload.
+     *
+     * **Kept here, not measured by the card.** Each card walked its whole tree
+     * -- `.git`, build output, `node_modules` -- every time the list scrolled
+     * it back into view, on the IO pool, over and over for a large clone; and
+     * the walk followed symlinks, so a link back to an ancestor never ended.
+     */
+    suspend fun sizeOf(project: Project): Long = sizes[project.rootDir.absolutePath]
+        ?: withContext(Dispatchers.IO) { DiskUsage.sizeOf(project.rootDir) }
+            .also { sizes[project.rootDir.absolutePath] = it }
 
     fun setSearchQuery(query: String) {
         _state.update {
@@ -101,6 +127,8 @@ class ProjectsViewModel(
      * a repository with no Android module failed completely silently.
      */
     private suspend fun reload() {
+        // Measured again after a reload: a project may have grown since.
+        sizes.clear()
         _state.update { it.copy(isLoading = true) }
         when (val result = repository.listProjects()) {
             is AppResult.Success -> _state.update {

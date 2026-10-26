@@ -1,7 +1,7 @@
 package com.osamu.aide.toolchain.manager
 
+import com.osamu.aide.core.common.DiskUsage
 import java.io.File
-import java.nio.file.Files
 
 /**
  * Where installed components live, and what is already there.
@@ -91,24 +91,8 @@ class ToolchainStorage(private val root: File) {
         File(root, entry.id + DOWNLOAD_SUFFIX).delete()
     }
 
-    /**
-     * Bytes under [file], **not following symlinks**.
-     *
-     * `File.walkTopDown()` follows them, and every toolchain here is full of
-     * them: Node ships `bin/npm` pointing into `lib/node_modules`, mono's
-     * `bin/mono` points at `mono-sgen`. Walking through counted Node at 184 MB
-     * where `du` said 119 -- a 55 % overstatement on the one number this screen
-     * exists to report. Following them also risks a cycle, which would hang the
-     * measurement rather than exaggerate it.
-     *
-     * A symlink contributes nothing: the bytes it points at are already counted
-     * where they live, or belong to something else entirely.
-     */
-    private fun sizeOf(file: File): Long = when {
-        Files.isSymbolicLink(file.toPath()) -> 0
-        file.isFile -> file.length()
-        else -> file.listFiles().orEmpty().sumOf { sizeOf(it) }
-    }
+    /** Symlink-safe; see [DiskUsage.sizeOf] for why that matters here. */
+    private fun sizeOf(file: File): Long = DiskUsage.sizeOf(file)
 
     private companion object {
         const val DOWNLOAD_SUFFIX = ".download"
