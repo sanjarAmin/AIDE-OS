@@ -143,7 +143,10 @@ fun TerminalPanel(
                 .background(MaterialTheme.colorScheme.surfaceContainerLowest)
                 .border(
                     1.dp,
-                    MaterialTheme.colorScheme.outlineVariant,
+                    // `outline` faded, not `outlineVariant`: that is #1E2838 on
+                    // a #0B0E14 page and, a hairline on a phone, draws nothing
+                    // -- the boundary this comment is about. CLAUDE.md, palette.
+                    MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
                     RoundedCornerShape(8.dp),
                 )
                 .padding(8.dp)
@@ -169,12 +172,11 @@ fun TerminalPanel(
 
         when (val shell = state.state) {
             is com.osamu.aide.terminal.TerminalState.Exited ->
-                ExitedRow(shell.status, actions.restart)
-            is com.osamu.aide.terminal.TerminalState.Failed -> Text(
-                text = shell.reason,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-            )
+                StoppedRow(exitMessage(shell.status), isError = false, onRestart = actions.restart)
+            // Restart here too. A shell that failed to start was a dead end:
+            // the reason, and no way back short of leaving the project.
+            is com.osamu.aide.terminal.TerminalState.Failed ->
+                StoppedRow(shell.reason, isError = true, onRestart = actions.restart)
             else -> Unit
         }
 
@@ -365,32 +367,33 @@ private fun Arrow(
     ) { Icon(icon, contentDescription = null) }
 }
 
+// 128 + signal is how a shell reports being killed, and it means something
+// different from exiting with a status.
+private fun exitMessage(status: Int): String = if (status > 128) {
+    "The shell was killed by signal ${status - 128}."
+} else {
+    "The shell exited with status $status."
+}
+
+/** Why there is no shell, beside the way to get one back. */
 @Composable
-private fun ExitedRow(status: Int, onRestart: () -> Unit) {
+private fun StoppedRow(message: String, isError: Boolean, onRestart: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Text(
-            // 128 + signal is how a shell reports being killed, and it means
-            // something different from exiting with a status.
-            text = if (status > 128) {
-                "The shell was killed by signal ${status - 128}."
-            } else {
-                "The shell exited with status $status."
-            },
+            text = message,
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
             // Weighted because the row has the shape that keeps breaking here
             // -- a variable-length label beside the control that matters, and
-            // Restart is the only way back from a dead shell. **It was not
-            // broken.** Measured at 320 dp, the narrowest width any phone
-            // reports: the button is laid out identically with the weight and
-            // without it, because both messages this row can carry are short
-            // and fixed. The weight is the right idiom and costs nothing; the
-            // test that would have pinned it was deleted rather than kept as
-            // one that cannot fail.
+            // Restart is the only way back from a dead shell. While the row
+            // carried only the two exit messages, short and fixed, the weight
+            // changed nothing at 320 dp. **Now it is load-bearing:** a start
+            // failure's reason is as long as its exception, and unweighted it
+            // would take the row and squeeze Restart out of it.
             modifier = Modifier.weight(1f),
         )
         TextButton(

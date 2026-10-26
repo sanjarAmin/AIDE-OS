@@ -16,15 +16,22 @@ import java.io.File
  * A field rather than a re-run, because `read_build_errors` exists precisely so
  * the assistant can look at what the user is already looking at without
  * spending a minute of the user's battery reproducing it.
+ *
+ * **One for the app, recorded by both kinds of build.** It used to belong to
+ * the assistant, and only its own run_build wrote it -- so after the user
+ * tapped Build and asked "why did that fail?", read_build_errors said nothing
+ * had been built, and the model re-ran the build the tool exists to avoid.
+ * Kept per project, so one project's errors are never another's answer.
  */
 class LastBuild {
     @Volatile
-    var summary: String? = null
-        private set
+    private var last: Pair<File, String>? = null
 
-    fun record(text: String) {
-        summary = text
+    fun record(projectRoot: File, summary: String) {
+        last = projectRoot to summary
     }
+
+    fun summaryFor(projectRoot: File): String? = last?.takeIf { it.first == projectRoot }?.second
 }
 
 /**
@@ -69,7 +76,7 @@ fun buildTools(
                 ProjectFiles.Outcome.Refused("No project is open, so there is nothing to build.")
             } else {
                 val summary = runBuild(target)
-                lastBuild.record(summary)
+                lastBuild.record(target.rootDir, summary)
                 ProjectFiles.Outcome.Ok(summary)
             }
         },
@@ -84,7 +91,7 @@ fun buildTools(
         parameters = emptyMap(),
         required = emptyList(),
         handler = {
-            lastBuild.summary?.let(ProjectFiles.Outcome::Ok)
+            project()?.let { lastBuild.summaryFor(it.rootDir) }?.let(ProjectFiles.Outcome::Ok)
                 ?: ProjectFiles.Outcome.Refused(
                     "Nothing has been built yet in this session. Use run_build first.",
                 )
@@ -145,10 +152,7 @@ internal fun List<BuildEvent>.summarise(projectRoot: File): String {
 }
 
 private fun Diagnostic.forModel(projectRoot: File): String = buildString {
-    val where = file?.let { candidate ->
-        val relative = runCatching { candidate.relativeTo(projectRoot).path }.getOrNull()
-        if (relative.isNullOrBlank() || relative.startsWith("..")) candidate.name else relative
-    }
+    val where = file?.relativeToProject(projectRoot)
 
     where?.let { append(it) }
     if (line != Diagnostic.UNKNOWN) append(':').append(line)

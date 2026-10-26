@@ -132,4 +132,58 @@ class CodeSearchToolsTest {
         val missingText = (missingOutcome as ProjectFiles.Outcome.Ok).content
         assertTrue("Must report no definitions found", "No definitions found" in missingText)
     }
+
+    /**
+     * The path goes through ProjectFiles like every other tool's. Joined on
+     * directly, `../` searched outside the project without asking, and the XML
+     * pattern quoted whole lines of the app's shared_prefs back to the model.
+     */
+    @Test
+    fun a_path_outside_the_project_is_refused() = runTest {
+        val outcome = toolset().execute(
+            name = "search_definitions",
+            input = mapOf("query" to "url", "path" to "../"),
+        )
+
+        assertTrue(outcome.toString(), outcome is ProjectFiles.Outcome.Refused)
+    }
+
+    /** A source package called `build` is source; only a build script beside it makes it output. */
+    @Test
+    fun a_package_called_build_is_searched() = runTest {
+        File(temp.newFolder("src", "build"), "BuildService.java")
+            .writeText("public class BuildService {}\n")
+
+        val text = (toolset().execute("search_definitions", mapOf("query" to "BuildService")) as ProjectFiles.Outcome.Ok).content
+
+        assertTrue(text, "src/build/BuildService.java" in text)
+    }
+
+    /** Both are template languages, and neither was searched at all. */
+    @Test
+    fun python_and_csharp_are_searched() = runTest {
+        File(temp.root, "main.py").writeText("def greet(name):\n    return name\n")
+        File(temp.root, "Program.cs").writeText("class Program { static void Main() {} }\n")
+
+        val python = (toolset().execute("search_definitions", mapOf("query" to "greet")) as ProjectFiles.Outcome.Ok).content
+        val csharp = (toolset().execute("search_definitions", mapOf("query" to "Program")) as ProjectFiles.Outcome.Ok).content
+
+        assertTrue(python, "main.py" in python)
+        assertTrue(csharp, "Program.cs" in csharp)
+    }
+
+    /**
+     * A link back to an ancestor is not followed. walkTopDown followed it, and
+     * the walk only ended when the path grew too long to open.
+     */
+    @Test(timeout = 10_000)
+    fun a_symlink_to_an_ancestor_does_not_loop() = runTest {
+        val src = temp.newFolder("src")
+        File(src, "A.java").writeText("public class A {}\n")
+        java.nio.file.Files.createSymbolicLink(File(src, "loop").toPath(), temp.root.toPath())
+
+        val text = (toolset().execute("search_definitions", mapOf("query" to "A")) as ProjectFiles.Outcome.Ok).content
+
+        assertEquals(text, 1, text.lines().count { "A.java" in it })
+    }
 }

@@ -144,6 +144,44 @@ class ShellToolsDeviceTest {
     }
 
     /**
+     * **A child that outlives the shell is ended with it.** Only `sh` used to
+     * be killed: a server it started held the output pipes open, the readers
+     * never saw end-of-file, and the turn hung until the child chose to exit --
+     * ten minutes, here. `sleep` directly, as above, never showed it, because
+     * the shell execs a lone command and there is no child.
+     */
+    @Test
+    fun a_child_left_running_is_stopped_with_the_shell() {
+        val started = System.currentTimeMillis()
+        val outcome = run("sleep 607 & echo started")
+        val elapsed = System.currentTimeMillis() - started
+
+        assertTrue("took ${elapsed}ms: the turn waited on the child", elapsed < 60_000)
+        assertTrue("came back as $outcome", outcome is ProjectFiles.Outcome.Refused)
+
+        fun survivors() = File("/proc").listFiles { f -> f.name.all(Char::isDigit) }.orEmpty().filter {
+            runCatching { File(it, "cmdline").readText().replace('\u0000', ' ').trim() == "sleep 607" }
+                .getOrDefault(false)
+        }
+        val deadline = System.currentTimeMillis() + 5_000
+        while (survivors().isNotEmpty() && System.currentTimeMillis() < deadline) Thread.sleep(100)
+        assertTrue("the child is still running: ${survivors().map { it.name }}", survivors().isEmpty())
+    }
+
+    /**
+     * Cut short is not failed. Closing the pipe at the limit SIGPIPEs the
+     * command, and its exit code 141 was reported as "Command failed".
+     */
+    @Test
+    fun output_cut_at_the_limit_is_not_reported_as_a_failure() {
+        val outcome = run("yes abcdefghij")
+
+        val content = (outcome as ProjectFiles.Outcome.Ok).content
+        assertFalse("reported as a failure: ${content.take(80)}", content.startsWith("Command failed"))
+        assertTrue("no truncation notice: ${content.takeLast(120)}", content.contains("truncated"))
+    }
+
+    /**
      * **The gate is real on the device too.**
      *
      * `ShellToolsTest` asserts this against a fake runner, where "refused"

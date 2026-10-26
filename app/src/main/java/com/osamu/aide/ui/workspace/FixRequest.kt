@@ -62,8 +62,17 @@ fun fixRequest(diagnostic: Diagnostic, projectRoot: File): String {
  * The path as the assistant's tools expect it, or the plain name if the file is
  * somehow outside the project -- which is better than an absolute path the
  * tools will refuse.
+ *
+ * **Already relative is the usual case, not the odd one.** Every diagnostic
+ * producer relativises through `ProjectPaths`, and `relativeTo` throws on a
+ * relative path against an absolute root -- so the fallback turned every real
+ * diagnostic into a bare name: `Main.java:12`, which `read_file` cannot find,
+ * and `strings.xml` with no way to tell `values` from `values-night`. Only the
+ * tests, which built diagnostics with absolute paths, ever reached the
+ * `relativeTo`.
  */
 internal fun File.relativeToProject(root: File): String {
+    if (!isAbsolute) return path
     val relative = runCatching { relativeTo(root).path }.getOrNull()
     return if (relative.isNullOrBlank() || relative.startsWith("..")) name else relative
 }

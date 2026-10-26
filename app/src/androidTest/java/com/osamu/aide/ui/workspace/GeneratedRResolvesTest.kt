@@ -25,7 +25,7 @@ import java.io.File
  * definition of that root with a comment saying the two must agree.
  *
  * **Nothing checked that they do.** Driven on a device: build a template
- * project, watch `R.java` appear under `cache/builds/<name>/generated/java`,
+ * project, watch `R.java` appear under `cache/builds/<project>/generated/java`,
  * and the red underline on `R.string.greeting` stays -- through a re-analysis,
  * and through a restart of the app that builds a fresh compiler.
  */
@@ -78,7 +78,7 @@ class GeneratedRResolvesTest {
         )
 
         // What aapt2 writes, where ProjectBuilder writes it.
-        val generated = File(buildOutput, "${project.name}/generated/java/com/example/rtwo")
+        val generated = File(buildOutput, "${buildDirectoryName(project)}/generated/java/com/example/rtwo")
         generated.mkdirs()
         File(generated, "R.java").writeText(
             """
@@ -112,7 +112,7 @@ class GeneratedRResolvesTest {
             "no android.jar installed; javac cannot run at all",
             ToolchainManager(context, dispatchers).androidJar() != null,
         )
-        File(buildOutput, "${project.name}/generated/java").deleteRecursively()
+        File(buildOutput, "${buildDirectoryName(project)}/generated/java").deleteRecursively()
 
         val diagnostics = runBlocking {
             services.serviceFor(source, project)!!.diagnostics(source, source.readText())

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
@@ -94,7 +95,10 @@ fun DebugPanel(
     buildStatus: String? = null,
 ) {
     val session = state.session
-    val building = session == DebugState.Idle && buildStatus != null
+    // Ended counts as no session: the controller never returns to Idle, so a
+    // second Debug tap's build -- and its failure -- went unshown beneath the
+    // first session's "Detached", with the Debug button gone meanwhile.
+    val building = buildStatus != null && (session == DebugState.Idle || session is DebugState.Ended)
     var variableFilter by remember { mutableStateOf("") }
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(
@@ -376,7 +380,10 @@ private fun LazyListScope.stopped(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(
-                    if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
+                    // primaryContainer, as the file tree marks a selection.
+                    // secondaryContainer is green in this palette and read as
+                    // "succeeded" -- CLAUDE.md's palette entry.
+                    if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
                     RoundedCornerShape(6.dp),
                 )
                 .clickable { actions.selectFrame(index) }
@@ -450,11 +457,17 @@ private fun VariableRow(variable: VariableView, depth: Int, open: Boolean, actio
                 )
             }
         }
+        // **Name and type are capped, so the value always has room.** Both
+        // were unweighted and never ellipsized: a Row measures those first and
+        // gives the weighted value what is left, and a long field name beside
+        // a long generic type left it nothing -- the one thing the row is for.
         Text(
             text = variable.name,
             style = CodeTextStyle,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = 128.dp),
         )
         Text(
             text = " = ",
@@ -475,7 +488,8 @@ private fun VariableRow(variable: VariableView, depth: Int, open: Boolean, actio
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
-            modifier = Modifier.padding(start = 6.dp, end = 4.dp),
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(start = 6.dp, end = 4.dp).widthIn(max = 88.dp),
         )
     }
 }

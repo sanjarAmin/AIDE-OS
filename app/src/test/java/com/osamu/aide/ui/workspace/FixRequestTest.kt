@@ -38,6 +38,19 @@ class FixRequestTest {
         assertFalse("an absolute path would be refused by the tools:\n$request", "/data/" in request)
     }
 
+    /**
+     * The shape a real diagnostic has: every producer relativises through
+     * `ProjectPaths`, so the file arrives relative. `relativeTo` throws on that,
+     * and the path came out as a bare `Main.java` the tools could not find --
+     * while the case above, absolute and never produced, passed.
+     */
+    @Test
+    fun a_path_the_engine_already_made_relative_is_kept_whole() {
+        val request = fixRequest(diagnostic(file = File("app/src/main/java/Main.java")), root)
+
+        assertTrue(request, "app/src/main/java/Main.java:12:5" in request)
+    }
+
     @Test
     fun the_error_text_is_carried_verbatim() {
         assertTrue("cannot find symbol: class Widget" in fixRequest(diagnostic(), root))

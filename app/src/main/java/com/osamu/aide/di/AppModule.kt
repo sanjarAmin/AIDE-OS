@@ -28,6 +28,7 @@ import com.osamu.aide.vcs.git.GitCredentialStore
 import com.osamu.aide.vcs.git.GitIdentityStore
 import com.osamu.aide.vcs.git.GitWorkspace
 import com.osamu.aide.ui.workspace.AssistantViewModel
+import com.osamu.aide.ui.workspace.LastBuild
 import com.osamu.aide.ui.workspace.KotlinCompilerSource
 import com.osamu.aide.ui.workspace.GitViewModel
 import com.osamu.aide.ui.workspace.LanguageServices
@@ -184,18 +185,27 @@ val appModule = module {
             git = getOrNull(),
             workspaceRoot = getOrNull(),
             chatHistoryRoot = get(named(CHAT_HISTORY_ROOT)),
+            lastBuild = get(),
         )
     }
     viewModel { ProjectsViewModel(get(), get(), get(), get(), get()) }
     viewModel { GitViewModel(get(), get(), get()) }
     viewModel { TerminalViewModel(get()) }
     // Its own, like the terminal's: it owns a running `logcat` child process.
-    viewModel { LogcatViewModel(get()) }
+    // Packages are visible to it only through the manifest's launcher
+    // <queries>, which is every app it builds.
+    viewModel {
+        val packages = get<Context>().packageManager
+        LogcatViewModel(get(), packageOf = packages::getNameForUid)
+    }
     // Its own, like the terminal's: it owns a socket into another app and may
     // hold that app's threads suspended, and both have to be let go.
     viewModel { DebugViewModel(get(), get()) }
     viewModel { BenchmarkViewModel(get(), get(), get()) }
-    viewModel { WorkspaceViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    // One for the app: the Build button records into it and the assistant's
+    // read_build_errors reads from it. BuildTools.LastBuild.
+    single { LastBuild() }
+    viewModel { WorkspaceViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), lastBuild = get()) }
 }
 
 /**

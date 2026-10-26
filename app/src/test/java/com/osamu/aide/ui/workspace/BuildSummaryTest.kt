@@ -32,6 +32,29 @@ class BuildSummaryTest {
         column = 1,
     )
 
+    /**
+     * Relative, as the engine reports it. `relativeTo` threw on this shape and
+     * the summary named `values/strings.xml` and `values-night/strings.xml`
+     * both as `strings.xml`.
+     */
+    @Test
+    fun a_path_the_engine_already_made_relative_is_kept_whole() {
+        val summary = listOf<BuildEvent>(
+            BuildEvent.Finished(
+                BuildResult.Failure(
+                    stage = BuildStage.COMPILE_JAVA,
+                    message = "1 error",
+                    durationMillis = 900,
+                    diagnostics = listOf(
+                        Diagnostic(DiagnosticSeverity.ERROR, "bad colour", File("src/main/res/values-night/strings.xml"), 4, 1),
+                    ),
+                ),
+            ),
+        ).summarise(root)
+
+        assertTrue(summary, "src/main/res/values-night/strings.xml:4" in summary)
+    }
+
     @Test
     fun a_successful_build_says_so_in_one_line() {
         val summary = listOf<BuildEvent>(

@@ -29,7 +29,6 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -97,6 +96,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.platform.LocalContext
@@ -181,7 +182,11 @@ fun WorkspaceScreen(
         onPauseOrDispose { }
     }
     var isChatOpen by remember { mutableStateOf(false) }
-    var sideToolFocus by remember { mutableStateOf<SideTool?>(null) }
+    // Bumped to bring the AI tab forward, as debugFocus is for Debug. A
+    // counter, not the tab: set to ASSISTANT a second time the value did not
+    // change, the effect did not run, and a Fix tapped while Git was showing
+    // sent the request with no sign of it.
+    var assistantFocus by remember { mutableStateOf(0) }
 
     val fixScope = rememberCoroutineScope()
 
@@ -387,7 +392,7 @@ fun WorkspaceScreen(
 
         val openAssistant: () -> Unit = {
             if (mode == PaneMode.TRIPLE) {
-                sideToolFocus = SideTool.ASSISTANT
+                assistantFocus++
             } else {
                 isChatOpen = true
             }
@@ -404,35 +409,6 @@ fun WorkspaceScreen(
         val body: @Composable () -> Unit = {
             Scaffold(
                 topBar = {
-                    val infiniteTransition = rememberInfiniteTransition(label = "workspacePulse")
-                    val aiPulseAlpha by infiniteTransition.animateFloat(
-                        initialValue = 0.25f,
-                        targetValue = 0.85f,
-                        animationSpec = infiniteRepeatable(
-                            animation = tween(900),
-                            repeatMode = RepeatMode.Reverse,
-                        ),
-                        label = "aiPulseAlpha",
-                    )
-                    val buildPulseScale by infiniteTransition.animateFloat(
-                        initialValue = 0.92f,
-                        targetValue = 1.14f,
-                        animationSpec = infiniteRepeatable(
-                            animation = tween(800),
-                            repeatMode = RepeatMode.Reverse,
-                        ),
-                        label = "buildPulseScale",
-                    )
-                    val buildPulseAlpha by infiniteTransition.animateFloat(
-                        initialValue = 0.2f,
-                        targetValue = 0.65f,
-                        animationSpec = infiniteRepeatable(
-                            animation = tween(800),
-                            repeatMode = RepeatMode.Reverse,
-                        ),
-                        label = "buildPulseAlpha",
-                    )
-
                     TopAppBar(
                         title = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -527,14 +503,7 @@ fun WorkspaceScreen(
                             if (inline) {
                                 Box(contentAlignment = Alignment.Center) {
                                     if (isCompleting) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(36.dp)
-                                                .background(
-                                                    MaterialTheme.colorScheme.primary.copy(alpha = aiPulseAlpha * 0.35f),
-                                                    CircleShape,
-                                                ),
-                                        )
+                                        AssistantPulse()
                                     }
                                     IconButton(onClick = openAssistant) {
                                         Icon(
@@ -582,14 +551,7 @@ fun WorkspaceScreen(
                                     // inline completion in progress would show
                                     // nowhere.
                                     if (isCompleting) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(36.dp)
-                                                .background(
-                                                    MaterialTheme.colorScheme.primary.copy(alpha = aiPulseAlpha * 0.35f),
-                                                    CircleShape,
-                                                ),
-                                        )
+                                        AssistantPulse()
                                     }
                                     IconButton(onClick = { menuOpen = true }) {
                                         Icon(Icons.Default.MoreVert, contentDescription = "More actions")
@@ -646,14 +608,12 @@ fun WorkspaceScreen(
                             }
                             Box(contentAlignment = Alignment.Center) {
                                 if (state.build.isRunning) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(38.dp)
-                                            .scale(buildPulseScale)
-                                            .background(
-                                                MaterialTheme.colorScheme.error.copy(alpha = buildPulseAlpha * 0.35f),
-                                                CircleShape,
-                                            ),
+                                    PulseHalo(
+                                        color = MaterialTheme.colorScheme.error.copy(alpha = 0.35f),
+                                        size = 38.dp,
+                                        alphas = 0.2f to 0.65f,
+                                        periodMillis = 800,
+                                        scales = 0.92f to 1.14f,
                                     )
                                     IconButton(onClick = viewModel::stopBuild) {
                                         Icon(
@@ -745,7 +705,7 @@ fun WorkspaceScreen(
                                     chatActions = chatActions,
                                     onInsertCode = editorController::insert,
                                     activeFileName = state.selectedFile?.name,
-                                    sideToolFocus = sideToolFocus,
+                                    assistantFocus = assistantFocus,
                                     projectRoot = state.projectRoot,
                                     applicationId = state.projectApplicationId,
                                     onDiagnosticClick = viewModel::openDiagnostic,
@@ -1594,7 +1554,7 @@ private fun SideToolTabs(
     chatActions: ChatActions,
     onInsertCode: (String) -> Unit,
     activeFileName: String?,
-    sideToolFocus: SideTool?,
+    assistantFocus: Int,
     projectRoot: File?,
     applicationId: String?,
     onDiagnosticClick: (Diagnostic) -> Unit,
@@ -1604,8 +1564,8 @@ private fun SideToolTabs(
     LaunchedEffect(debugFocus) {
         if (debugFocus > 0) selected = SideTool.DEBUG
     }
-    LaunchedEffect(sideToolFocus) {
-        sideToolFocus?.let { selected = it }
+    LaunchedEffect(assistantFocus) {
+        if (assistantFocus > 0) selected = SideTool.ASSISTANT
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -1687,4 +1647,46 @@ internal object ToolbarLayout {
 
     fun fitsInline(widthDp: Int, primary: Int, secondary: Int): Boolean =
         CHROME_DP + (primary + secondary) * BUTTON_DP + MIN_TITLE_DP <= widthDp
+}
+
+/** The halo behind the assistant's button while an inline completion runs. */
+@Composable
+private fun AssistantPulse() = PulseHalo(
+    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
+    size = 36.dp,
+    alphas = 0.25f to 0.85f,
+    periodMillis = 900,
+)
+
+/**
+ * A disc that pulses behind a busy toolbar button.
+ *
+ * **Its own composable, so it exists only while something is busy.** The three
+ * infinite transitions it replaces sat at the top of the toolbar, where they
+ * ran a frame every sixteen milliseconds for as long as the workspace was open,
+ * busy or not -- and, read there, recomposed the whole bar each time. Read in
+ * `graphicsLayer` here, they cost a redraw of the disc and nothing more.
+ */
+@Composable
+private fun PulseHalo(
+    color: Color,
+    size: Dp,
+    alphas: Pair<Float, Float>,
+    periodMillis: Int,
+    scales: Pair<Float, Float> = 1f to 1f,
+) {
+    val transition = rememberInfiniteTransition(label = "pulseHalo")
+    val spec = infiniteRepeatable<Float>(animation = tween(periodMillis), repeatMode = RepeatMode.Reverse)
+    val alpha by transition.animateFloat(alphas.first, alphas.second, spec, label = "alpha")
+    val scale by transition.animateFloat(scales.first, scales.second, spec, label = "scale")
+    Box(
+        modifier = Modifier
+            .size(size)
+            .graphicsLayer {
+                this.alpha = alpha
+                scaleX = scale
+                scaleY = scale
+            }
+            .background(color, CircleShape),
+    )
 }

@@ -538,7 +538,7 @@ class WorkspaceViewModelTest {
 
         val generated = File(
             File(context.cacheDir, "builds-test"),
-            "${project.rootDir.name}/generated/java/com/example/demo/R.java",
+            "${buildDirectoryName(project.rootDir)}/generated/java/com/example/demo/R.java",
         )
         assertTrue("aapt2 wrote no R.java at $generated", generated.isFile)
 

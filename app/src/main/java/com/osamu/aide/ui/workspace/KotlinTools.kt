@@ -144,8 +144,10 @@ private inline fun withKotlinFile(
         return ProjectFiles.Outcome.Refused("No project is open, so there is nothing to check.")
     }
 
-    val file = File(project.rootDir, path)
-    if (!file.isFile) return ProjectFiles.Outcome.Refused("$path is not a file in this project.")
+    // Through ProjectFiles, as read_file's path is: joined on directly, `../`
+    // reached any .kt file the app can read, in tools that run without asking.
+    val file = ProjectFiles(project.rootDir).resolve(path)
+    if (file == null || !file.isFile) return ProjectFiles.Outcome.Refused("$path is not a file in this project.")
     if (file.extension != "kt" && file.extension != "kts") {
         return ProjectFiles.Outcome.Refused("$path is not a Kotlin file.")
     }

@@ -54,6 +54,31 @@ class ProjectDependenciesTest {
         )
     }
 
+    /**
+     * A resolution that failed is tried again.
+     *
+     * It was cached like a success, so a project opened offline kept an empty
+     * classpath after the network came back, until `aide.json` changed or the
+     * app restarted. A coordinate nobody publishes fails online and offline
+     * alike, so this needs no control over the network; "Resolving" is said
+     * only by an attempt, never by a cache hit.
+     */
+    @Test
+    fun a_failed_resolution_is_not_kept() = runTest(timeout = 5.minutes) {
+        val missing = project.copy(dependencies = listOf("com.example.aideos.nonexistent:nothing:0.0.1"))
+
+        val first = mutableListOf<String>()
+        dependencies.inputsFor(missing) { first += it }
+        val second = mutableListOf<String>()
+        dependencies.inputsFor(missing) { second += it }
+
+        assertTrue(
+            "the first resolve did not fail, so this proves nothing: $first",
+            first.any { "Unresolved" in it || "Could not resolve" in it },
+        )
+        assertTrue("the failure was kept, and nothing was tried: $second", second.any { it.startsWith("Resolving") })
+    }
+
     @Test
     fun every_input_the_engine_needs_is_carried() = runTest(timeout = 5.minutes) {
         val inputs = dependencies.inputsFor(project)

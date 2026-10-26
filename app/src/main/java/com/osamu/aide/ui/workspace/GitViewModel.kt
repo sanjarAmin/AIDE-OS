@@ -21,6 +21,15 @@ import java.io.File
 data class GitUiState(
     /** Null until [open] has looked; false means the project is not in a repository. */
     val isRepository: Boolean? = null,
+    /**
+     * Why the repository the project is in could not be opened, or null.
+     *
+     * **Not "no repository".** Both used to be `isRepository = false`, so a
+     * clone whose `.git` was locked or damaged was described as a project
+     * "created or imported rather than cloned", with its error hidden and a
+     * Create button that would have put a second repository inside it.
+     */
+    val openFailure: String? = null,
     val branch: String? = null,
     val status: GitStatus = GitStatus(),
     val recent: List<GitCommit> = emptyList(),
@@ -126,7 +135,7 @@ class GitViewModel(
                     _state.update { it.copy(isRepository = true) }
                 }
                 is AppResult.Failure -> _state.update {
-                    it.copy(isRepository = false, errorMessage = opened.error.message)
+                    it.copy(isRepository = false, openFailure = "${root.path}: ${opened.error.message}")
                 }
             }
         }
@@ -147,7 +156,9 @@ class GitViewModel(
      */
     fun initialise() {
         val directory = projectDir ?: return
-        if (_state.value.isRepository == true || !claimBusy()) return
+        // Not inside a repository that exists and failed to open: that would
+        // nest a new one in it.
+        if (_state.value.isRepository == true || _state.value.openFailure != null || !claimBusy()) return
         viewModelScope.launch {
             when (val created = git.init(directory)) {
                 is AppResult.Success -> {

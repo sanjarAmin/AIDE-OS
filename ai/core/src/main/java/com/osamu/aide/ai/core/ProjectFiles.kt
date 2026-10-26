@@ -101,9 +101,7 @@ class ProjectFiles(private val root: File) {
         val directory = resolve(path.ifBlank { "." }) ?: return refuseOutside(path)
         if (!directory.isDirectory) return Outcome.Refused("$path is not a directory.")
 
-        val entries = directory.walkTopDown()
-            .onEnter { it == directory || !GeneratedDirectories.isGenerated(it) }
-            .filter { it.isFile }
+        val entries = GeneratedDirectories.sourceFiles(directory)
             .map { it.relativeTo(root).invariantSeparatorsPath }
             .sorted()
             .take(limit + 1)
@@ -126,9 +124,8 @@ class ProjectFiles(private val root: File) {
         val directory = resolve(path.ifBlank { "." }) ?: return refuseOutside(path)
 
         val matches = mutableListOf<String>()
-        directory.walkTopDown()
-            .onEnter { it == directory || !GeneratedDirectories.isGenerated(it) }
-            .filter { it.isFile && it.length() <= MAX_READ_BYTES }
+        GeneratedDirectories.sourceFiles(directory)
+            .filter { it.length() <= MAX_READ_BYTES }
             .forEach { file ->
                 if (matches.size >= limit) return@forEach
                 val relative = file.relativeTo(root).invariantSeparatorsPath

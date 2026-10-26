@@ -3,6 +3,7 @@ package com.osamu.aide.ui.workspace
 import com.osamu.aide.ai.core.AideTool
 import com.osamu.aide.ai.core.ProjectFiles
 import com.osamu.aide.ai.core.ToolRisk
+import com.osamu.aide.core.common.GeneratedDirectories
 import com.osamu.aide.core.fs.Project
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -13,7 +14,7 @@ import java.util.regex.Pattern
  * Symbol definition and declaration search tools for the assistant.
  *
  * Fast code intelligence across multi-language source trees (Kotlin, Java,
- * C/C++, JS/TS, XML). Finds where classes, interfaces, functions, methods, and
+ * C/C++, JS/TS, Python, C#, XML). Finds where classes, interfaces, functions, methods, and
  * variables are declared without needing exact line/column offsets.
  */
 fun codeSearchTools(
@@ -23,7 +24,7 @@ fun codeSearchTools(
         name = "search_definitions",
         description =
             "Search for declarations and definitions of classes, interfaces, functions, " +
-                "methods, and variables across project source files (Kotlin, Java, C/C++, JS/TS). " +
+                "methods, and variables across project source files (Kotlin, Java, C/C++, JS/TS, Python, C#). " +
                 "Returns file path, line number, and matching code snippet. Use this when you want " +
                 "to find where a symbol is declared rather than searching raw text with grep.",
         risk = ToolRisk.READ_ONLY,
@@ -49,7 +50,18 @@ fun codeSearchTools(
                 )
 
             val subPath = input["path"]?.trim().orEmpty()
-            val searchDir = if (subPath.isEmpty()) target.rootDir else File(target.rootDir, subPath)
+            // Through ProjectFiles, like every other tool's path. Joined on
+            // directly, `../..` walked out of the project -- in a tool that runs
+            // without asking -- and the XML pattern quoted whole lines of the
+            // app's own shared_prefs back to the model.
+            val searchDir = if (subPath.isEmpty()) {
+                target.rootDir
+            } else {
+                ProjectFiles(target.rootDir).resolve(subPath)
+                    ?: return@AideTool ProjectFiles.Outcome.Refused(
+                        "'$subPath' is not inside this project. Give a path relative to its root.",
+                    )
+            }
             if (!searchDir.exists()) {
                 return@AideTool ProjectFiles.Outcome.Refused("Directory '$subPath' does not exist in this project.")
             }
@@ -60,7 +72,9 @@ fun codeSearchTools(
 )
 
 private val SOURCE_EXTENSIONS = setOf(
-    "kt", "kts", "java", "c", "cpp", "cc", "cxx", "h", "hpp", "js", "jsx", "ts", "tsx", "xml",
+    // Every language a template can create. Python and C# were missing, so
+    // their projects answered "No definitions found" for code that was there.
+    "kt", "kts", "java", "c", "cpp", "cc", "cxx", "h", "hpp", "js", "jsx", "ts", "tsx", "xml", "py", "cs",
 )
 
 private const val MAX_MATCHES = 30
@@ -84,12 +98,10 @@ internal suspend fun searchDefinitions(
 
     val matches = mutableListOf<String>()
 
-    searchDir.walkTopDown()
-        .onEnter { dir ->
-            val name = dir.name
-            name != "build" && name != ".git" && name != ".gradle" && name != "node_modules" && !name.startsWith(".")
-        }
-        .filter { it.isFile && it.extension in SOURCE_EXTENSIONS }
+    // The one walk rule: a `build` package is source, and symlinks are not
+    // followed. See GeneratedDirectories.sourceFiles.
+    GeneratedDirectories.sourceFiles(searchDir)
+        .filter { it.extension in SOURCE_EXTENSIONS }
         .forEach { file ->
             if (matches.size >= MAX_MATCHES) return@forEach
             val relPath = file.relativeTo(projectRoot).path

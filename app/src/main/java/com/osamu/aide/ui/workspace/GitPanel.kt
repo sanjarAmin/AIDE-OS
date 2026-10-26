@@ -87,7 +87,8 @@ fun GitPanel(
 
     when (state.isRepository) {
         null -> Text("Looking for a repository…", style = MaterialTheme.typography.bodySmall)
-        false -> NotARepository(modifier, state.isBusy, actions.initialise)
+        false -> state.openFailure?.let { UnopenableRepository(modifier, it) }
+            ?: NotARepository(modifier, state.isBusy, actions.initialise)
         true -> Column(modifier.fillMaxSize()) {
             Header(
                 state = state,
@@ -575,6 +576,25 @@ private fun BranchDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
+}
+
+@Composable
+private fun UnopenableRepository(modifier: Modifier, failure: String) {
+    Column(modifier.fillMaxWidth().padding(8.dp)) {
+        Text(
+            text = "The repository could not be opened",
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+        Text(
+            text = "$failure\n\nNothing here will change it. A stale lock, or a " +
+                "repository damaged by an interrupted operation, can be repaired " +
+                "with git on a computer; reopen the project afterwards.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp).semantics { contentDescription = "Repository error" },
+        )
+    }
 }
 
 @Composable

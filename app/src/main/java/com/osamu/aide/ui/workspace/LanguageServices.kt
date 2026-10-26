@@ -162,11 +162,12 @@ class LanguageServices(
      * Where a build writes `R.java` for [projectRoot].
      *
      * Kept in step with ProjectBuilder.outputFor and BuildWorkspace.generatedJava
-     * by construction, not by comment: both derive from the project directory
-     * name under the same root, which is why that root is injected rather than
+     * by construction, not by comment: both go through [buildDirectoryName]
+     * under the same root, which is why that root is injected rather than
      * guessed.
      */
-    private fun generatedJavaOf(projectRoot: File) = File(buildOutputRoot, "${projectRoot.name}/generated/java")
+    private fun generatedJavaOf(projectRoot: File) =
+        File(buildOutputRoot, "${buildDirectoryName(projectRoot)}/generated/java")
 
     /**
      * The service that handles [file], or null if nothing here does.

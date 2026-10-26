@@ -333,6 +333,8 @@ class WorkspaceViewModel(
     private val languageServices: LanguageServices,
     private val languages: EditorLanguages,
     private val dependencies: ProjectDependencies,
+    /** Shared with the assistant, so read_build_errors sees a tapped Build. */
+    private val lastBuild: LastBuild = LastBuild(),
 ) : ViewModel() {
 
     private val editorContexts = EditorContexts(dependencies)
@@ -1707,6 +1709,9 @@ class WorkspaceViewModel(
                     },
                 ),
             )
+        }
+        _state.value.projectRoot?.let { root ->
+            lastBuild.record(root, listOf(BuildEvent.Finished(result)).summarise(root))
         }
         if (result !is BuildResult.Success) debugPort = null
         if (result is BuildResult.Success) {

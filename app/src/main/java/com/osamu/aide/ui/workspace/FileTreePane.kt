@@ -376,7 +376,7 @@ private fun FileTreeRow(
 ) {
     val iconInfo = FileIcons.infoFor(node.file, node.isDirectory, isExpanded)
     val guide = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.18f)
-    val level = (node.depth - 1).coerceIn(0, MAX_GUIDE_DEPTH)
+    val level = (node.depth - 1).coerceAtLeast(0)
     val turn by animateFloatAsState(if (isExpanded) 90f else 0f, label = "chevron")
 
     Box(
@@ -384,7 +384,7 @@ private fun FileTreeRow(
             .fillMaxWidth()
             .drawBehind {
                 repeat(level) { depth ->
-                    val x = (GUTTER_DP + depth * INDENT_DP + CHEVRON_CENTRE_DP).dp.toPx()
+                    val x = (GUTTER_DP + indentDp(depth) + CHEVRON_CENTRE_DP).dp.toPx()
                     drawLine(
                         color = guide,
                         start = Offset(x, 0f),
@@ -410,7 +410,7 @@ private fun FileTreeRow(
             },
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = (level * INDENT_DP).dp),
+                .padding(start = indentDp(level).dp),
         ) {
             Row(
                 modifier = Modifier
@@ -549,4 +549,17 @@ private fun FileTreeFooter(
 private const val GUTTER_DP = 4
 private const val INDENT_DP = 14
 private const val CHEVRON_CENTRE_DP = 12
-private const val MAX_GUIDE_DEPTH = 6
+private const val FULL_INDENT_LEVELS = 6
+private const val DEEP_INDENT_DP = 8
+
+/**
+ * How far a row at [level] is indented, and where that level's guide runs.
+ *
+ * **Every level indents.** Both were capped at six, and a Java tree passes that
+ * at once -- `src/main/java/com/example/app/ui` is seven deep -- so every file
+ * below the cap lined up with its own folder and the tree stopped saying what
+ * was inside what. Past [FULL_INDENT_LEVELS] the step narrows instead, so a
+ * deep package does not push its names off a phone.
+ */
+internal fun indentDp(level: Int): Int =
+    minOf(level, FULL_INDENT_LEVELS) * INDENT_DP + maxOf(0, level - FULL_INDENT_LEVELS) * DEEP_INDENT_DP

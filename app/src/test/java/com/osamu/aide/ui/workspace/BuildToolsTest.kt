@@ -3,6 +3,9 @@ package com.osamu.aide.ui.workspace
 import com.osamu.aide.ai.core.ProjectFiles
 import com.osamu.aide.ai.core.ProjectToolset
 import com.osamu.aide.ai.core.ToolRisk
+import com.osamu.aide.core.fs.BuildEngine
+import com.osamu.aide.core.fs.Project
+import com.osamu.aide.core.fs.SourceLanguage
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -32,6 +35,25 @@ class BuildToolsTest {
     )
 
     private fun toolset() = ProjectToolset(ProjectFiles(File("/nowhere")), tools)
+
+    private val demo = Project(
+        name = "Demo",
+        rootDir = File("/projects/Demo"),
+        applicationId = "com.example.demo",
+        language = SourceLanguage.JAVA,
+        engine = BuildEngine.FAST,
+        lastOpenedAt = 0L,
+    )
+
+    /** With [demo] open; still never builds. */
+    private fun openToolset() = ProjectToolset(
+        ProjectFiles(demo.rootDir),
+        buildTools(
+            runBuild = { throw AssertionError("nothing here should start a build") },
+            project = { demo },
+            lastBuild = lastBuild,
+        ),
+    )
 
     @Test
     fun both_tools_are_offered_after_the_file_tools() {
@@ -79,15 +101,31 @@ class BuildToolsTest {
         )
     }
 
+    /**
+     * Recorded by the Build button, read by the assistant: the case the tool's
+     * own description names -- "the user has just built" -- and the one that
+     * answered "Nothing has been built yet" while the assistant kept the record
+     * to itself.
+     */
     @Test
     fun a_recorded_build_can_be_read_back_without_rebuilding() = runTest {
-        lastBuild.record("The build failed during compile_java: Compilation failed")
+        lastBuild.record(demo.rootDir, "The build failed during compile_java: Compilation failed")
 
-        val outcome = toolset().execute("read_build_errors", emptyMap())
+        val outcome = openToolset().execute("read_build_errors", emptyMap())
 
         assertEquals(
             ProjectFiles.Outcome.Ok("The build failed during compile_java: Compilation failed"),
             outcome,
         )
+    }
+
+    /** Another project's errors are not this one's answer. */
+    @Test
+    fun another_projects_build_is_not_reported() = runTest {
+        lastBuild.record(File("/projects/Other"), "The build failed: elsewhere")
+
+        val outcome = openToolset().execute("read_build_errors", emptyMap())
+
+        assertTrue(outcome.toString(), outcome is ProjectFiles.Outcome.Refused)
     }
 }

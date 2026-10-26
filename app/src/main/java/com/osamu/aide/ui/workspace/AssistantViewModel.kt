@@ -65,9 +65,10 @@ class AssistantViewModel(
      * and would take the history with it.
      */
     private val chatHistoryRoot: File? = null,
+    /** The app's, which the Build button records into as well. */
+    private val lastBuild: LastBuild = LastBuild(),
 ) : ViewModel() {
 
-    private val lastBuild = LastBuild()
     private val _completing = MutableStateFlow(false)
 
     val completing: StateFlow<Boolean> = _completing

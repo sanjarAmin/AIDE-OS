@@ -6,6 +6,7 @@ import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.osamu.aide.core.common.DispatcherProvider
+import com.osamu.aide.core.common.GeneratedDirectories
 import com.osamu.aide.debug.PendingDebuggees
 import com.osamu.aide.debugger.DebugController
 import com.osamu.aide.debugger.DebugState
@@ -78,6 +79,12 @@ class DebugViewModel(
     private val controller = DebugController(controllerScope)
 
     private val breakpoints = MutableStateFlow<Set<FileBreakpoint>>(emptySet())
+    /**
+     * **Main thread only; anything off it gets a copy.** Edits and taps change
+     * it on main, and it was iterated on IO -- by [resolve] while the user typed
+     * in a file with breakpoints, and by the attach -- where a
+     * ConcurrentModificationException ends the app.
+     */
     private val keys = mutableMapOf<FileBreakpoint, SourceLine>()
     private val executionPoint = MutableStateFlow<FileBreakpoint?>(null)
     private var projectRoot: File? = null
@@ -99,7 +106,9 @@ class DebugViewModel(
             controller.state.collect { session ->
                 val stopped = session as? DebugState.Stopped
                 val source = stopped?.frame?.source
-                executionPoint.value = source?.let { withContext(dispatchers.io) { resolve(it) } }
+                val known = keys.toMap()
+                val root = projectRoot
+                executionPoint.value = source?.let { withContext(dispatchers.io) { resolve(it, known, root) } }
                 if (stopped != null && !wasStopped) {
                     controller.raiseFlag(DebuggerRequest.COME_FORWARD_FIELD)
                 }
@@ -258,10 +267,11 @@ class DebugViewModel(
             return
         }
         context.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        val placed = keys.values.toSet()
         controllerScope.launch {
             val attached = controller.attach(
                 port = port,
-                breakpoints = keys.values.toSet(),
+                breakpoints = placed,
                 gate = StartupGate(DebuggerRequest.AGENT_SIGNATURE, DebuggerRequest.RELEASE_FIELD),
             )
             if (attached) {
@@ -288,15 +298,14 @@ class DebugViewModel(
      * name and checks each one's package, since a name alone is ambiguous
      * across packages.
      */
-    private fun resolve(line: SourceLine): FileBreakpoint? {
-        keys.entries.firstOrNull { it.value.key == line.key }?.let { (breakpoint, _) ->
+    private fun resolve(line: SourceLine, known: Map<FileBreakpoint, SourceLine>, projectRoot: File?): FileBreakpoint? {
+        known.entries.firstOrNull { it.value.key == line.key }?.let { (breakpoint, _) ->
             return FileBreakpoint(breakpoint.file, line.line)
         }
         val root = projectRoot ?: return null
         val name = line.key.substringAfterLast('/')
-        return root.walkTopDown()
-            .onEnter { it.name != "build" && !it.name.startsWith(".") }
-            .filter { it.isFile && it.name == name }
+        return GeneratedDirectories.sourceFiles(root)
+            .filter { it.name == name }
             .firstOrNull { runCatching { SourceKeys.forSource(it.name, it.readText()) == line.key }.getOrDefault(false) }
             ?.let { FileBreakpoint(it, line.line) }
     }

@@ -34,12 +34,12 @@ fun gitTools(
         parameters = emptyMap(),
         required = emptyList(),
         handler = {
-            withGitRepository(project(), git, workspaceRoot) { repo ->
+            withGitRepository(project(), git, workspaceRoot) { repo, paths ->
                 val branch = repo.currentBranch() ?: "(detached HEAD)"
                 when (val result = repo.status()) {
                     is AppResult.Failure -> ProjectFiles.Outcome.Refused(result.error.message)
                     is AppResult.Success -> {
-                        val status = result.value
+                        val status = paths.toProject(result.value)
                         ProjectFiles.Outcome.Ok(formatStatus(branch, status))
                     }
                 }
@@ -68,9 +68,9 @@ fun gitTools(
         handler = { input ->
             val path = input["path"]?.trim()?.takeIf { it.isNotEmpty() }
             val staged = input["staged"]?.trim()?.equals("true", ignoreCase = true) == true
-            withGitRepository(project(), git, workspaceRoot) { repo ->
+            withGitRepository(project(), git, workspaceRoot) { repo, paths ->
                 if (path != null) {
-                    when (val diffResult = repo.diff(path, staged)) {
+                    when (val diffResult = repo.diff(paths.toRepository(path), staged)) {
                         is AppResult.Failure -> ProjectFiles.Outcome.Refused(diffResult.error.message)
                         is AppResult.Success -> {
                             val diffText = diffResult.value.trim()
@@ -141,7 +141,7 @@ fun gitTools(
         required = emptyList(),
         handler = { input ->
             val limit = (input["limit"]?.toIntOrNull() ?: 10).coerceIn(1, 30)
-            withGitRepository(project(), git, workspaceRoot) { repo ->
+            withGitRepository(project(), git, workspaceRoot) { repo, _ ->
                 when (val result = repo.log(limit)) {
                     is AppResult.Failure -> ProjectFiles.Outcome.Refused(result.error.message)
                     is AppResult.Success -> {
@@ -164,7 +164,7 @@ private suspend fun withGitRepository(
     project: Project?,
     git: GitWorkspace?,
     workspaceRoot: File?,
-    block: suspend (GitRepository) -> ProjectFiles.Outcome,
+    block: suspend (GitRepository, GitPaths) -> ProjectFiles.Outcome,
 ): ProjectFiles.Outcome {
     if (project == null) {
         return ProjectFiles.Outcome.Refused("No project is open, so git is not available.")
@@ -186,11 +186,57 @@ private suspend fun withGitRepository(
         is AppResult.Success -> {
             val repo = opened.value
             try {
-                block(repo)
+                block(repo, GitPaths(repoRoot, project.rootDir))
             } finally {
                 repo.close()
             }
         }
+    }
+}
+
+/**
+ * Between the paths the tools speak -- relative to the project, like every
+ * other tool's -- and the repository's, which JGit wants.
+ *
+ * **They differ for every clone.** A clone is adopted at its module, so the
+ * project is `upstream/app` while the repository is `upstream`: git_diff of
+ * `src/main/java/Main.java` asked JGit for a path the repository calls
+ * `app/src/main/java/Main.java`, matched nothing, and answered "No unstaged
+ * changes" beside a modified file; and git_status listed `app/src/...`, which
+ * read_file could not find.
+ */
+internal class GitPaths(repoRoot: File, projectRoot: File) {
+
+    /** The project's directory within the repository, `/`-terminated; empty when they are one. */
+    private val prefix = runCatching { projectRoot.canonicalFile.relativeTo(repoRoot.canonicalFile) }
+        .getOrNull()?.invariantSeparatorsPath.orEmpty()
+        .let { if (it.isEmpty()) "" else "$it/" }
+
+    fun toRepository(projectPath: String): String = prefix + projectPath.trimStart('/')
+
+    /**
+     * Relative to the project. A file outside it -- the clone's own README --
+     * comes back `../`-led, which says where it is, and which the file tools
+     * refuse as they should.
+     */
+    fun toProject(repositoryPath: String): String =
+        if (repositoryPath.startsWith(prefix)) {
+            repositoryPath.removePrefix(prefix)
+        } else {
+            "../".repeat(prefix.count { it == '/' }) + repositoryPath
+        }
+
+    fun toProject(status: GitStatus): GitStatus {
+        fun Set<String>.mapped() = mapTo(LinkedHashSet()) { toProject(it) }
+        return status.copy(
+            added = status.added.mapped(),
+            changed = status.changed.mapped(),
+            removed = status.removed.mapped(),
+            modified = status.modified.mapped(),
+            missing = status.missing.mapped(),
+            untracked = status.untracked.mapped(),
+            conflicting = status.conflicting.mapped(),
+        )
     }
 }
 

@@ -1,6 +1,7 @@
 package com.osamu.aide.core.common
 
 import java.io.File
+import java.nio.file.Files
 
 /**
  * Which directories in a project are regenerable output rather than source.
@@ -44,4 +45,21 @@ object GeneratedDirectories {
     /** The same, for a directory on disk. */
     fun isGenerated(directory: File): Boolean =
         isGenerated(directory.name) { directory.parentFile?.list()?.toList().orEmpty() }
+
+    /**
+     * Every file under [root] a walk of the project should see: nothing in a
+     * generated directory, and nothing reached through a symlink.
+     *
+     * **`walkTopDown` follows symlinks**, so a link back to an ancestor -- a
+     * cloned repository can hold one -- made a search a walk with no end,
+     * pinning an IO thread until the path grew too long to open. Not following
+     * them loses nothing: what a link points at inside the project is walked
+     * where it lives, and what it points at outside is not the project's.
+     * [DiskUsage] skips them for the same reasons.
+     */
+    fun sourceFiles(root: File): Sequence<File> = root.walkTopDown()
+        .onEnter { it == root || (!isSymlink(it) && !isGenerated(it)) }
+        .filter { it.isFile && !isSymlink(it) }
+
+    private fun isSymlink(file: File) = Files.isSymbolicLink(file.toPath())
 }

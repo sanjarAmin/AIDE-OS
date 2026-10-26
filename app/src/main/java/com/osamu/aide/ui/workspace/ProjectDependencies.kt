@@ -103,7 +103,14 @@ class ProjectDependencies(private val resolver: DependencyResolver) {
             onProgress("Resolved ${resolved.dependencies.size} artifacts")
         }
 
-        cached = key to resolved
+        // **Only a complete resolution is kept.** A failure used to be cached
+        // like a success, so a project opened offline stayed without its
+        // libraries after the connection came back: Build failed with hundreds
+        // of "cannot find symbol androidx..." and the editor underlined every
+        // import until aide.json changed or the app restarted. Not keeping it
+        // costs one more attempt at the next open or Build -- which, after a
+        // failure, is what tapping Build is asking for.
+        if (result is AppResult.Success && resolved.unresolved.isEmpty()) cached = key to resolved
         return resolved
     }
 

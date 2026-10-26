@@ -285,8 +285,23 @@ class ProjectBuilder(
         emitAll(engine.sync(project))
     }
 
-    // Project directory names are unique within the workspace, so this is
-    // stable across builds -- which is what lets a rebuild reuse the workspace
+    // Stable across builds, which is what lets a rebuild reuse the workspace
     // instead of starting from an empty directory every time.
-    private fun outputFor(project: Project): File = File(outputRoot, project.rootDir.name)
+    private fun outputFor(project: Project): File = File(outputRoot, buildDirectoryName(project.rootDir))
+}
+
+/**
+ * The directory under the build output root that [projectRoot] builds into.
+ *
+ * **Not the project directory's name alone.** Names were unique in the
+ * workspace until clones were adopted at their module: every cloned project is
+ * rooted at `<clone>/app`, so they all built into `app/` -- each build picking
+ * up the last one's incremental state, and the editor resolving `R` against
+ * whichever app had built most recently. The name stays for whoever reads the
+ * cache; the hash of the whole path is what keeps two projects apart.
+ * ProjectBuilder and LanguageServices both call this, so they cannot disagree.
+ */
+internal fun buildDirectoryName(projectRoot: File): String {
+    val path = runCatching { projectRoot.canonicalPath }.getOrElse { projectRoot.absolutePath }
+    return "${projectRoot.name}-${Integer.toHexString(path.hashCode())}"
 }

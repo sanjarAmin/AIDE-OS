@@ -79,4 +79,28 @@ class GitToolsTest {
         assertTrue(outcome is ProjectFiles.Outcome.Refused)
         assertTrue("No project is open" in (outcome as ProjectFiles.Outcome.Refused).reason)
     }
+
+    /**
+     * A clone is adopted at its module, so the project sits below the
+     * repository's root and the two name every file differently. Untranslated,
+     * git_diff of a modified file answered "No unstaged changes".
+     */
+    @Test
+    fun a_project_below_its_repository_is_translated_both_ways() {
+        val repository = temp.newFolder("upstream")
+        val module = File(repository, "app").apply { mkdirs() }
+        val paths = GitPaths(repository, module)
+
+        assertEquals("app/src/main/java/Main.java", paths.toRepository("src/main/java/Main.java"))
+        assertEquals("src/main/java/Main.java", paths.toProject("app/src/main/java/Main.java"))
+        assertEquals("../README.md", paths.toProject("README.md"))
+    }
+
+    @Test
+    fun a_project_that_is_its_own_repository_is_left_alone() {
+        val paths = GitPaths(temp.root, temp.root)
+
+        assertEquals("src/A.java", paths.toRepository("src/A.java"))
+        assertEquals("src/A.java", paths.toProject("src/A.java"))
+    }
 }
