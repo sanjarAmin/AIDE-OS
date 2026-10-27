@@ -258,9 +258,18 @@ fun WorkspaceScreen(
     // **Remembered, not rebuilt per frame.** A fresh holder every recomposition
     // changes an argument of `ChatPanel` and recomposes the whole transcript,
     // which during streaming is once per token.
-    val chatActions = remember(assistant, editorController) {
+    val chatActions = remember(assistant, editorController, viewModel) {
         ChatActions(
-            send = assistant::send,
+            // **Saved first, as Fix is.** The assistant reads and edits the
+            // files on disk; sent straight, it worked on text without the
+            // user's unsaved edits, and its write -- reloaded into the tab --
+            // replaced them.
+            send = { text ->
+                fixScope.launch {
+                    viewModel.saveAllNow()
+                    assistant.send(text)
+                }
+            },
             approve = assistant::resolveApproval,
             dismissError = assistant::dismissError,
             addKey = {
@@ -276,8 +285,19 @@ fun WorkspaceScreen(
             toggleShareContext = assistant::toggleShareContext,
             cancelSend = assistant::cancelSend,
             newChat = assistant::newChat,
-            regenerate = assistant::regenerate,
-            editAndResend = assistant::editAndResend,
+            // Both start a turn that reads the files, so both save first too.
+            regenerate = {
+                fixScope.launch {
+                    viewModel.saveAllNow()
+                    assistant.regenerate()
+                }
+            },
+            editAndResend = { entryId, text ->
+                fixScope.launch {
+                    viewModel.saveAllNow()
+                    assistant.editAndResend(entryId, text)
+                }
+            },
             openConversation = assistant::openConversation,
             deleteConversation = assistant::deleteConversation,
             renameConversation = assistant::renameConversation,
@@ -320,9 +340,8 @@ fun WorkspaceScreen(
 
     LaunchedEffect(pendingJump, state.activeFile) {
         val jump = pendingJump ?: return@LaunchedEffect
-        val root = state.projectRoot ?: return@LaunchedEffect
-        val target = File(root, jump.file.path)
-        if (state.activeFile != target) return@LaunchedEffect
+        // The file as opened; see EditorJump for why it is not resolved here.
+        if (state.activeFile != jump.file) return@LaunchedEffect
 
         // One frame, so the tab switch has actually put that buffer in the
         // widget. Jumping into the outgoing buffer lands on a line of the

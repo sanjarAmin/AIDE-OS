@@ -100,9 +100,9 @@ class GitIdentityStore(
      * **The app's own device tests run in the app's process**, where the real
      * store lives, and they clear it before and after every test -- so a
      * targeted run on a phone, which CLAUDE.md recommends, erased the user's
-     * commit name and email. Restoring afterwards cannot work: clearing deletes the Keystore key
-     * the saved values are encrypted with. A test passes a namespace, and both
-     * the preferences file and the Keystore alias are then its own.
+     * commit name and email. A test passes a namespace, and the preferences
+     * file is then its own. (Unlike the token store, nothing here is
+     * encrypted: a name and an email are not secrets.)
      */
     private val namespace: String? = null,
 ) {

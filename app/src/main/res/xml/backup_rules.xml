@@ -1,13 +1,29 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Auto Backup on Android 11 and below. Android 12 and up read
+    data_extraction_rules.xml instead; the two lists are the same and must stay so.
+
+    What is left out, and why:
+    - Downloads: toolchains (clang, the JDK, Gradle, local models), Gradle's home
+      and the platform stubs. Hundreds of megabytes to gigabytes, all fetched
+      again on demand. Included, they put the backup over its 25 MB cloud quota,
+      and then nothing was backed up, chat history and settings with it, and
+      nothing said so.
+    - Credentials: provider keys, git tokens and the signing settings, each
+      encrypted with an Android Keystore key that never leaves the
+      device. Restored anywhere else they cannot be decrypted, and every stored
+      credential would fail on the new phone. The release keystore goes with its
+      settings, which name its alias; the user's exported copy is its backup.
+
+    What is kept: chat history, breakpoints, editor settings and the git
+    identity (a name and an email, stored in the clear).
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <exclude domain="file" path="toolchains/" />
+    <exclude domain="file" path="gradle-home/" />
+    <exclude domain="file" path="engine/" />
+    <exclude domain="file" path="signing/" />
+    <exclude domain="sharedpref" path="aide-ai.xml" />
+    <exclude domain="sharedpref" path="aide-git-credentials.xml" />
+    <exclude domain="sharedpref" path="aide-signing.xml" />
 </full-backup-content>

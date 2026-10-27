@@ -1,5 +1,6 @@
 package com.osamu.aide.ui.workspace
 
+import com.osamu.aide.lsp.kotlin.KotlinArchives
 import android.content.Intent
 import android.util.Log
 import androidx.lifecycle.ViewModel
@@ -49,6 +50,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -65,7 +67,6 @@ import java.net.ServerSocket
  */
 data class InstallUiState(val message: String, val settings: Intent? = null)
 
-/** How the last (or current) build is going. */
 /**
  * What a finished download should lead to.
  *
@@ -113,6 +114,7 @@ enum class AfterInstall {
     SYNC,
 }
 
+/** How the last (or current) build is going. */
 data class BuildUiState(
     val isRunning: Boolean = false,
     /** What it is doing right now, or null when it is not running. */
@@ -209,25 +211,36 @@ sealed interface WorkspaceEvent {
     ) : WorkspaceEvent
 }
 
-/** One open tab. */
+/**
+ * Somewhere to put the cursor: the file as it was opened, and a 1-based
+ * position.
+ *
+ * **The file itself, resolved, not a path for the screen to resolve.** Jumps
+ * carried project-relative paths that the screen joined onto the project root,
+ * and go-to-definition joined them too -- so clangd's answer for `printf`, an
+ * absolute path into the NDK sysroot, became `<project>/data/.../stdio.h`,
+ * failed to open, and replaced the editor with an error.
+ */
+data class EditorJump(val file: File, val line: Int, val column: Int)
+
 /**
  * What the language service last said about the file being edited.
  *
  * Only ever one file's worth. Analysis follows the cursor: running it for every
  * open tab would keep a compiler busy on files nobody is looking at, and the
  * gutter only ever renders the file on screen anyway.
+ *
+ * No running flag. There was one; nothing read it, and a failed analysis left
+ * it saying "running" for good.
  */
-/** Somewhere to put the cursor: a project-relative file, 1-based position. */
-data class EditorJump(val file: File, val line: Int, val column: Int)
-
 data class AnalysisUiState(
     val file: File? = null,
     val diagnostics: List<Diagnostic> = emptyList(),
-    val isRunning: Boolean = false,
     /** The call the caret is inside, if it is inside one. */
     val signature: String? = null,
 )
 
+/** One open tab. */
 data class OpenFile(
     val document: SourceDocument,
     val isDirty: Boolean = false,
@@ -401,17 +414,34 @@ class WorkspaceViewModel(
     private var signatureJob: Job? = null
 
     /**
-     * How far the platform download got, kept outside the prompt's state so
-     * that dismissing the prompt and opening it again shows the download still
-     * running rather than an untouched Download button.
+     * The download in flight: what it fetches, how far it has got, and what to
+     * do when it lands. Outside the prompt's state, so that dismissing the
+     * prompt and opening it again shows the download still running rather than
+     * an untouched Download button.
+     *
+     * **One per download, not loose slots.** The intent and the progress were
+     * single fields any later offer overwrote -- even an offer that was then
+     * suppressed. A platform download started for a Build, prompt dismissed,
+     * then a Kotlin file opened: the Kotlin prompt showed the platform's
+     * progress, so its Download did nothing; the resume became "analyse"; and
+     * when the platform landed the build never started.
      */
-    private var platformProgress: InstallProgress? = null
+    private class Download(val component: ToolchainComponent, var then: AfterInstall) {
+        var progress: InstallProgress? = null
+    }
+
+    private var download: Download? = null
 
     fun open(projectDir: File) {
-        // A new project is a new chance to offer; the old answer was about the
-        // old project.
-        offeredComponents.clear()
+        // The screen calls this again on every recomposition of the same
+        // project -- rotation, a theme change, a trip to Settings and back --
+        // so this is not a new project and the answers stand.
         if (rootNode?.file == projectDir) return
+        // A new project is a new chance to offer; the old answer was about the
+        // old project. **After the check above, not before:** before, every
+        // rotation forgot that a download had been declined, and the next file
+        // opened asked again.
+        offeredComponents.clear()
         val root = FileNode(projectDir, isDirectory = true, depth = 0)
         rootNode = root
         pendingText.clear()
@@ -560,7 +590,6 @@ class WorkspaceViewModel(
         rebuildTree()
     }
 
-    /** Opens [file] in a tab, or brings its tab to the front if it is open. */
     /**
      * Re-reads [file] if it is open, and marks what changed.
      *
@@ -581,6 +610,14 @@ class WorkspaceViewModel(
                 is AppResult.Success -> {
                     val changed = changedLines(open.document.text, result.value.text)
                     if (changed.isEmpty() && open.document.text == result.value.text) return@launch
+                    // **The old buffer goes too.** Left here, closing the tab
+                    // later saved it -- over the edit just approved, the very
+                    // revert this exists to prevent -- and on the tab on
+                    // screen it made the editor's own set-buffer callback mark
+                    // an untouched file dirty. Sends save first (the screen's
+                    // chat actions), so this is the assistant's text over the
+                    // user's own, not over edits it never saw.
+                    pendingText -= file
                     _state.update { state ->
                         state.copy(
                             openFiles = state.openFiles.map {
@@ -606,11 +643,20 @@ class WorkspaceViewModel(
         }
     }
 
+    /**
+     * The file most recently asked to be opened. Two reads in flight finish in
+     * either order, and the later *tap* is the one that should be in front --
+     * not the later *read*, which used to steal focus from it.
+     */
+    private var latestOpen: File? = null
+
+    /** Opens [file] in a tab, or brings its tab to the front if it is open. */
     fun openDocument(file: File) {
         // On opening, not on selecting: a tab switch back to a file already
         // open is not the moment to ask for a download.
         offerIntelligence(file)
 
+        latestOpen = file
         if (_state.value.openFiles.any { it.file == file }) {
             selectDocument(file)
             return
@@ -629,8 +675,8 @@ class WorkspaceViewModel(
                             } else {
                                 it.openFiles + OpenFile(result.value)
                             },
-                            activeFile = file,
-                            openingFile = null,
+                            activeFile = if (latestOpen == file) file else it.activeFile,
+                            openingFile = if (it.openingFile == file) null else it.openingFile,
                         )
                     }
                     // **Analysed on open, not only on edit.** `analyse` was
@@ -643,7 +689,10 @@ class WorkspaceViewModel(
                     analyse(file, result.value.text)
                 }
                 is AppResult.Failure -> _state.update {
-                    it.copy(openingFile = null, documentError = result.error.message)
+                    it.copy(
+                        openingFile = if (it.openingFile == file) null else it.openingFile,
+                        documentError = result.error.message,
+                    )
                 }
             }
         }
@@ -661,6 +710,21 @@ class WorkspaceViewModel(
                 analysis = it.analysis.copy(signature = null),
             )
         }
+        analyseOpen(file)
+    }
+
+    /**
+     * Re-analyses an open tab that has just come to the front.
+     *
+     * **Analysis follows the tab, not only the typing.** Switching to a tab ran
+     * nothing, and `analysis.file` still named the previous one -- so the
+     * gutter fell back to the last build's diagnostics for the file now on
+     * screen: real errors vanished, or ones the user had already fixed came
+     * back, until the first keystroke.
+     */
+    private fun analyseOpen(file: File) {
+        val open = _state.value.openFiles.firstOrNull { it.file == file } ?: return
+        analyse(file, pendingText[file] ?: open.document.text)
     }
 
     /**
@@ -672,8 +736,14 @@ class WorkspaceViewModel(
      */
     fun closeDocument(file: File) {
         viewModelScope.launch {
-            saveIfDirty(file)
-            pendingText -= file
+            // **Saved, or not closed.** A failed save -- a full disk, a file
+            // the assistant deleted -- used to close the tab anyway and drop
+            // the only copy of the text: the stray-tap loss this method exists
+            // to prevent. Saved until nothing is pending, because keystrokes
+            // can land while a save is on IO.
+            while (file in pendingText) {
+                if (!saveIfDirty(file)) return@launch
+            }
 
             _state.update { current ->
                 val remaining = current.openFiles.filterNot { it.file == file }
@@ -692,6 +762,7 @@ class WorkspaceViewModel(
                     documentError = null,
                 )
             }
+            _state.value.activeFile?.let { if (it != file) analyseOpen(it) }
         }
     }
 
@@ -723,15 +794,19 @@ class WorkspaceViewModel(
      */
     private fun analyse(file: File, text: String) {
         val root = _state.value.projectRoot ?: return
-        // Whichever service claims the file -- javac for Java, clangd for C
-        // and C++. Nothing here decides; a service that does not claim a file
-        // is simply not the one asked.
-        val service = languageServices.serviceFor(file, root) ?: return
 
         analysisJob?.cancel()
         analysisJob = viewModelScope.launch {
             delay(ANALYSIS_DEBOUNCE_MILLIS)
-            _state.update { it.copy(analysis = it.analysis.copy(isRunning = true)) }
+            // Whichever service claims the file -- javac for Java, clangd for C
+            // and C++. Nothing here decides; a service that does not claim a
+            // file is simply not the one asked.
+            //
+            // **After the debounce and off the main thread.** It ran first
+            // thing, on main, on every keystroke -- and resolving a service can
+            // mean building one, a whole javac with its classpath.
+            val service = withContext(dispatchers.io) { languageServices.serviceFor(file, root) }
+                ?: return@launch
 
             // Logged, not swallowed. A language service that fails silently
             // looks exactly like a clean file, and the first version of this
@@ -755,7 +830,6 @@ class WorkspaceViewModel(
                     analysis = AnalysisUiState(
                         file = file,
                         diagnostics = diagnostics,
-                        isRunning = false,
                         // Carried across: the caret has not moved just because
                         // the file was re-analysed, and dropping it here would
                         // make the hint blink on every pause in typing.
@@ -778,11 +852,13 @@ class WorkspaceViewModel(
     fun onCursorMoved(offset: Int) {
         val active = _state.value.active ?: return
         val root = _state.value.projectRoot ?: return
-        val service = languageServices.serviceFor(active.file, root) ?: return
 
         signatureJob?.cancel()
         signatureJob = viewModelScope.launch {
             delay(SIGNATURE_DEBOUNCE_MILLIS)
+            // Here for the reason analyse() gives: not on main, not per caret move.
+            val service = withContext(dispatchers.io) { languageServices.serviceFor(active.file, root) }
+                ?: return@launch
             val text = pendingText[active.file] ?: active.document.text
             val signature = try {
                 service.signatureAt(active.file, text, offset)
@@ -807,23 +883,23 @@ class WorkspaceViewModel(
     fun goToDefinition(offset: Int) {
         val active = _state.value.active ?: return
         val root = _state.value.projectRoot ?: return
-        val service = languageServices.serviceFor(active.file, root)
-        if (service == null) {
-            // **A tap deserves an answer.** `LanguageServices` returns null
-            // when there is nothing to analyse with, and its own KDoc argues
-            // that "silence is the better failure" -- correctly, about
-            // *diagnostics*: a file of red squiggles blaming the user for a
-            // missing download is worse than a clean file. But this is not
-            // analysis arriving on its own, it is a question the user asked by
-            // pressing a button, and the button did nothing and said nothing.
-            // On a device with no toolchains that is every Java file.
-            viewModelScope.launch {
-                _events.send(WorkspaceEvent.Notice(noIntelligenceReason(active.file)))
-            }
-            return
-        }
 
         viewModelScope.launch {
+            // Off the main thread, as analyse() resolves it: it can build a service.
+            val service = withContext(dispatchers.io) { languageServices.serviceFor(active.file, root) }
+            if (service == null) {
+                // **A tap deserves an answer.** `LanguageServices` returns null
+                // when there is nothing to analyse with, and its own KDoc argues
+                // that "silence is the better failure" -- correctly, about
+                // *diagnostics*: a file of red squiggles blaming the user for a
+                // missing download is worse than a clean file. But this is not
+                // analysis arriving on its own, it is a question the user asked by
+                // pressing a button, and the button did nothing and said nothing.
+                // On a device with no toolchains that is every Java file.
+                _events.send(WorkspaceEvent.Notice(noIntelligenceReason(active.file)))
+                return@launch
+            }
+
             val text = pendingText[active.file] ?: active.document.text
             val target = try {
                 service.definition(active.file, text, offset)
@@ -841,8 +917,11 @@ class WorkspaceViewModel(
             // Opening a tab that is already open just selects it, so this is
             // unconditional; the screen holds the jump until that tab is the
             // one actually showing.
-            openDocument(File(root, target.file.path))
-            _jumps.trySend(EditorJump(target.file, target.line, target.column))
+            // Outside the project -- an NDK header, android.jar's sources -- a
+            // service answers with an absolute path, and that is the file.
+            val destination = if (target.file.isAbsolute) target.file else File(root, target.file.path)
+            openDocument(destination)
+            _jumps.trySend(EditorJump(destination, target.line, target.column))
         }
     }
 
@@ -857,8 +936,11 @@ class WorkspaceViewModel(
     private fun noIntelligenceReason(file: File): String = when (file.extension) {
         "java" -> "Java needs the Android platform, which is not installed yet. " +
             "Tap Build to download it."
-        "kt", "kts" -> "Kotlin needs its compiler and the Analysis API, which are " +
-            "not installed yet."
+        "kt", "kts" -> if (KotlinArchives.isSupported) {
+            "Kotlin needs its compiler and the Analysis API, which are not installed yet."
+        } else {
+            "Kotlin code intelligence needs Android 11 or newer. Editing and building still work."
+        }
         else -> "There is no code intelligence for .${file.extension} files."
     }
 
@@ -869,7 +951,6 @@ class WorkspaceViewModel(
         }
     }
 
-    /** Writes every modified tab. Used before a build, which reads the disk. */
     /**
      * Writes every modified buffer, and waits.
      *
@@ -878,24 +959,36 @@ class WorkspaceViewModel(
      */
     suspend fun saveAllNow() = saveAll()
 
+    /** Writes every modified tab. Used before a build, which reads the disk. */
     private suspend fun saveAll() {
         _state.value.openFiles.filter { it.isDirty }.forEach { saveIfDirty(it.file) }
     }
 
-    private suspend fun saveIfDirty(file: File, announce: Boolean = false) {
-        val open = _state.value.openFiles.firstOrNull { it.file == file } ?: return
-        val text = pendingText[file] ?: return
+    /**
+     * Writes [file]'s buffer, if it has one. False only when the write failed.
+     *
+     * **Only the text it wrote is marked saved.** The save suspends on IO --
+     * long, on /sdcard's FUSE -- and the user can keep typing. This used to
+     * drop the buffer and mark the tab clean whatever had been typed meanwhile,
+     * so those keystrokes were lost when the tab closed and a build started
+     * next compiled the older text.
+     */
+    private suspend fun saveIfDirty(file: File, announce: Boolean = false): Boolean {
+        val open = _state.value.openFiles.firstOrNull { it.file == file }
+            ?: return true.also { pendingText -= file }
+        val text = pendingText[file] ?: return true
 
-        when (val result = documents.save(open.document, text)) {
+        return when (val result = documents.save(open.document, text)) {
             is AppResult.Success -> {
-                pendingText -= file
+                val caughtUp = pendingText[file] == text
+                if (caughtUp) pendingText -= file
                 // The document's own text moves with it, so the file on disk and
                 // the state agree about what "unmodified" means.
                 _state.update { current ->
                     current.copy(
                         openFiles = current.openFiles.map {
                             if (it.file == file) {
-                                it.copy(document = it.document.copy(text = text), isDirty = false)
+                                it.copy(document = it.document.copy(text = text), isDirty = !caughtUp)
                             } else {
                                 it
                             }
@@ -903,8 +996,12 @@ class WorkspaceViewModel(
                     )
                 }
                 if (announce) _events.send(WorkspaceEvent.Notice("${open.name} saved."))
+                true
             }
-            is AppResult.Failure -> _events.send(WorkspaceEvent.Notice(result.error.message))
+            is AppResult.Failure -> {
+                _events.send(WorkspaceEvent.Notice(result.error.message))
+                false
+            }
         }
     }
 
@@ -953,8 +1050,29 @@ class WorkspaceViewModel(
     /** The authority the last Debug was started with, for [resumeAfterInstall]. */
     private var pendingHandshake: String? = null
 
+    /**
+     * Whether a build, run, sync or dependency install is still going -- and,
+     * if one is, says so.
+     *
+     * **The job, not `build.isRunning`.** That flag is set only after the
+     * save and the descriptor wait have suspended, and cleared before the
+     * install has finished. A second tap in either window started another
+     * build beside the first, orphaned the first job where Stop could not
+     * reach it, and could hand the first install the second Debug's port: one
+     * session attached to the wrong build, and the other never attached.
+     */
+    private fun stillBusy(): Boolean {
+        if (buildJob?.isActive != true) return false
+        if (!_state.value.build.isRunning) {
+            // Between the save and the panel, or waiting on the install: the
+            // button shows nothing running, so a silent refusal reads as broken.
+            _events.trySend(WorkspaceEvent.Notice("Still finishing the last build."))
+        }
+        return true
+    }
+
     private fun startBuild(debuggable: Boolean, handshakeAuthority: String?, debug: Boolean) {
-        if (_state.value.build.isRunning) return
+        if (stillBusy()) return
         buildJob = viewModelScope.launch {
             // A tap can beat the descriptor read -- the screen opened a moment
             // ago. Waiting for it is better than telling someone their project
@@ -1005,33 +1123,35 @@ class WorkspaceViewModel(
                     component = component,
                     rationale = "This project builds with its own Gradle, on this device. " +
                         "That needs a Java runtime, Gradle and the Android build tools. " +
-                        "${component.displayName} is about ${component.archiveBytes / (1024 * 1024)} MB " +
-                        "to download and roughly ${component.installedBytes / (1024 * 1024)} MB once installed.",
+                        "${component.displayName} is about ${component.archiveMegabytes} MB " +
+                        "to download and roughly ${component.installedMegabytes} MB once installed.",
                     then = resume,
                 )
                 return@launch
             }
-            builder.missingKotlinCompiler(project)?.let { component ->
+            // Off the main thread, these two: each walks the source tree, and
+            // on a large project a Build tap froze the screen for the walk.
+            withContext(dispatchers.io) { builder.missingKotlinCompiler(project) }?.let { component ->
                 offerComponentInstall(
                     component = component,
                     rationale = "This project has Kotlin sources. Building it needs " +
-                        "${component.displayName}, which is about ${component.archiveBytes / (1024 * 1024)} MB " +
+                        "${component.displayName}, which is about ${component.archiveMegabytes} MB " +
                         "to download.",
                     then = resume,
                 )
                 return@launch
             }
-            builder.missingNativeToolchain(project)?.let { component ->
+            withContext(dispatchers.io) { builder.missingNativeToolchain(project) }?.let { component ->
                 // Offered before the build starts rather than after it fails,
                 // for the same reason the platform is: the refusal names a
                 // download, and a message naming a download with no way to
                 // start it is a dead end.
-                val megabytes = component.archiveBytes / (1024 * 1024)
+                val megabytes = component.archiveMegabytes
                 offerComponentInstall(
                     component = component,
                     rationale = "This project has C or C++ in src/main/cpp. " +
                         "Compiling it needs clang, which is about $megabytes MB " +
-                        "to download and roughly ${component.installedBytes / (1024 * 1024)} MB " +
+                        "to download and roughly ${component.installedMegabytes} MB " +
                         "once installed.",
                     then = resume,
                 )
@@ -1073,12 +1193,12 @@ class WorkspaceViewModel(
     private suspend fun runNodeProject(project: Project) {
         val root = toolchain.nodeRoot() ?: run {
             toolchain.missingNodeComponent()?.let { component ->
-                val megabytes = component.archiveBytes / (1024 * 1024)
+                val megabytes = component.archiveMegabytes
                 offerComponentInstall(
                     component = component,
                     rationale = "Running JavaScript needs Node.js, which is about " +
                         "$megabytes MB to download and roughly " +
-                        "${component.installedBytes / (1024 * 1024)} MB once installed.",
+                        "${component.installedMegabytes} MB once installed.",
                 )
             } ?: _events.send(
                 WorkspaceEvent.Notice("Node.js is not available for this device's ABI."),
@@ -1132,7 +1252,7 @@ class WorkspaceViewModel(
      * they meant.
      */
     fun installDependencies() {
-        if (_state.value.build.isRunning) return
+        if (stillBusy()) return
         buildJob = viewModelScope.launch {
             descriptorJob?.join()
             val project = project ?: return@launch
@@ -1144,20 +1264,28 @@ class WorkspaceViewModel(
             }
             if (project.language != SourceLanguage.JAVASCRIPT) return@launch
 
+            // Both refusals said here, as runNodeProject says them: this
+            // returned in silence for a device with no Node build and never
+            // checked the linker, so the tap did nothing and said nothing.
             val root = toolchain.nodeRoot() ?: run {
                 toolchain.missingNodeComponent()?.let { component ->
                     offerComponentInstall(
                         component = component,
                         rationale = "Installing dependencies needs Node.js, which is about " +
-                            "${component.archiveBytes / (1024 * 1024)} MB to download.",
+                            "${component.archiveMegabytes} MB to download.",
                         then = AfterInstall.INSTALL_DEPENDENCIES,
                     )
-                }
+                } ?: _events.send(WorkspaceEvent.Notice("Node.js is not available for this device's ABI."))
+                return@launch
+            }
+            val launch = LinkerLaunch.forThisProcess()
+            if (!launch.isAvailable) {
+                _events.send(WorkspaceEvent.Notice("This device has no linker Node can start through."))
                 return@launch
             }
             val layout = ProjectLayout.of(project)
             val engine = NodeRunSystem(
-                node = NodeToolchain(root, LinkerLaunch.forThisProcess()),
+                node = NodeToolchain(root, launch),
                 dispatchers = dispatchers,
                 home = layout.runHome,
                 cache = layout.runCache,
@@ -1219,7 +1347,7 @@ class WorkspaceViewModel(
                 offerComponentInstall(
                     component = component,
                     rationale = "Installing dependencies needs CPython, which is about " +
-                        "${component.archiveBytes / (1024 * 1024)} MB to download.",
+                        "${component.archiveMegabytes} MB to download.",
                     then = AfterInstall.INSTALL_DEPENDENCIES,
                 )
             }
@@ -1274,12 +1402,12 @@ class WorkspaceViewModel(
     private suspend fun runCSharpProject(project: Project) {
         val root = toolchain.monoRoot() ?: run {
             toolchain.missingMonoComponent()?.let { component ->
-                val megabytes = component.archiveBytes / (1024 * 1024)
+                val megabytes = component.archiveMegabytes
                 offerComponentInstall(
                     component = component,
                     rationale = "Running C# needs Mono, which is about " +
                         "$megabytes MB to download and roughly " +
-                        "${component.installedBytes / (1024 * 1024)} MB once installed.",
+                        "${component.installedMegabytes} MB once installed.",
                 )
             } ?: _events.send(
                 WorkspaceEvent.Notice("Mono is not available for this device's ABI."),
@@ -1344,12 +1472,12 @@ class WorkspaceViewModel(
     private suspend fun runPythonProject(project: Project) {
         val root = toolchain.pythonRoot() ?: run {
             toolchain.missingPythonComponent()?.let { component ->
-                val megabytes = component.archiveBytes / (1024 * 1024)
+                val megabytes = component.archiveMegabytes
                 offerComponentInstall(
                     component = component,
                     rationale = "Running Python needs CPython, which is about " +
                         "$megabytes MB to download and roughly " +
-                        "${component.installedBytes / (1024 * 1024)} MB once installed.",
+                        "${component.installedMegabytes} MB once installed.",
                 )
             } ?: _events.send(
                 WorkspaceEvent.Notice("Python is not available for this device's ABI."),
@@ -1396,33 +1524,67 @@ class WorkspaceViewModel(
             // The command, not a friendly paraphrase: it names the linker, and
             // a reader who later wonders why `process.execPath` is not node
             // has the answer in the log they already have.
-            is RunEvent.Started -> _state.update {
-                it.copy(build = it.build.copy(log = it.build.log + event.commandLine))
-            }
+            is RunEvent.Started -> appendRunLine(event.commandLine)
 
             // The program's own output, verbatim and in order. Both streams go
             // to the same log: a console is one thing to read, and the stream
             // tag is kept in the event for a caller that wants to colour it.
-            is RunEvent.Output -> _state.update {
-                it.copy(build = it.build.copy(log = it.build.log + event.line))
-            }
+            is RunEvent.Output -> appendRunLine(event.line)
 
-            is RunEvent.Finished -> _state.update {
-                val result = event.result
-                val outcome = when (result) {
-                    is RunResult.Exited ->
-                        if (result.succeeded) "Finished in ${result.durationMillis} ms"
-                        else "Exited with code ${result.exitCode} after ${result.durationMillis} ms"
-                    is RunResult.Failed -> result.message
+            // Everything the program printed lands before what it ended with.
+            is RunEvent.Finished -> {
+                flushRunLines()
+                _state.update {
+                    val result = event.result
+                    val outcome = when (result) {
+                        is RunResult.Exited ->
+                            if (result.succeeded) "Finished in ${result.durationMillis} ms"
+                            else "Exited with code ${result.exitCode} after ${result.durationMillis} ms"
+                        is RunResult.Failed -> result.message
+                    }
+                    it.copy(
+                        build = it.build.copy(
+                            isRunning = false,
+                            outcome = outcome,
+                            succeeded = result is RunResult.Exited && result.succeeded,
+                        ),
+                    )
                 }
-                it.copy(
-                    build = it.build.copy(
-                        isRunning = false,
-                        outcome = outcome,
-                        succeeded = result is RunResult.Exited && result.succeeded,
-                    ),
-                )
             }
+        }
+    }
+
+    /** Output not yet in the state; main thread only. See [appendRunLine]. */
+    private val pendingRunLines = mutableListOf<String>()
+    private var runFlush: Job? = null
+
+    /**
+     * Queues one line of a program's output for the panel.
+     *
+     * **Batched, and the log bounded.** Each line used to copy the whole log
+     * and publish a new workspace state on the main thread: a program printing
+     * in a loop cost O(n^2), recomposed the screen per line, janked, then hung,
+     * and could run the app out of memory. Lines now land at most every
+     * [RUN_FLUSH_MILLIS], and only the last [RUN_LOG_LINES] are kept.
+     */
+    private fun appendRunLine(line: String) {
+        pendingRunLines += line
+        if (runFlush?.isActive == true) return
+        runFlush = viewModelScope.launch {
+            delay(RUN_FLUSH_MILLIS)
+            flushRunLines()
+        }
+    }
+
+    private fun flushRunLines() {
+        runFlush?.cancel()
+        if (pendingRunLines.isEmpty()) return
+        val lines = pendingRunLines.toList()
+        pendingRunLines.clear()
+        _state.update {
+            val log = it.build.log + lines
+            val kept = if (log.size <= RUN_LOG_LINES) log else listOf(RUN_LOG_TRIMMED) + log.takeLast(RUN_LOG_LINES - 1)
+            it.copy(build = it.build.copy(log = kept))
         }
     }
 
@@ -1483,12 +1645,17 @@ class WorkspaceViewModel(
      */
     private fun syncIfNothingRecorded(project: Project) {
         if (project.engine != BuildEngine.GRADLE) return
-        if (!syncedProjects.add(project.rootDir.absolutePath)) return
+        if (project.rootDir.absolutePath in syncedProjects) return
         // Nothing is offered for download here: a sync is worth a minute of
         // CPU that is already paid for, and not worth 470 MB the user has not
         // agreed to spend.
         if (builder.missingGradleToolchain(project) != null) return
-        if (_state.value.build.isRunning) return
+        // Quietly: nobody tapped anything.
+        if (buildJob?.isActive == true) return
+        // **Recorded once it starts, not before the checks.** Marked first, a
+        // project skipped above -- toolchain still downloading, a build in the
+        // way -- counted as synced and was never synced on open again.
+        syncedProjects += project.rootDir.absolutePath
         buildJob = viewModelScope.launch { runSync(project) }
     }
 
@@ -1500,7 +1667,7 @@ class WorkspaceViewModel(
      * `settings.gradle`, or a sync that failed for a reason since fixed.
      */
     fun sync() {
-        if (_state.value.build.isRunning) return
+        if (stillBusy()) return
         buildJob = viewModelScope.launch {
             descriptorJob?.join()
             val project = project ?: return@launch
@@ -1509,8 +1676,8 @@ class WorkspaceViewModel(
                 offerComponentInstall(
                     component = component,
                     rationale = "Reading this project needs the Gradle toolchain: " +
-                        "${component.displayName} is about ${component.archiveBytes / (1024 * 1024)} MB " +
-                        "to download and roughly ${component.installedBytes / (1024 * 1024)} MB once installed.",
+                        "${component.displayName} is about ${component.archiveMegabytes} MB " +
+                        "to download and roughly ${component.installedMegabytes} MB once installed.",
                     then = AfterInstall.SYNC,
                 )
                 return@launch
@@ -1536,7 +1703,10 @@ class WorkspaceViewModel(
                     build = BuildUiState(isRunning = true, isSync = true),
                 )
             }
-            builder.sync(project).collect(::onSyncEvent)
+            // **Produced on IO.** Collected here on main, the flow's own body
+            // ran on main too -- preparing the JDK is file work, and it froze
+            // the screen as a sync began.
+            builder.sync(project).flowOn(dispatchers.io).collect(::onSyncEvent)
         } finally {
             _state.update {
                 it.copy(
@@ -1636,25 +1806,22 @@ class WorkspaceViewModel(
         _state.update { it.copy(isBuildPanelOpen = false) }
     }
 
-    /**
-     * Opens [file] and puts the cursor on [line] -- where a debugger stopped.
-     *
-     * [file] is absolute, as the debugger resolves it; the jump carries it
-     * relative, as every other jump does, because the screen resolves jumps
-     * against the project root.
-     */
+    /** Opens [file] and puts the cursor on [line] -- where a debugger stopped. */
     fun reveal(file: File, line: Int) {
-        val root = project?.rootDir ?: rootNode?.file ?: return
         openDocument(file)
-        _jumps.trySend(EditorJump(file.relativeTo(root), line, 1))
+        _jumps.trySend(EditorJump(file, line, 1))
     }
 
-    /** Opens the file a diagnostic points at. Paths are project-relative. */
+    /**
+     * Opens the file a diagnostic points at. Paths are project-relative, except
+     * for a file outside the project, which ProjectPaths leaves as it was.
+     */
     fun openDiagnostic(diagnostic: Diagnostic) {
         val root = project?.rootDir ?: rootNode?.file ?: return
         val file = diagnostic.file ?: return
-        openDocument(File(root, file.path))
-        _jumps.trySend(EditorJump(file, diagnostic.line, diagnostic.column))
+        val destination = if (file.isAbsolute) file else File(root, file.path)
+        openDocument(destination)
+        _jumps.trySend(EditorJump(destination, diagnostic.line, diagnostic.column))
     }
 
     /**
@@ -1776,7 +1943,6 @@ class WorkspaceViewModel(
         }
     }
 
-    /** Shows what has to be downloaded before this device can build anything. */
     /**
      * Offers the Kotlin components the first time a Kotlin file is opened.
      *
@@ -1800,13 +1966,20 @@ class WorkspaceViewModel(
         // Not while a prompt is already up: two stacked download dialogs is
         // not a choice, it is a queue the user cannot see the end of.
         if (_state.value.platform != null) return
+        // Nor while a download runs: this prompt's Download would wait behind
+        // it and do nothing. Not marked as offered, so the next file asks once
+        // the line is clear.
+        if (download != null) return
         val language = when (file.extension) {
             "kt", "kts" -> "Kotlin"
             "java" -> "Java"
             else -> return
         }
         val component = when (language) {
-            "Kotlin" -> toolchain.missingKotlinAnalysisComponent()
+            // **Not below API 30**, where the archives cannot load: the compiler
+            // and then the Analysis API downloaded, over 100 MB, to no
+            // completion at all. CLAUDE.md: gate at runtime, not at exec.
+            "Kotlin" -> toolchain.missingKotlinAnalysisComponent().takeIf { KotlinArchives.isSupported }
             // The platform is what javac indexes for `Activity` and every
             // other framework type. Without it the Java service is not
             // built at all, so the file has no completion, no errors and no
@@ -1816,7 +1989,7 @@ class WorkspaceViewModel(
         } ?: return
         if (!offeredComponents.add(component)) return
 
-        val megabytes = component.archiveBytes / (1024 * 1024)
+        val megabytes = component.archiveMegabytes
         offerComponentInstall(
             component = component,
             rationale = "Completion and errors for $language need " +
@@ -1826,11 +1999,12 @@ class WorkspaceViewModel(
         )
     }
 
+    /** Shows what has to be downloaded before this device can build anything. */
     fun offerPlatformInstall(then: AfterInstall = AfterInstall.BUILD) = offerComponentInstall(
         component = ToolchainComponent.ANDROID_PLATFORM,
         then = then,
         rationale = "Building needs android.jar, which is about " +
-            "${ToolchainComponent.ANDROID_PLATFORM.archiveBytes / (1024 * 1024)} MB " +
+            "${ToolchainComponent.ANDROID_PLATFORM.archiveMegabytes} MB " +
             "to download. It cannot be shipped inside AIDE-OS, so it is " +
             "fetched once, from Google.",
     )
@@ -1855,8 +2029,29 @@ class WorkspaceViewModel(
         // recoverable from the state it is about to change.
         then: AfterInstall = AfterInstall.BUILD,
     ) {
-        afterInstall = then
         if (_state.value.platform != null) return
+        download?.let { inFlight ->
+            if (inFlight.component != component) {
+                // Its Download would wait behind this one and do nothing;
+                // saying so beats offering a dead button.
+                viewModelScope.launch {
+                    _events.send(
+                        WorkspaceEvent.Notice(
+                            "${inFlight.component.displayName} is still downloading. " +
+                                "Try again once it has finished.",
+                        ),
+                    )
+                }
+                return
+            }
+            // The same download asked for again: what it now leads to is the
+            // newer request -- a Build tapped while a download accepted for
+            // completion runs should build when it lands.
+            inFlight.then = then
+        }
+        // **Only once the prompt will show.** Set before the check above, a
+        // suppressed offer still replaced what the prompt on screen led to.
+        afterInstall = then
         viewModelScope.launch {
             val text = if (component.requiresSdkLicense) {
                 withContext(dispatchers.io) { toolchain.licenseText() }
@@ -1873,7 +2068,7 @@ class WorkspaceViewModel(
                         licenseAccepted = !component.requiresSdkLicense ||
                             toolchain.license.isAccepted(),
                         rationale = rationale,
-                        progress = platformProgress,
+                        progress = download?.takeIf { it.component == component }?.progress,
                     ),
                 )
             }
@@ -1891,18 +2086,35 @@ class WorkspaceViewModel(
     fun installPlatform() {
         if (installJob?.isActive == true) return
         val platform = _state.value.platform ?: return
+        // Captured with the download: what it fetches and what it leads to are
+        // its own, whatever is offered while it runs. See [Download].
+        val mine = Download(platform.component, afterInstall)
+        download = mine
 
         installJob = viewModelScope.launch {
-            toolchain.install(platform.component).collect { progress ->
-                platformProgress = progress
-                _state.update { it.copy(platform = it.platform?.copy(progress = progress)) }
-                if (progress is InstallProgress.Installed) {
-                    platformProgress = null
-                    _state.update { it.copy(platform = null) }
-                    _events.send(WorkspaceEvent.Notice("${platform.component.displayName} installed."))
+            try {
+                toolchain.install(mine.component).collect { progress ->
+                    mine.progress = progress
+                    // Into its own prompt only.
+                    _state.update { state ->
+                        state.copy(
+                            platform = state.platform?.let {
+                                if (it.component == mine.component) it.copy(progress = progress) else it
+                            },
+                        )
+                    }
+                    if (progress is InstallProgress.Installed) {
+                        download = null
+                        _state.update { state ->
+                            if (state.platform?.component == mine.component) state.copy(platform = null) else state
+                        }
+                        _events.send(WorkspaceEvent.Notice("${mine.component.displayName} installed."))
 
-                    resumeAfterInstall()
+                        resumeAfterInstall(mine.then)
+                    }
                 }
+            } finally {
+                if (download === mine) download = null
             }
         }
     }
@@ -1916,8 +2128,10 @@ class WorkspaceViewModel(
      * that a Node download accepted for "Install dependencies" installs
      * dependencies rather than running the program.
      */
-    internal fun resumeAfterInstall() {
-        when (afterInstall) {
+    internal fun resumeAfterInstall(then: AfterInstall = afterInstall) {
+        // Spent: a later prompt sets its own.
+        afterInstall = AfterInstall.BUILD
+        when (then) {
             // **Kotlin needs two components, so one install is rarely the
             // end.** The compiler is the prerequisite and the Analysis API
             // follows it; offering only the first and stopping leaves a user
@@ -1926,29 +2140,24 @@ class WorkspaceViewModel(
             // component: the one just installed is no longer missing, and the
             // next has not been offered.
             AfterInstall.ANALYSE -> {
-                afterInstall = AfterInstall.BUILD
                 _state.value.activeFile?.let { active ->
                     offerIntelligence(active)
                     // Nothing re-analyses on its own: the service is resolved
                     // per request, so the file on screen keeps its old (empty)
-                    // diagnostics until something asks again.
-                    analyse(active, pendingText[active] ?: return@let)
+                    // diagnostics until something asks again. **The open text,
+                    // not only an edited buffer:** this read the edit alone, so
+                    // the usual case -- a clean file -- was never re-analysed.
+                    analyseOpen(active)
                 }
             }
 
             // The download was the toll on the way to npm, and running the
             // program instead would be answering a question nobody asked.
-            AfterInstall.INSTALL_DEPENDENCIES -> {
-                afterInstall = AfterInstall.BUILD
-                installDependencies()
-            }
+            AfterInstall.INSTALL_DEPENDENCIES -> installDependencies()
 
             // The same: the download was the toll on the way to reading the
             // project, not a way of asking for it to be built.
-            AfterInstall.SYNC -> {
-                afterInstall = AfterInstall.BUILD
-                sync()
-            }
+            AfterInstall.SYNC -> sync()
 
             // What the user asked for was a build; the download was the toll.
             // Starting it saves them tapping Build again.
@@ -1977,12 +2186,18 @@ class WorkspaceViewModel(
      */
     private fun rebuildTree() {
         val root = rootNode ?: return
-        viewModelScope.launch {
+        // The previous one is cancelled: two listings in flight finish in
+        // either order, and an older one finishing last put back a tree from
+        // before the latest expand.
+        treeJob?.cancel()
+        treeJob = viewModelScope.launch {
             val expanded = _state.value.expandedPaths
             val flattened = withContext(dispatchers.io) { flatten(root, expanded) }
             _state.update { it.copy(visibleNodes = flattened) }
         }
     }
+
+    private var treeJob: Job? = null
 
     private fun flatten(root: FileNode, expanded: Set<String>): List<FileNode> {
         val out = mutableListOf<FileNode>()
@@ -2018,5 +2233,16 @@ class WorkspaceViewModel(
 
         /** Shorter than analysis: a hint is worth less the later it lands. */
         const val SIGNATURE_DEBOUNCE_MILLIS = 200L
+
+        /** Twenty frames a second of output is more than anyone reads. */
+        const val RUN_FLUSH_MILLIS = 50L
+
+        /** A console's scrollback, not a log file's. */
+        const val RUN_LOG_LINES = 5_000
+        const val RUN_LOG_TRIMMED = "… earlier output not kept"
     }
 }
+
+/** Whole megabytes, for prompts: a download's size is read by a person, not compared. */
+private val ToolchainComponent.archiveMegabytes: Long get() = archiveBytes / (1024 * 1024)
+private val ToolchainComponent.installedMegabytes: Long get() = installedBytes / (1024 * 1024)

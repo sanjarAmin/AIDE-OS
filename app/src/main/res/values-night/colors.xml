@@ -13,6 +13,11 @@
     <color name="file_xml">#81C784</color>
     <color name="file_json">#FFD54F</color>
     <color name="file_gradle">#4DB6AC</color>
+    <!-- C#'s light #68217A is about 1.9:1 on this ground, so .cs icons all but
+         vanished; this is about 7.9:1 and stays apart from file_kotlin's
+         lavender. file_js needs no step: its light value is already 7.6:1
+         here and reads apart from file_json's night yellow. -->
+    <color name="file_cs">#CE93D8</color>
     <color name="file_generic">#9E9E9E</color>
     <color name="folder">#FFCA28</color>
 </resources>

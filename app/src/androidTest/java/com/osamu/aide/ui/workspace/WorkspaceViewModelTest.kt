@@ -1143,6 +1143,163 @@ class WorkspaceViewModelTest {
         )
     }
 
+    /** A second Java file beside MainActivity, for tests that need two tabs. */
+    private fun otherSource(): File =
+        File(mainActivitySource.parentFile, "Other.java").apply {
+            writeText("package com.example.demo;\n\npublic class Other {}\n")
+        }
+
+    /** Holds the test for [millis] without blocking the main thread it waits on. */
+    private fun settle(millis: Long = 1_500) = runBlocking { withContext(Dispatchers.IO) { Thread.sleep(millis) } }
+
+    /**
+     * **An edit the user approved survives the tab it landed in being closed.**
+     * The reload replaced the buffer and marked it clean but kept the old text
+     * as pending, so closing the tab saved that text over the assistant's
+     * change -- the revert the reload exists to prevent.
+     */
+    @Test
+    fun an_approved_edit_survives_closing_the_tab_it_was_reloaded_into() {
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(mainActivitySource) }
+        awaitState("the file to open") { it.active?.file == mainActivitySource }
+        onMain { viewModel.onTextChanged("// the user's own edit\n") }
+        awaitState("the tab to be dirty") { it.active?.isDirty == true }
+
+        // What the assistant's approved edit_file does: write the disk, then
+        // ask the open tab to catch up.
+        val approved = "// the assistant's approved edit\n"
+        mainActivitySource.writeText(approved)
+        onMain { viewModel.reloadFromDisk(mainActivitySource) }
+        awaitState("the reload") { it.active?.document?.text == approved && it.active?.isDirty == false }
+
+        onMain { viewModel.closeDocument(mainActivitySource) }
+        awaitState("the tab to close") { it.openFiles.isEmpty() }
+
+        assertEquals("closing the tab reverted the approved edit", approved, mainActivitySource.readText())
+    }
+
+    /**
+     * **A tab whose save fails stays open, with its text.** Closing saved and
+     * then closed regardless, dropping the only copy of the unsaved text when
+     * the save had failed -- here, because the file has become a directory.
+     */
+    @Test
+    fun a_tab_whose_save_fails_stays_open_with_its_text() {
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(mainActivitySource) }
+        awaitState("the file to open") { it.active?.file == mainActivitySource }
+        onMain { viewModel.onTextChanged("// unsaved, and nowhere else\n") }
+        awaitState("the tab to be dirty") { it.active?.isDirty == true }
+
+        check(mainActivitySource.delete())
+        File(mainActivitySource, "in-the-way").apply { parentFile!!.mkdirs(); writeText("") }
+
+        onMain { viewModel.closeDocument(mainActivitySource) }
+        settle()
+
+        val tab = viewModel.state.value.openFiles.firstOrNull { it.file == mainActivitySource }
+        assertNotNull("the tab closed though its save failed", tab)
+        assertTrue("the unsaved text was dropped", tab!!.isDirty)
+    }
+
+    /**
+     * **A download declined stays declined when the same project is opened
+     * again** -- which the screen does on every rotation and every return from
+     * Settings. The offers were forgotten before the check that it was the same
+     * project, so the next file opened asked again.
+     */
+    @Test
+    fun reopening_the_same_project_keeps_a_declined_download_declined() {
+        val other = otherSource()
+        withoutPlatform {
+            onMain { viewModel.open(project.rootDir) }
+            onMain { viewModel.openDocument(mainActivitySource) }
+            awaitState("the platform to be offered") { it.platform != null }
+            onMain { viewModel.dismissPlatformInstall() }
+
+            onMain { viewModel.open(project.rootDir) }
+            onMain { viewModel.openDocument(other) }
+            awaitState("the second file to open") { it.active?.file == other }
+            settle()
+
+            assertEquals("the declined download was offered again", null, viewModel.state.value.platform)
+        }
+    }
+
+    /**
+     * **Switching back to a tab analyses it again.** Analysis followed the
+     * typing and nothing else, so after a tab switch the gutter showed the last
+     * build's diagnostics for the file on screen, or none, until a keystroke.
+     */
+    @Test
+    fun switching_back_to_a_tab_analyses_it_again() {
+        assumeTrue("no platform installed; there is nothing to analyse Java with", hasPlatform)
+        val other = otherSource()
+        onMain { viewModel.open(project.rootDir) }
+        onMain { viewModel.openDocument(mainActivitySource) }
+        awaitState("MainActivity analysed", timeoutMillis = 60_000) { it.analysis.file == mainActivitySource }
+        onMain { viewModel.openDocument(other) }
+        awaitState("Other analysed", timeoutMillis = 60_000) { it.analysis.file == other }
+
+        onMain { viewModel.selectDocument(mainActivitySource) }
+
+        awaitState("MainActivity analysed again", timeoutMillis = 60_000) { it.analysis.file == mainActivitySource }
+    }
+
+    /**
+     * **A clean file is analysed once the download it waited for lands.** The
+     * resume re-analysed only an edited buffer, so the usual case -- a file
+     * opened to read -- kept its empty gutter until the first keystroke.
+     */
+    @Test
+    fun a_clean_file_is_analysed_once_its_download_lands() {
+        assumeTrue("no platform installed; there is nothing to analyse Java with", hasPlatform)
+        withoutPlatform {
+            onMain { viewModel.open(project.rootDir) }
+            onMain { viewModel.openDocument(mainActivitySource) }
+            awaitState("the platform to be offered") { it.platform != null }
+            // Past the debounce while the platform is still away: the open's
+            // own analysis resolves its service only after it, and leaving
+            // early let that analysis find the platform this test is about to
+            // restore -- passing with the resume doing nothing.
+            settle()
+        }
+        assertEquals("analysed with no platform, so this proves nothing", null, viewModel.state.value.analysis.file)
+
+        // The platform is back, as if its download had just landed.
+        onMain { viewModel.resumeAfterInstall(AfterInstall.ANALYSE) }
+
+        awaitState("the clean file to be analysed", timeoutMillis = 60_000) {
+            it.analysis.file == mainActivitySource
+        }
+    }
+
+    /**
+     * **A second tap while the first build is still starting is refused, and
+     * says so.** The guard was the panel's running flag, which is not up until
+     * the save and the descriptor wait have both suspended -- so two taps ran
+     * two builds, and Stop could reach only the second.
+     */
+    @Test
+    fun a_second_build_tap_while_the_first_starts_is_refused_and_says_so() {
+        withoutPlatform {
+            onMain { viewModel.open(project.rootDir) }
+            val notice = runBlocking(Dispatchers.Main) {
+                val waiting = async {
+                    withTimeoutOrNull(TIMEOUT_MILLIS) {
+                        viewModel.events.filterIsInstance<WorkspaceEvent.Notice>()
+                            .first { "Still finishing" in it.message }
+                    }
+                }
+                viewModel.build()
+                viewModel.build()
+                waiting.await()
+            }
+            assertNotNull("the second tap was neither refused nor explained", notice)
+        }
+    }
+
     private companion object {
         const val TIMEOUT_MILLIS = 10_000L
         const val POLL_MILLIS = 20L

@@ -1,19 +1,27 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
-   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Backup and device transfer on Android 12 and up. backup_rules.xml says what
+    is left out and why; the lists are the same and must stay so. Device
+    transfer leaves out the same things: the Keystore keys do not travel to the
+    new phone either, and the toolchains are downloaded for its own ABI.
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <exclude domain="file" path="toolchains/" />
+        <exclude domain="file" path="gradle-home/" />
+        <exclude domain="file" path="engine/" />
+        <exclude domain="file" path="signing/" />
+        <exclude domain="sharedpref" path="aide-ai.xml" />
+        <exclude domain="sharedpref" path="aide-git-credentials.xml" />
+        <exclude domain="sharedpref" path="aide-signing.xml" />
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <exclude domain="file" path="toolchains/" />
+        <exclude domain="file" path="gradle-home/" />
+        <exclude domain="file" path="engine/" />
+        <exclude domain="file" path="signing/" />
+        <exclude domain="sharedpref" path="aide-ai.xml" />
+        <exclude domain="sharedpref" path="aide-git-credentials.xml" />
+        <exclude domain="sharedpref" path="aide-signing.xml" />
     </device-transfer>
-    -->
 </data-extraction-rules>

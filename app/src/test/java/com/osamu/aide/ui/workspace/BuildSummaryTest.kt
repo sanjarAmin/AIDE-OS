@@ -81,7 +81,11 @@ class BuildSummaryTest {
         ).summarise(root)
 
         assertFalse(summary, "41 artifacts" in summary)
-        assertFalse(summary, "COMPILE" in summary.uppercase().replace("THE BUILD", ""))
+        // Either half of a stage line, as the panel writes one. This checked
+        // for "COMPILE", which the stage's own words -- "Compiling Java" --
+        // never contain, so it could not fail.
+        assertFalse(summary, BuildStage.COMPILE_JAVA.displayName in summary)
+        assertFalse(summary, "900" in summary)
     }
 
     @Test
