@@ -1,0 +1,24 @@
+AIDE-OS is an IDE that runs entirely on an Android phone or tablet. Create a project, edit it, tap Build, and the app installs: no computer, no root, no Termux.
+
+<b>Build real apps</b>
+<ul>
+<li>Java and Kotlin Android apps, built on the device by aapt2, ECJ or kotlinc, D8 and apksig in a few seconds</li>
+<li>Jetpack Compose, AndroidX and other Maven dependencies, resolved and unpacked on the device</li>
+<li>C and C++ through clang, packaged into the APK as native libraries</li>
+<li>A project's own Gradle build, run by a real JDK on the device</li>
+<li>JavaScript (Node), C# (Mono) and Python programs, run in place</li>
+</ul>
+
+<b>Edit with help</b>
+<ul>
+<li>Syntax highlighting, completion, errors as you type and go-to-definition for Java, Kotlin, C and C++</li>
+<li>A debugger: breakpoints, stepping and variables in the app you built</li>
+<li>Git: clone, commit, push and diff, with tokens kept in the Android Keystore</li>
+<li>A terminal</li>
+<li>An optional AI assistant, with your own key for Gemini, OpenAI, Anthropic or any compatible server, or a model running on the phone</li>
+</ul>
+
+<b>What it downloads, and when</b>
+Compilers and runtimes are large, so each is downloaded only when a project first needs it, and only after you agree. Building Android apps needs Google's Android SDK platform, which is offered with Google's licence for you to accept or decline.
+
+AIDE-OS is free software under the GNU General Public License, version 3 or later.

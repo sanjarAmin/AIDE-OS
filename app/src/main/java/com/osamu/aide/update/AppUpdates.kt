@@ -74,6 +74,11 @@ class AppUpdates(
     private val dispatchers: DispatcherProvider,
     private val installedCommit: String = BuildConfig.GIT_COMMIT,
     private val clock: () -> Long = System::currentTimeMillis,
+    /**
+     * False in an F-Droid build, which F-Droid updates: nothing here asks
+     * GitHub anything or downloads anything. `app/build.gradle.kts`.
+     */
+    val enabled: Boolean = BuildConfig.SELF_UPDATE,
 ) {
     private val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + dispatchers.main)
@@ -105,7 +110,7 @@ class AppUpdates(
 
     /** Checks if automatic checks are on and the last was over a day ago. */
     fun checkIfDue() {
-        if (!checksAutomatically) return
+        if (!enabled || !checksAutomatically) return
         val last = preferences.getLong(KEY_LAST_CHECKED, 0L)
         if (clock() - last < CHECK_INTERVAL_MILLIS) return
         check()
@@ -113,7 +118,7 @@ class AppUpdates(
 
     /** Asks GitHub now. Ignored while a check, download or install is running. */
     fun check() {
-        if (work?.isActive == true) return
+        if (!enabled || work?.isActive == true) return
         work = scope.launch {
             _state.value = UpdateState.Checking
             val result = withContext(dispatchers.io) { feed.check(installedCommit) }
@@ -136,6 +141,7 @@ class AppUpdates(
 
     /** Downloads the release on offer, verifies it, and hands it to the installer. */
     fun install() {
+        if (!enabled) return
         val (release, ahead) = when (val current = state.value) {
             is UpdateState.Available -> current.release to current.commitsAhead
             is UpdateState.Failed -> current.release to current.commitsAhead

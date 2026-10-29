@@ -99,3 +99,36 @@ APK that believes it is the preview at that sha, at `versionCode 1`, so on a
 device it finds the previews published since and installs the newest over
 itself. That is how sections 1–4 were measured. Clear the app's data first
 (`pm clear`) or the daily check will not be due. Never publish such a build.
+
+## 7. What F-Droid inclusion takes, which is more than metadata
+
+Read against F-Droid's inclusion policy (f-droid.org/docs/Inclusion_Policy)
+on 2026-10-29. Not yet tried against their build server; what follows is what
+the policy says, set against what this repository is.
+
+- **The self-updater has to go in an F-Droid build.** The policy counts an
+  app's own update mechanism as downloading executable code, allowed only
+  opt-in and only if declining is no harder than accepting. It would also be
+  useless: F-Droid signs with its own key, so a GitHub preview cannot install
+  over an F-Droid install. `-Paide.distribution=fdroid` builds without it, and
+  About says updates come from F-Droid.
+- **Toolchain downloads already have the consent the policy asks for.** Every
+  compiler, runtime and SDK platform is offered in a dialog and fetched only on
+  acceptance -- the policy's condition for runtime executables. Each must stay
+  that way: a component fetched silently would be an undisclosed anti-feature,
+  which is a rejection.
+- **Every committed binary has to be rebuilt by F-Droid from source.** "All
+  binary dependencies including JAR files must originate either from source
+  compilation or Debian repository downloads." This repository commits
+  `toolchain/native/src/main/jniLibs/*/libaapt2.so` (4.5 MB each, AOSP),
+  `libjspawnhelper.so`, `editor/src/main/jniLibs/*/libtree-sitter-javascript.so`
+  and `engine/fast/src/main/assets/platform-stubs.jar`. The scripts that make
+  them are in `tools/`; an F-Droid recipe has to delete the committed copies
+  and run those scripts on their build server, and `tools/aapt2` builds from
+  an AOSP checkout. **This is the real work of getting into F-Droid.**
+- **Maven dependencies are fine as they are** -- Maven Central and Google's
+  repository are trusted sources -- and nothing here uses Play Services or a
+  tracker.
+- **The commit-count versionCode needs a full clone** (§5). F-Droid's recipe
+  states each version's code explicitly, which has to match what the build
+  computes from the history it checks out.

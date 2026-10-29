@@ -45,6 +45,21 @@ val hasLocalChanges = git("status", "--porcelain", "--untracked-files=no") != nu
  */
 val pretendBuiltFrom = providers.gradleProperty("aide.pretendBuiltFrom").orNull
 
+/**
+ * Where this build is going: `github` (the default) or `fdroid`.
+ *
+ * **An F-Droid build does not update itself.** F-Droid's inclusion policy
+ * counts an app's own updater as downloading executable code, allowed only
+ * opt-in -- and F-Droid signs what it ships with its own key, so a preview from
+ * GitHub could never install over an F-Droid install anyway: the updater
+ * would download 49 MB to fail on a signature mismatch. F-Droid delivers the
+ * updates there. `-Paide.distribution=fdroid`; `app/FINDINGS.md` §7.
+ */
+val distribution = providers.gradleProperty("aide.distribution").orNull ?: "github"
+require(distribution in setOf("github", "fdroid")) {
+    "aide.distribution is '$distribution'; it is 'github' or 'fdroid'"
+}
+
 android {
     namespace = "com.osamu.aide"
     compileSdk {
@@ -60,6 +75,7 @@ android {
         versionName = if (pretendBuiltFrom != null) "1.0" else commitCount?.let { "0.$it" } ?: "0.0"
         buildConfigField("String", "GIT_COMMIT", "\"${pretendBuiltFrom ?: headCommit}\"")
         buildConfigField("boolean", "GIT_LOCAL_CHANGES", "${pretendBuiltFrom == null && hasLocalChanges}")
+        buildConfigField("boolean", "SELF_UPDATE", "${distribution == "github"}")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

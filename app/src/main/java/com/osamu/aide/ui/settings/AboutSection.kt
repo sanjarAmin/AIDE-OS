@@ -164,6 +164,23 @@ private fun UpdatesPanel(updates: AppUpdates) {
     val state by updates.state.collectAsStateWithLifecycle()
     var automatic by remember { mutableStateOf(updates.checksAutomatically) }
 
+    // An F-Droid build: no buttons that do nothing, and no switch for checks
+    // that never happen -- just where updates come from instead.
+    if (!updates.enabled) {
+        SettingsPanel {
+            Column(Modifier.padding(16.dp)) {
+                Text("Updates", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    text = "Updates for this build come from F-Droid.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+        }
+        return
+    }
+
     SettingsPanel {
         Column(Modifier.padding(16.dp)) {
             Text("Updates", style = MaterialTheme.typography.titleSmall)
