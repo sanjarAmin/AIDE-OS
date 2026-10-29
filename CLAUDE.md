@@ -222,6 +222,14 @@ failed to load still produces a clean compile.
 - **`grep` here is a shell function that skips binary files.** Use
   `/usr/bin/grep -a` when searching class files, jars, or dex.
 
+- **`material-icons-extended` is not a dependency; the icons in use are
+  vendored.** It was 23 % of the APK's dex for 57 icons out of 2,163, and R8
+  never touches the debug builds people download. An icon import that fails
+  with "Unresolved reference" is one nobody has used before: run
+  `python3 tools/icons/vendor-icons.py`, which copies exactly the icons the
+  code imports into `:core:ui` from a pinned sources jar and prunes the rest.
+  `core/ui/src/main/java/androidx/compose/material/icons/PROVENANCE.md`.
+
 - **A Compose `Row` squeezes rather than overflows, and no obvious assertion
   sees it.** Four `FilterChip`s in the new-project dialog: the last was laid
   out 19 dp wide against its neighbour's 99, its label wrapped inside it, and

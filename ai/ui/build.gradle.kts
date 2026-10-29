@@ -45,7 +45,8 @@ dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.ui)
-    implementation(libs.androidx.compose.material.icons.extended)
+    // Icons come from :core:ui, which vendors the extended ones in use.
+    // tools/icons/vendor-icons.py.
     debugImplementation(libs.androidx.compose.ui.tooling)
     testImplementation(libs.junit)
 
