@@ -60,7 +60,7 @@ fun GitSection(
     modifier: Modifier = Modifier,
 ) {
     Column(modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp)) {
-        Text("Git", style = MaterialTheme.typography.titleMedium)
+        // No heading: the page is titled with the category already.
         Text(
             text = "A phone has no global git config, so the name on your commits and " +
                 "any access token live here.",

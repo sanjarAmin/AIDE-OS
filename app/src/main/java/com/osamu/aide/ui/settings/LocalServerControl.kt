@@ -122,6 +122,7 @@ internal fun LocalServerControl(
                         keys.setActiveModel(AiProviderType.LOCAL, modelIdFor(model))
                     },
                     label = { Text(shortLabel(model)) },
+                    colors = com.osamu.aide.core.ui.selectionChipColors(),
                 )
             }
         }

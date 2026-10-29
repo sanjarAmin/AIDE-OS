@@ -10,12 +10,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.rememberTextFieldState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Key
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -105,14 +102,8 @@ fun SigningSection(store: ReleaseKeystoreStore, modifier: Modifier = Modifier) {
         modifier = modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Icon(Icons.Default.Key, contentDescription = null)
-            Text("Release signing", style = MaterialTheme.typography.titleMedium)
-        }
-
+        // No heading: the page is titled with the category already, and
+        // wears the key icon in its header.
         Text(
             text = "Debug builds are signed with a key this device made and cannot " +
                 "export. A release build needs one of yours, which has to outlive " +

@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,7 +20,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.AccountCircle
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -62,6 +62,7 @@ import com.osamu.aide.ai.core.ApiKeyStore
 import com.osamu.aide.ai.core.Endpoint
 import com.osamu.aide.ai.core.GoogleAuthManager
 import com.osamu.aide.ai.core.parseEndpoint
+import com.osamu.aide.core.ui.selectionChipColors
 import org.koin.compose.koinInject
 
 /**
@@ -181,18 +182,8 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
             .padding(horizontal = 20.dp, vertical = 14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Icon(
-                Icons.Default.AutoAwesome,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-            )
-            Text("AI assistant", style = MaterialTheme.typography.titleMedium)
-        }
-
+        // No heading of its own: the page this sits on is titled with the
+        // category, and a section repeating it read "AI assistant" twice.
         Text(
             // No mention of Google Sign-In: it is disabled, and naming a way in
             // that does not exist is worse than naming none. See
@@ -223,6 +214,10 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
                         activeProvider = provider
                     },
                     label = { Text(provider.displayName) },
+                    // The accent, not Material's green: a selected provider
+                    // drawn in the success colour read as "this one works",
+                    // which is the tick's claim to make, not the selection's.
+                    colors = selectionChipColors(),
                     // Ready, not merely keyed: a Custom key with no address
                     // is a provider the chat cannot use. ApiKeyStore.isReady.
                     leadingIcon = if (keys.isReady(provider)) {
@@ -246,6 +241,10 @@ fun ApiKeySection(keys: ApiKeyStore, modifier: Modifier = Modifier) {
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
             ),
+            // Drawn as the settings pages draw every panel, so the provider's
+            // surface reads as one of them rather than a fourth style of box.
+            shape = RoundedCornerShape(20.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(Modifier.padding(vertical = 6.dp)) {

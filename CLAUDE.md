@@ -308,6 +308,13 @@ failed to load still produces a clean compile.
   correctly and the code is right. Look at the screen. `ai/core/FINDINGS.md`
   §14.
 
+  **Material reaches for the green by default, too**, so no name appears in the
+  code at all: a selected `FilterChip`, an active `SegmentedButton` and a
+  `Slider`'s inactive track are all `secondaryContainer`. Every filter and
+  choice in Home and Settings showed its selection as a success state until
+  the redesign. Pass `selectionChipColors()` / `selectionSegmentColors()`
+  (`:core:ui`'s `Selection.kt`) instead of the defaults.
+
 - **A key that is process-local must never be persisted.** Chat entries carry
   an id from a counter that restarts at zero each process, and that id is also
   the `LazyColumn` key. Conversations were stored with their ids, so reopening

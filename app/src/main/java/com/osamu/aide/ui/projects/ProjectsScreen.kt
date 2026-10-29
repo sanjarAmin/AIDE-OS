@@ -1,68 +1,60 @@
 package com.osamu.aide.ui.projects
 
-import com.osamu.aide.core.ui.fadingEdges
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.MutableTransitionState
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.DeleteOutline
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.FilterChip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
-import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DriveFolderUpload
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
@@ -71,27 +63,24 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.draw.scale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -100,8 +89,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.osamu.aide.core.fs.Project
@@ -109,6 +100,9 @@ import com.osamu.aide.core.fs.ProjectTemplate
 import com.osamu.aide.core.fs.SourceLanguage
 import com.osamu.aide.core.fs.TemplateFile
 import com.osamu.aide.core.fs.preview
+import com.osamu.aide.core.ui.BrandMark
+import com.osamu.aide.core.ui.fadingEdges
+import com.osamu.aide.core.ui.selectionChipColors
 import com.osamu.aide.ui.util.FileIcons
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -116,6 +110,21 @@ import org.koin.androidx.compose.koinViewModel
 import java.io.File
 import java.util.concurrent.TimeUnit
 
+/**
+ * The first screen: what you were doing, what else there is, and how to start.
+ *
+ * Laid out in the order those questions get asked. **Actions first**, as
+ * labelled tiles: they were three bare icons in the toolbar -- a cloud, a
+ * folder with an arrow, a gear -- and the two that make projects could only be
+ * told apart by long-pressing them. **Then the project last opened**, large,
+ * because the list is sorted by it and "the one I was in" is the commonest
+ * reason to be here. **Then everything else, under headings by when**, so a
+ * list of thirty reads as a few short ones.
+ *
+ * There is no floating action button any more. "New project" is the first tile
+ * and the screen's one filled control; a FAB beside it would be the same action
+ * twice, and on a short list it sat over nothing.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProjectsScreen(
@@ -148,45 +157,42 @@ fun ProjectsScreen(
         }
     }
 
+    // **Loaded once means loaded.** Every return to this screen reloads, and
+    // the reload sets isLoading -- which used to swap the whole list for a
+    // spinner for a frame on every Back from a project. Only a screen with
+    // nothing to show yet waits visibly.
+    val firstLoad = state.isLoading && state.projects.isEmpty()
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "AIDE-OS",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        // **The status pill is gone.** It read "v1.0 · Ready"
-                        // beside a green dot, and every part of that was a
-                        // constant: the version was hardcoded and drifted from
-                        // the installed one, and the dot could never be any
-                        // colour but green. A status light that cannot change
-                        // is worse than no light, because it teaches people to
-                        // ignore the ones that can. The real version is in
-                        // Settings > About, read from the installed package.
+                        BrandMark()
+                        Column(Modifier.padding(start = 12.dp)) {
+                            Text(
+                                "AIDE-OS",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            // **A count, because it is real.** This bar once
+                            // carried "v1.0 · Ready" beside a green dot, every
+                            // part of which was a constant; a status that
+                            // cannot change teaches people to ignore the ones
+                            // that can. How many projects there are changes.
+                            if (!firstLoad) {
+                                Text(
+                                    text = projectCountLabel(state.projects.size),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
                     }
                 },
                 actions = {
-                    IconButton(
-                        onClick = { showCloneDialog = true },
-                        enabled = state.cloneStatus == null,
-                    ) {
-                        Icon(
-                            Icons.Default.CloudDownload,
-                            contentDescription = "Clone a repository",
-                        )
-                    }
-                    IconButton(
-                        onClick = { importLauncher.launch(null) },
-                        enabled = !state.isImporting,
-                    ) {
-                        Icon(
-                            Icons.Default.DriveFolderUpload,
-                            contentDescription = "Import a project folder",
-                        )
-                    }
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings")
                     }
@@ -196,130 +202,24 @@ fun ProjectsScreen(
                 ),
             )
         },
-        floatingActionButton = {
-            FloatingActionButton(
-                onClick = { showCreateDialog = true },
-                shape = RoundedCornerShape(16.dp),
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "New project")
-            }
-        },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
-        if (state.isImporting) {
-            LinearProgressIndicator(
-                Modifier.fillMaxWidth().padding(top = padding.calculateTopPadding()),
-            )
-        }
-        when {
-            state.isLoading -> Box(
+        if (firstLoad) {
+            Box(
                 Modifier.fillMaxSize().padding(padding),
                 contentAlignment = Alignment.Center,
             ) { CircularProgressIndicator() }
-
-            state.projects.isEmpty() -> EmptyProjects(
-                onCreateClick = { showCreateDialog = true },
-                onCloneClick = { showCloneDialog = true },
-                modifier = Modifier.fillMaxSize().padding(padding),
+        } else {
+            ProjectList(
+                state = state,
+                padding = padding,
+                viewModel = viewModel,
+                onOpenProject = onOpenProject,
+                onCreate = { showCreateDialog = true },
+                onClone = { showCloneDialog = true },
+                onImport = { importLauncher.launch(null) },
+                onDelete = { confirmingDelete = it },
             )
-
-            else -> LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(
-                    top = padding.calculateTopPadding() + 8.dp,
-                    bottom = padding.calculateBottomPadding() + 88.dp,
-                ),
-            ) {
-                item(key = "projects-search-bar") {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 4.dp),
-                    ) {
-                        OutlinedTextField(
-                            value = state.searchQuery,
-                            onValueChange = viewModel::setSearchQuery,
-                            placeholder = { Text("Search projects…", style = MaterialTheme.typography.bodyMedium) },
-                            leadingIcon = {
-                                Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(20.dp))
-                            },
-                            trailingIcon = {
-                                if (state.searchQuery.isNotEmpty()) {
-                                    IconButton(onClick = { viewModel.setSearchQuery("") }) {
-                                        Icon(Icons.Default.Close, contentDescription = "Clear search", modifier = Modifier.size(18.dp))
-                                    }
-                                }
-                            },
-                            singleLine = true,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Search projects" },
-                        )
-
-                        Spacer(Modifier.height(8.dp))
-
-                        val languageScroll = rememberScrollState()
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                // Before the scroll, not after: a draw
-                                // modifier placed after it renders inside the
-                                // scrolling content, so the gradient lands at
-                                // the ends of the row rather than at the edges
-                                // of the window onto it -- off screen, which is
-                                // exactly where it cannot be seen.
-                                .fadingEdges(languageScroll)
-                                .horizontalScroll(languageScroll),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            FilterChip(
-                                selected = state.selectedLanguage == null,
-                                onClick = { viewModel.setLanguageFilter(null) },
-                                label = { Text("All", fontSize = 12.sp) },
-                                modifier = Modifier.semantics { contentDescription = "Filter all languages" },
-                            )
-                            SourceLanguage.entries.forEach { lang ->
-                                FilterChip(
-                                    selected = state.selectedLanguage == lang,
-                                    onClick = {
-                                        viewModel.setLanguageFilter(if (state.selectedLanguage == lang) null else lang)
-                                    },
-                                    label = { Text(lang.displayName, fontSize = 12.sp) },
-                                    modifier = Modifier.semantics { contentDescription = "Filter ${lang.displayName}" },
-                                )
-                            }
-                        }
-                        Spacer(Modifier.height(6.dp))
-                    }
-                }
-
-                if (state.filteredProjects.isEmpty()) {
-                    item(key = "no-matching-projects") {
-                        Box(
-                            modifier = Modifier.fillMaxWidth().padding(32.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = if (state.searchQuery.isNotBlank()) "No projects matching \"${state.searchQuery}\"" else "No projects matching this filter",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                } else {
-                    itemsIndexed(state.filteredProjects, key = { _, it -> it.rootDir.absolutePath }) { index, project ->
-                        ProjectRow(
-                            project = project,
-                            index = index,
-                            sizeOf = viewModel::sizeOf,
-                            onClick = { onOpenProject(project.rootDir) },
-                            onDelete = { confirmingDelete = project },
-                        )
-                    }
-                }
-            }
         }
     }
 
@@ -351,7 +251,7 @@ fun ProjectsScreen(
         AlertDialog(
             onDismissRequest = { confirmingDelete = null },
             title = { Text("Delete ${project.name}?") },
-            text = { Text("Are you sure you want to delete '${project.name}'? This permanently removes the project files from device storage.") },
+            text = { Text("This permanently removes the project and every file in it from this device.") },
             confirmButton = {
                 Button(
                     onClick = {
@@ -368,186 +268,641 @@ fun ProjectsScreen(
     }
 }
 
+/**
+ * Everything below the toolbar once the projects have loaded.
+ *
+ * Its own function so the loading branch is an ordinary `if`/`else` rather
+ * than an early return out of the Scaffold's content lambda.
+ */
 @Composable
-private fun ProjectRow(
-    project: Project,
-    index: Int,
-    sizeOf: suspend (Project) -> Long,
-    onClick: () -> Unit,
-    onDelete: () -> Unit,
+private fun ProjectList(
+    state: ProjectsUiState,
+    padding: PaddingValues,
+    viewModel: ProjectsViewModel,
+    onOpenProject: (File) -> Unit,
+    onCreate: () -> Unit,
+    onClone: () -> Unit,
+    onImport: () -> Unit,
+    onDelete: (Project) -> Unit,
 ) {
-    val projectSize by produceState(initialValue = "…", project.rootDir) {
-        val bytes = sizeOf(project)
-        value = when {
-            bytes < 1024 -> "$bytes B"
-            bytes < 1024 * 1024 -> "${bytes / 1024} KB"
-            else -> String.format(java.util.Locale.US, "%.1f MB", bytes.toDouble() / (1024 * 1024))
-        }
-    }
-    val dummyFile = remember(project.language) {
-        val extension = when (project.language) {
-            SourceLanguage.KOTLIN -> "kt"
-            SourceLanguage.JAVASCRIPT -> "js"
-            SourceLanguage.CSHARP -> "cs"
-            SourceLanguage.PYTHON -> "py"
-            SourceLanguage.C -> "c"
-            SourceLanguage.CPP -> "cpp"
-            SourceLanguage.JAVA -> "java"
-        }
-        File("dummy.$extension")
-    }
-    val iconInfo = FileIcons.infoFor(dummyFile, isDirectory = false)
-
-    AnimatedVisibility(
-        // **Hidden, then shown**, so the entry actually plays. `visible = true`
-        // starts out visible and there is nothing to animate from: the stagger
-        // below was written and never ran.
-        visibleState = remember { MutableTransitionState(false).apply { targetState = true } },
-        enter = fadeIn(animationSpec = tween(280 + index * 50)) +
-            slideInVertically(animationSpec = tween(280 + index * 50)) { 24 },
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(
+            top = padding.calculateTopPadding() + 4.dp,
+            bottom = padding.calculateBottomPadding() + 32.dp,
+        ),
     ) {
-        OutlinedCard(
-            onClick = onClick,
-            shape = RoundedCornerShape(14.dp),
-            colors = CardDefaults.outlinedCardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        item(key = "actions") {
+            QuickActions(
+                onCreate = onCreate,
+                onClone = onClone,
+                onImport = onImport,
+                cloning = state.cloneStatus != null,
+                importing = state.isImporting,
+            )
+        }
+
+        if (state.projects.isEmpty()) {
+            item(key = "empty") { EmptyWorkspace() }
+        } else {
+            projectItems(state, viewModel, onOpenProject, onDelete)
+        }
+    }
+}
+
+/** The search, the resumed project and the grouped list, as lazy items. */
+private fun androidx.compose.foundation.lazy.LazyListScope.projectItems(
+    state: ProjectsUiState,
+    viewModel: ProjectsViewModel,
+    onOpenProject: (File) -> Unit,
+    onDelete: (Project) -> Unit,
+) {
+    val resume = resumeCandidate(state.projects, state.searchQuery, state.selectedLanguage)
+    // The resumed project is not listed again below its own card: the same
+    // name twice on one screen reads as a duplicate project.
+    val groups = groupByRecency(state.filteredProjects.filter { it.rootDir != resume?.rootDir })
+
+    item(key = "search") {
+        SearchAndFilter(
+            query = state.searchQuery,
+            onQueryChange = viewModel::setSearchQuery,
+            languages = languageCounts(state.projects),
+            totalCount = state.projects.size,
+            selected = state.selectedLanguage,
+            onSelect = viewModel::setLanguageFilter,
+        )
+    }
+
+    if (resume != null) {
+        item(key = "resume") {
+            ResumeCard(
+                project = resume,
+                size = rememberProjectSize(resume, viewModel::sizeOf),
+                onOpen = { onOpenProject(resume.rootDir) },
+                onDelete = { onDelete(resume) },
+                modifier = Modifier.animateItem(),
+            )
+        }
+    }
+
+    if (state.filteredProjects.isEmpty()) {
+        item(key = "no-matching-projects") {
+            NoMatches(
+                query = state.searchQuery,
+                language = state.selectedLanguage,
+                onClear = {
+                    viewModel.setSearchQuery("")
+                    viewModel.setLanguageFilter(null)
+                },
+            )
+        }
+    }
+
+    groups.forEach { (recency, members) ->
+        item(key = "heading-${recency.name}") {
+            GroupHeading(recency.heading, members.size, Modifier.animateItem())
+        }
+        items(members, key = { it.rootDir.absolutePath }) { project ->
+            ProjectCard(
+                project = project,
+                size = rememberProjectSize(project, viewModel::sizeOf),
+                onOpen = { onOpenProject(project.rootDir) },
+                onDelete = { onDelete(project) },
+                modifier = Modifier.animateItem(),
+            )
+        }
+    }
+}
+
+/**
+ * The three ways a project arrives, as equal tiles.
+ *
+ * **Equal widths by `weight`, equal heights by `IntrinsicSize.Min`.** A label
+ * that wraps on a narrow phone makes its tile taller, and three tiles of three
+ * heights read as a layout fault -- the shape CLAUDE.md records nine times. The
+ * intrinsic height makes the row as tall as its tallest tile and the others
+ * fill it.
+ *
+ * Only "New project" is filled. It is the action the screen exists for, and it
+ * replaces the FAB that used to carry that weight.
+ */
+@Composable
+private fun QuickActions(
+    onCreate: () -> Unit,
+    onClone: () -> Unit,
+    onImport: () -> Unit,
+    cloning: Boolean,
+    importing: Boolean,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        val tile = Modifier.weight(1f).fillMaxHeight()
+        ActionTile(
+            label = "New project",
+            icon = Icons.Default.Add,
+            description = "New project",
+            prominent = true,
+            onClick = onCreate,
+            modifier = tile,
+        )
+        ActionTile(
+            label = "Clone",
+            icon = Icons.Default.CloudDownload,
+            description = "Clone a repository",
+            enabled = !cloning,
+            onClick = onClone,
+            modifier = tile,
+        )
+        ActionTile(
+            // Said on the tile itself: an import copies thousands of files and
+            // takes long enough that a tile that merely went grey would look
+            // broken rather than busy.
+            label = if (importing) "Importing…" else "Import",
+            icon = Icons.Default.DriveFolderUpload,
+            description = "Import a project folder",
+            enabled = !importing,
+            busy = importing,
+            onClick = onImport,
+            modifier = tile,
+        )
+    }
+}
+
+@Composable
+private fun ActionTile(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    description: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    prominent: Boolean = false,
+    enabled: Boolean = true,
+    busy: Boolean = false,
+) {
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        shape = RoundedCornerShape(18.dp),
+        color = if (prominent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = if (prominent) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+        modifier = modifier.semantics { contentDescription = description },
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            if (busy) {
+                CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+            } else {
+                Icon(icon, contentDescription = null, modifier = Modifier.size(22.dp))
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
+                textAlign = TextAlign.Center,
+                color = LocalContentColor.current.copy(alpha = if (enabled) 1f else 0.5f),
+            )
+        }
+    }
+}
+
+/**
+ * The search field, and the language filter when there is anything to filter.
+ *
+ * The filter row is hidden when every project is in one language: a row of
+ * one chip beside "All" is two names for the same list.
+ */
+@Composable
+private fun SearchAndFilter(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    languages: List<Pair<SourceLanguage, Int>>,
+    totalCount: Int,
+    selected: SourceLanguage?,
+    onSelect: (SourceLanguage?) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp)) {
+        TextField(
+            value = query,
+            onValueChange = onQueryChange,
+            placeholder = { Text("Search projects", style = MaterialTheme.typography.bodyLarge) },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            trailingIcon = {
+                if (query.isNotEmpty()) {
+                    IconButton(onClick = { onQueryChange("") }) {
+                        Icon(Icons.Default.Close, contentDescription = "Clear search")
+                    }
+                }
+            },
+            singleLine = true,
+            shape = RoundedCornerShape(28.dp),
+            // A filled pill with no underline: the underline is what makes a
+            // TextField look like a form field, and this is a search bar.
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                focusedIndicatorColor = Color.Transparent,
+                unfocusedIndicatorColor = Color.Transparent,
+                disabledIndicatorColor = Color.Transparent,
             ),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 6.dp),
+                .padding(horizontal = 16.dp)
+                .semantics { contentDescription = "Search projects" },
+        )
+
+        // The selected language is offered even when no project uses it any
+        // more -- deleting the last one leaves the filter applied, and without
+        // its chip there is no way to see why the list is empty, or to undo it.
+        val shown = if (selected != null && languages.none { it.first == selected }) {
+            languages + (selected to 0)
+        } else {
+            languages
+        }
+        if (shown.size >= 2 || selected != null) {
+            LanguageFilter(shown, totalCount, selected, onSelect)
+        }
+    }
+}
+
+@Composable
+private fun LanguageFilter(
+    shown: List<Pair<SourceLanguage, Int>>,
+    totalCount: Int,
+    selected: SourceLanguage?,
+    onSelect: (SourceLanguage?) -> Unit,
+) {
+    val scroll = rememberScrollState()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp)
+            // Before the scroll, not after: a draw modifier placed after
+            // it renders inside the scrolling content, so the gradient
+            // lands at the ends of the row rather than at the edges of the
+            // window onto it -- off screen, where it cannot be seen.
+            .fadingEdges(scroll)
+            .horizontalScroll(scroll)
+            .padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        LanguageChip(
+            label = "All",
+            count = totalCount,
+            selected = selected == null,
+            onClick = { onSelect(null) },
+            description = "Filter all languages",
+        )
+        shown.forEach { (language, count) ->
+            LanguageChip(
+                label = language.displayName,
+                count = count,
+                selected = selected == language,
+                onClick = { onSelect(if (selected == language) null else language) },
+                description = "Filter ${language.displayName}",
+            )
+        }
+    }
+}
+
+@Composable
+private fun LanguageChip(
+    label: String,
+    count: Int,
+    selected: Boolean,
+    onClick: () -> Unit,
+    description: String,
+) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = {
+            // In a Row of its own: the chip lays its label slot out as one
+            // box, and two bare Texts in it are drawn on top of each other.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(label)
+                Text(
+                    text = "$count",
+                    // Quieter than the name: the count answers "how many",
+                    // which is the second question, not the first.
+                    color = LocalContentColor.current.copy(alpha = 0.6f),
+                    modifier = Modifier.padding(start = 6.dp),
+                )
+            }
+        },
+        shape = RoundedCornerShape(12.dp),
+        colors = selectionChipColors(),
+        modifier = Modifier.semantics { contentDescription = description },
+    )
+}
+
+/**
+ * The project last opened, as the screen's largest thing.
+ *
+ * Tinted by its language, as its tile is, so the card and the project's row
+ * further down -- when a search brings it back -- are recognisably the same.
+ */
+@Composable
+private fun ResumeCard(
+    project: Project,
+    size: String,
+    onOpen: () -> Unit,
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val accent = languageAccent(project.language)
+    Surface(
+        onClick = onOpen,
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.4f)),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+    ) {
+        Column(
+            Modifier
+                .background(Brush.linearGradient(listOf(accent.copy(alpha = 0.16f), Color.Transparent)))
+                .padding(start = 20.dp, end = 8.dp, top = 12.dp, bottom = 18.dp),
         ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Continue where you left off",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = accent,
+                    modifier = Modifier.weight(1f),
+                )
+                ProjectMenu(project, onDelete)
+            }
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
+                modifier = Modifier.padding(top = 6.dp, end = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(46.dp)
-                        .background(iconInfo.tint.copy(alpha = 0.15f), RoundedCornerShape(12.dp)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = iconInfo.icon,
-                        contentDescription = null,
-                        modifier = Modifier.size(26.dp),
-                        tint = iconInfo.tint,
-                    )
-                }
-
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 14.dp),
-                ) {
+                LanguageMonogram(project.language, size = 52.dp)
+                Column(Modifier.weight(1f).padding(start = 14.dp)) {
                     Text(
-                        project.name,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
+                        text = project.name,
+                        style = MaterialTheme.typography.headlineSmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                     )
-
-                    Spacer(Modifier.height(4.dp))
-
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = iconInfo.tint.copy(alpha = 0.12f),
-                        ) {
-                            Text(
-                                // Sentence case. A tracked-out uppercase label
-                                // is the commonest generated-UI tell, and the
-                                // language is a fact about the project rather
-                                // than a heading that needs shouting.
-                                text = project.language.displayName,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = iconInfo.tint,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                            )
-                        }
-
-                        if (project.language !in RUN_ONLY) {
-                            Surface(
-                                shape = RoundedCornerShape(6.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant,
-                            ) {
-                                Text(
-                                    text = project.engine.displayName,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(Modifier.height(4.dp))
-
                     Text(
-                        // **The same fact on every card.** This slot held two
-                        // different kinds of thing depending on the language --
-                        // "Runs on Mono" for a C# project and an application id
-                        // for an Android one -- so two cards side by side
-                        // answered two different questions and neither
-                        // consistently. Both were also redundant: the runtime
-                        // is what the language badge above already says, and
-                        // the application id is in the project's own settings.
-                        //
-                        // When you last opened it is the fact a list of
-                        // projects exists to serve: the list is ordered by it,
-                        // and "the one I was in yesterday" is how people find
-                        // their way back.
-                        text = lastOpenedLabel(project.lastOpenedAt),
-                        style = MaterialTheme.typography.bodySmall,
+                        text = projectFacts(project.language, project.engine, size),
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-
-                Column(
-                    horizontalAlignment = Alignment.End,
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
+            }
+            Row(
+                modifier = Modifier.padding(top = 18.dp, end = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Weighted: Open is the control, and a long label must give
+                // way to it rather than the reverse.
+                Text(
+                    text = lastOpenedLabel(project.lastOpenedAt),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                Button(
+                    onClick = onOpen,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.semantics { contentDescription = "Open ${project.name}" },
                 ) {
-                    var showMenu by remember { mutableStateOf(false) }
-                    Box {
-                        IconButton(
-                            onClick = { showMenu = true },
-                            modifier = Modifier.size(32.dp).semantics { contentDescription = "Project options for ${project.name}" },
-                        ) {
-                            Icon(Icons.Default.MoreVert, contentDescription = null, modifier = Modifier.size(20.dp))
-                        }
-                        DropdownMenu(
-                            expanded = showMenu,
-                            onDismissRequest = { showMenu = false },
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Delete Project", color = MaterialTheme.colorScheme.error) },
-                                leadingIcon = {
-                                    Icon(Icons.Default.DeleteOutline, contentDescription = null, tint = MaterialTheme.colorScheme.error)
-                                },
-                                onClick = {
-                                    showMenu = false
-                                    onDelete()
-                                },
-                            )
-                        }
-                    }
-                    Text(
-                        text = projectSize,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                        modifier = Modifier.padding(end = 4.dp),
+                    Text("Open")
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        modifier = Modifier.padding(start = 6.dp).size(18.dp),
                     )
                 }
             }
         }
     }
+}
+
+@Composable
+private fun ProjectCard(
+    project: Project,
+    size: String,
+    onOpen: () -> Unit,
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        onClick = onOpen,
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 5.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 14.dp, top = 14.dp, bottom = 14.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            LanguageMonogram(project.language, size = 44.dp)
+            Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
+                Text(
+                    text = project.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = projectFacts(project.language, project.engine, size),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+                Text(
+                    // **The same fact on every card.** This slot once held
+                    // "Runs on Mono" for one language and an application id
+                    // for another, so two cards side by side answered
+                    // different questions. When you last opened it is the fact
+                    // a list of projects exists to serve.
+                    text = lastOpenedLabel(project.lastOpenedAt),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                    maxLines = 1,
+                )
+            }
+            ProjectMenu(project, onDelete)
+        }
+    }
+}
+
+/** A project's tile: its language's letters, in its language's colour. */
+@Composable
+private fun LanguageMonogram(language: SourceLanguage, size: Dp) {
+    val accent = languageAccent(language)
+    val shape = RoundedCornerShape(size * 0.3f)
+    val letters = language.monogram
+    Box(
+        modifier = Modifier
+            .size(size)
+            .background(accent.copy(alpha = 0.14f), shape)
+            .border(1.dp, accent.copy(alpha = 0.35f), shape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = letters,
+            color = accent,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            // Smaller for three letters, so "C++" fits the tile "J" does.
+            fontSize = (size.value * if (letters.length > 2) 0.3f else 0.38f).sp,
+            maxLines = 1,
+        )
+    }
+}
+
+/** The colour the file tree gives this language's files. */
+@Composable
+private fun languageAccent(language: SourceLanguage): Color =
+    FileIcons.infoFor(File("project.${language.extension}"), isDirectory = false).tint
+
+@Composable
+private fun ProjectMenu(project: Project, onDelete: () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton(
+            onClick = { expanded = true },
+            modifier = Modifier.semantics { contentDescription = "Project options for ${project.name}" },
+        ) {
+            Icon(Icons.Default.MoreVert, contentDescription = null)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("Delete project", color = MaterialTheme.colorScheme.error) },
+                leadingIcon = {
+                    Icon(Icons.Default.DeleteOutline, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                },
+                onClick = {
+                    expanded = false
+                    onDelete()
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun GroupHeading(heading: String, count: Int, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Sentence case and the ordinary text colour: an uppercase, tracked,
+        // accent-coloured eyebrow is the shape a generated screen takes.
+        Text(heading, style = MaterialTheme.typography.titleSmall)
+        Text(
+            text = "$count",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .padding(start = 8.dp)
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(8.dp))
+                .padding(horizontal = 7.dp, vertical = 1.dp),
+        )
+    }
+}
+
+@Composable
+private fun NoMatches(query: String, language: SourceLanguage?, onClear: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = when {
+                query.isNotBlank() -> "Nothing matches \"$query\""
+                language != null -> "No ${language.displayName} projects"
+                else -> "Nothing matches this filter"
+            },
+            style = MaterialTheme.typography.titleSmall,
+            textAlign = TextAlign.Center,
+        )
+        // The way out, beside the dead end. Clearing a filter scrolled out of
+        // view is otherwise two steps that the empty list does not mention.
+        TextButton(onClick = onClear, modifier = Modifier.padding(top = 4.dp)) {
+            Text("Show all projects")
+        }
+    }
+}
+
+/**
+ * A workspace with nothing in it, which is every first launch.
+ *
+ * The tiles above already hold the three ways in, so this does not repeat
+ * them as buttons; it says what the tiles lead to. The languages are drawn
+ * from the catalog, so the row cannot claim one the templates do not have.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun EmptyWorkspace() {
+    Surface(
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SourceLanguage.entries.forEach { LanguageMonogram(it, size = 40.dp) }
+            }
+            Text(
+                text = "Your workspace is empty",
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.padding(top = 22.dp),
+            )
+            Text(
+                text = "Start a project from a template in any of these languages, clone " +
+                    "one from Git, or import a folder you already have. Projects stay on " +
+                    "this device, where a desktop can reach them over USB.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+    }
+}
+
+/**
+ * A project's size, measured off the main thread and once per reload.
+ *
+ * "…" until measured rather than "0 B": a size that starts at zero and then
+ * jumps reads as the project having grown.
+ */
+@Composable
+private fun rememberProjectSize(project: Project, sizeOf: suspend (Project) -> Long): String {
+    val size by produceState(initialValue = "…", project.rootDir) {
+        value = sizeLabel(sizeOf(project))
+    }
+    return size
 }
 
 /**
@@ -574,104 +929,6 @@ internal fun lastOpenedLabel(millis: Long, now: Long = System.currentTimeMillis(
         days < 7 -> "Opened ${days}d ago"
         days < 365 -> "Opened ${days / 7}w ago"
         else -> "Opened over a year ago"
-    }
-}
-
-@Composable
-private fun EmptyProjects(
-    onCreateClick: () -> Unit,
-    onCloneClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val infiniteTransition = rememberInfiniteTransition(label = "emptyStateGlow")
-    val glowAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 0.85f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1800),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "glowAlpha",
-    )
-    val glowScale by infiniteTransition.animateFloat(
-        initialValue = 0.96f,
-        targetValue = 1.04f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1800),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "glowScale",
-    )
-
-    Column(
-        modifier = modifier.padding(32.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(88.dp)
-                .scale(glowScale)
-                .background(
-                    MaterialTheme.colorScheme.primary.copy(alpha = glowAlpha * 0.2f),
-                    CircleShape,
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(64.dp)
-                    .background(
-                        MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
-                        CircleShape,
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Code,
-                    contentDescription = null,
-                    modifier = Modifier.size(36.dp),
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-            }
-        }
-
-        Spacer(Modifier.height(24.dp))
-
-        Text("No projects yet", style = MaterialTheme.typography.titleLarge)
-        Text(
-            text = "Create one to get started. Projects are stored on this device and can be opened from a desktop over USB.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
-            textAlign = TextAlign.Center,
-        )
-
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Button(
-                onClick = onCreateClick,
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                ),
-            ) {
-                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("New project")
-            }
-            OutlinedButton(
-                onClick = onCloneClick,
-                shape = RoundedCornerShape(12.dp),
-            ) {
-                Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Clone")
-            }
-        }
     }
 }
 
@@ -1029,7 +1286,7 @@ private fun CloneProgressDialog(status: String, onCancel: () -> Unit) {
  * to show. Kept here rather than on [SourceLanguage] because it is a fact about
  * what this app can do with a project, not about the language.
  */
-private val RUN_ONLY = setOf(
+internal val RUN_ONLY = setOf(
     SourceLanguage.JAVASCRIPT,
     SourceLanguage.CSHARP,
     SourceLanguage.PYTHON,

@@ -60,7 +60,7 @@ fun ToolchainSection(
     }
 
     Column(modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp)) {
-        Text("Toolchains", style = MaterialTheme.typography.titleMedium)
+        // No heading: the page is titled with the category already.
         Text(
             text = "Compilers and runtimes this app downloaded. Removing one frees the " +
                 "space; it is fetched again the next time something needs it.",
