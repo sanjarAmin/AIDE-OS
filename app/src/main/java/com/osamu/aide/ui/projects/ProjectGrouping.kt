@@ -102,6 +102,34 @@ internal fun resumeCandidate(
     return projects.filter { it.lastOpenedAt > 0L }.maxByOrNull { it.lastOpenedAt }
 }
 
+/**
+ * How many project cards fit across a window [widthDp] wide.
+ *
+ * **One on every phone, and that is the point of the numbers.** A card needs
+ * about 300 dp before its facts line ("C++ · Gradle build · 1.2 MB") starts
+ * losing its size to an ellipsis, so the widest phone (~430 dp) stays at one
+ * column, an unfolded foldable (~670 dp) gets two, and a landscape tablet
+ * three or more. There is no cap: a desktop-width window simply shows more
+ * columns of the same card, rather than stretching three until the name and
+ * its menu are a hand-span apart -- the defect a single column had on a
+ * tablet, which this exists to fix.
+ *
+ * The window's width, not the screen's, so split-screen gets a phone layout.
+ */
+internal fun projectColumns(widthDp: Float): Int {
+    val usable = widthDp - 2 * GRID_EDGE_DP + GRID_GAP_DP
+    return (usable / (MIN_CARD_WIDTH_DP + GRID_GAP_DP)).toInt().coerceAtLeast(1)
+}
+
+/** The narrowest a project card is allowed to get; see [projectColumns]. */
+internal const val MIN_CARD_WIDTH_DP = 300f
+
+/** The space between two cards in a row. */
+internal const val GRID_GAP_DP = 12f
+
+/** The margin at each side of the list, which every other block on the screen shares. */
+internal const val GRID_EDGE_DP = 16f
+
 /** A project's facts on one line: what it is written in, how it builds, its size. */
 internal fun projectFacts(language: SourceLanguage, engine: BuildEngine, size: String): String =
     buildList {

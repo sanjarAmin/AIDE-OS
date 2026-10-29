@@ -120,6 +120,30 @@ class ProjectGroupingTest {
     }
 
     @Test
+    fun every_phone_gets_one_column_and_wider_windows_get_more() {
+        // 360 dp is CLAUDE.md's small phone; 430 dp is about the widest phone.
+        assertEquals(1, projectColumns(360f))
+        assertEquals(1, projectColumns(430f))
+        // An unfolded foldable, a portrait tablet, a landscape one.
+        assertEquals(2, projectColumns(673f))
+        assertEquals(2, projectColumns(800f))
+        assertEquals(4, projectColumns(1280f))
+        // A split-screen sliver must still lay out, not divide by nothing.
+        assertEquals(1, projectColumns(120f))
+    }
+
+    @Test
+    fun no_column_count_squeezes_a_card_below_its_minimum() {
+        (300..2000 step 7).forEach { width ->
+            val columns = projectColumns(width.toFloat())
+            if (columns > 1) {
+                val card = (width - 2 * GRID_EDGE_DP - (columns - 1) * GRID_GAP_DP) / columns
+                assert(card >= MIN_CARD_WIDTH_DP) { "$columns columns at $width dp leave cards $card dp wide" }
+            }
+        }
+    }
+
+    @Test
     fun sizes_and_counts_read_naturally() {
         assertEquals("512 B", sizeLabel(512))
         assertEquals("2 KB", sizeLabel(2048))

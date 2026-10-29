@@ -8,6 +8,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -70,6 +71,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -285,27 +287,36 @@ private fun ProjectList(
     onImport: () -> Unit,
     onDelete: (Project) -> Unit,
 ) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(
-            top = padding.calculateTopPadding() + 4.dp,
-            bottom = padding.calculateBottomPadding() + 32.dp,
-        ),
-    ) {
-        item(key = "actions") {
-            QuickActions(
-                onCreate = onCreate,
-                onClone = onClone,
-                onImport = onImport,
-                cloning = state.cloneStatus != null,
-                importing = state.isImporting,
-            )
-        }
+    // **Rows of cards in the list, not a LazyVerticalGrid.** A grid measures
+    // every item inside its own content padding, so the language filter -- the
+    // one block that scrolls sideways out to the screen's edge and fades there
+    // -- would have been cut off 16 dp short of it, on phones too. Chunking
+    // each group into rows keeps every full-width block exactly as it was, and
+    // a phone's one column is the old list item for item.
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val columns = projectColumns(maxWidth.value)
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+                top = padding.calculateTopPadding() + 4.dp,
+                bottom = padding.calculateBottomPadding() + 32.dp,
+            ),
+        ) {
+            item(key = "actions") {
+                QuickActions(
+                    onCreate = onCreate,
+                    onClone = onClone,
+                    onImport = onImport,
+                    cloning = state.cloneStatus != null,
+                    importing = state.isImporting,
+                )
+            }
 
-        if (state.projects.isEmpty()) {
-            item(key = "empty") { EmptyWorkspace() }
-        } else {
-            projectItems(state, viewModel, onOpenProject, onDelete)
+            if (state.projects.isEmpty()) {
+                item(key = "empty") { EmptyWorkspace() }
+            } else {
+                projectItems(state, columns, viewModel, onOpenProject, onDelete)
+            }
         }
     }
 }
@@ -313,6 +324,7 @@ private fun ProjectList(
 /** The search, the resumed project and the grouped list, as lazy items. */
 private fun androidx.compose.foundation.lazy.LazyListScope.projectItems(
     state: ProjectsUiState,
+    columns: Int,
     viewModel: ProjectsViewModel,
     onOpenProject: (File) -> Unit,
     onDelete: (Project) -> Unit,
@@ -362,15 +374,65 @@ private fun androidx.compose.foundation.lazy.LazyListScope.projectItems(
         item(key = "heading-${recency.name}") {
             GroupHeading(recency.heading, members.size, Modifier.animateItem())
         }
-        items(members, key = { it.rootDir.absolutePath }) { project ->
-            ProjectCard(
-                project = project,
-                size = rememberProjectSize(project, viewModel::sizeOf),
-                onOpen = { onOpenProject(project.rootDir) },
-                onDelete = { onDelete(project) },
-                modifier = Modifier.animateItem(),
-            )
+        // Keyed by the row's first project, which belongs to no other row, so
+        // on a phone the key is the project's path just as it always was.
+        members.chunked(columns).forEach { row ->
+            item(key = row.first().rootDir.absolutePath) {
+                ProjectCardRow(
+                    projects = row,
+                    columns = columns,
+                    sizeOf = viewModel::sizeOf,
+                    onOpen = { onOpenProject(it.rootDir) },
+                    onDelete = onDelete,
+                    modifier = Modifier.animateItem(),
+                )
+            }
         }
+    }
+}
+
+/**
+ * One row of the project grid: up to [columns] cards, equal in width and height.
+ *
+ * **A short last row keeps the grid's column width.** Weighting only the cards
+ * that exist would stretch a lone card in a two-column grid across both
+ * columns -- a card twice as wide as the ones above it, which reads as a
+ * different kind of thing. Empty weighted slots hold the columns open.
+ * `ProjectGridTest` measures the lone card against its neighbours.
+ *
+ * **Equal heights by `IntrinsicSize.Min`**, as the action tiles do: a row of
+ * cards whose bottoms step is a layout fault even when each card is right.
+ */
+@Composable
+internal fun ProjectCardRow(
+    projects: List<Project>,
+    columns: Int,
+    sizeOf: suspend (Project) -> Long,
+    onOpen: (Project) -> Unit,
+    onDelete: (Project) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min)
+            .padding(horizontal = GRID_EDGE_DP.dp, vertical = 5.dp),
+        horizontalArrangement = Arrangement.spacedBy(GRID_GAP_DP.dp),
+    ) {
+        projects.forEach { project ->
+            // Keyed, so a project's measured size stays with the project when
+            // a filter moves it to a different slot in its row.
+            key(project.rootDir.absolutePath) {
+                ProjectCard(
+                    project = project,
+                    size = rememberProjectSize(project, sizeOf),
+                    onOpen = { onOpen(project) },
+                    onDelete = { onDelete(project) },
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                )
+            }
+        }
+        repeat(columns - projects.size) { Spacer(Modifier.weight(1f)) }
     }
 }
 
@@ -705,9 +767,9 @@ private fun ProjectCard(
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 5.dp),
+        // No outer padding of its own: the row it sits in sets the margins
+        // and the gaps, so one column and three use the same spacing.
+        modifier = modifier.testTag(PROJECT_CARD_TAG),
     ) {
         Row(
             modifier = Modifier.padding(start = 14.dp, top = 14.dp, bottom = 14.dp, end = 4.dp),
@@ -1297,3 +1359,6 @@ internal const val TEMPLATE_RADIO_TAG = "template-radio"
 
 /** @see CreateProjectDialog */
 internal const val TEMPLATE_FILE_TAG = "template-file"
+
+/** @see ProjectCardRow */
+internal const val PROJECT_CARD_TAG = "project-card"

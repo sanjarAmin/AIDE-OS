@@ -92,7 +92,13 @@ class CreateProjectDialogTest {
             "a radio button was measured in whatever the objective text left over, " +
                 "so its row's text is missing Modifier.weight(1f): $sizes",
             1,
-            sizes.map { it.second }.distinct().size,
+            // **Rounded to a tenth of a dp before comparing.** Bounds are
+            // pixels divided by the density, and where that is not a whole
+            // number of pixels per dp -- 280 dpi is 1.75 -- the same 43 px
+            // radio reads as 24.571426 dp in one row and 24.571442 in the
+            // next. This failed on four "different" sizes with nothing
+            // squeezed. The squeeze it exists to catch is tens of dp.
+            sizes.map { (_, size) -> size.first.value.tenths() to size.second.value.tenths() }.distinct().size,
         )
         // Zero-width is the degenerate case of the above and is worth naming
         // separately, because a layout where *every* control collapsed would
@@ -264,3 +270,6 @@ class CreateProjectDialogTest {
         assertEquals("Sharp Thing" to MonoCollectionsApp, created)
     }
 }
+
+/** A length in dp, to the nearest tenth; see no_template_row_squeezes_out_its_radio_button. */
+private fun Float.tenths(): Float = kotlin.math.round(this * 10f) / 10f
