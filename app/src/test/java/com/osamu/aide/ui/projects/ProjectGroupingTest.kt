@@ -144,6 +144,21 @@ class ProjectGroupingTest {
     }
 
     @Test
+    fun the_resume_card_spans_two_columns_once_there_are_three() {
+        // Phones and portrait tablets: the full width, which is two columns at most.
+        assertNull(resumeCardWidthDp(411f, projectColumns(411f)))
+        assertNull(resumeCardWidthDp(914f, projectColumns(914f)))
+
+        // Landscape: its card's right edge lands on the second column's.
+        val width = 1463f
+        val columns = projectColumns(width)
+        val card = (width - 2 * GRID_EDGE_DP - (columns - 1) * GRID_GAP_DP) / columns
+        val secondColumnEnds = GRID_EDGE_DP + 2 * card + GRID_GAP_DP
+        val resume = resumeCardWidthDp(width, columns)!!
+        assertEquals(secondColumnEnds, resume - GRID_EDGE_DP, 0.01f)
+    }
+
+    @Test
     fun sizes_and_counts_read_naturally() {
         assertEquals("512 B", sizeLabel(512))
         assertEquals("2 KB", sizeLabel(2048))

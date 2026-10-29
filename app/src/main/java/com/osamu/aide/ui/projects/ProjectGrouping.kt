@@ -121,6 +121,23 @@ internal fun projectColumns(widthDp: Float): Int {
     return (usable / (MIN_CARD_WIDTH_DP + GRID_GAP_DP)).toInt().coerceAtLeast(1)
 }
 
+/**
+ * How wide the "continue where you left off" card is, or null for the full width.
+ *
+ * **Two columns of the grid below it, once there are three or more.** Across a
+ * landscape tablet the full width put the project's name at one edge and its
+ * Open button 1,400 dp away at the other -- the stretched card the grid was
+ * built to fix, kept alive in the one card the grid does not lay out. Two
+ * columns wide, its right edge lines up with the second column's, so it reads
+ * as part of the grid rather than a banner over it. With two columns or one,
+ * the full width already is about that.
+ */
+internal fun resumeCardWidthDp(widthDp: Float, columns: Int): Float? {
+    if (columns < 3) return null
+    val card = (widthDp - 2 * GRID_EDGE_DP - (columns - 1) * GRID_GAP_DP) / columns
+    return 2 * GRID_EDGE_DP + 2 * card + GRID_GAP_DP
+}
+
 /** The narrowest a project card is allowed to get; see [projectColumns]. */
 internal const val MIN_CARD_WIDTH_DP = 300f
 

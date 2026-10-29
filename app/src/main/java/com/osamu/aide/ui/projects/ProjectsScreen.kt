@@ -82,6 +82,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -330,6 +332,7 @@ private fun ProjectList(
     // a phone's one column is the old list item for item.
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val columns = projectColumns(maxWidth.value)
+        val resumeWidth = resumeCardWidthDp(maxWidth.value, columns)?.dp
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(
@@ -352,7 +355,7 @@ private fun ProjectList(
             if (state.projects.isEmpty()) {
                 item(key = "empty") { EmptyWorkspace() }
             } else {
-                projectItems(state, columns, viewModel, onOpenProject, onDelete)
+                projectItems(state, columns, resumeWidth, viewModel, onOpenProject, onDelete)
             }
         }
     }
@@ -362,6 +365,7 @@ private fun ProjectList(
 private fun androidx.compose.foundation.lazy.LazyListScope.projectItems(
     state: ProjectsUiState,
     columns: Int,
+    resumeWidth: Dp?,
     viewModel: ProjectsViewModel,
     onOpenProject: (File) -> Unit,
     onDelete: (Project) -> Unit,
@@ -389,7 +393,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.projectItems(
                 size = rememberProjectSize(resume, viewModel::sizeOf),
                 onOpen = { onOpenProject(resume.rootDir) },
                 onDelete = { onDelete(resume) },
-                modifier = Modifier.animateItem(),
+                modifier = Modifier.animateItem()
+                    .then(if (resumeWidth != null) Modifier.width(resumeWidth) else Modifier),
             )
         }
     }
@@ -832,7 +837,7 @@ private fun ResumeCard(
                 Text(
                     text = "Continue where you left off",
                     style = MaterialTheme.typography.labelLarge,
-                    color = accent,
+                    color = readable(accent),
                     modifier = Modifier.weight(1f),
                 )
                 ProjectMenu(project, onDelete)
@@ -956,7 +961,7 @@ private fun LanguageMonogram(language: SourceLanguage, size: Dp) {
     ) {
         Text(
             text = letters,
-            color = accent,
+            color = readable(accent),
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Bold,
             // Smaller for three letters, so "C++" fits the tile "J" does.
@@ -965,6 +970,20 @@ private fun LanguageMonogram(language: SourceLanguage, size: Dp) {
         )
     }
 }
+
+/**
+ * [accent], dark enough to read as text on its own tint.
+ *
+ * The file tree's language colours are chosen for the dark theme -- Kotlin is
+ * `#A78BFA`, C++ `#38BDF8` -- and as text on their own pale tint in the light
+ * theme they all but vanished: "Continue where you left off" in light lilac on
+ * lavender, `C++` in sky blue on ice. Seen driving the light theme, which the
+ * redesign had only been checked dark in. Darkened toward black there only;
+ * the tints and borders keep the file tree's colour, so the identity holds.
+ */
+@Composable
+private fun readable(accent: Color): Color =
+    if (MaterialTheme.colorScheme.background.luminance() > 0.5f) lerp(accent, Color.Black, 0.45f) else accent
 
 /** The colour the file tree gives this language's files. */
 @Composable

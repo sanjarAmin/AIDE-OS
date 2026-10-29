@@ -14,6 +14,11 @@ import androidx.compose.ui.platform.LocalContext
  * Placed on each screen an update can be started from. A screen that is not
  * showing is not composed, so exactly one collects; an intent that arrives
  * while neither is showing waits in the channel for the next one that is.
+ *
+ * **Deliberately not on the workspace.** An update that finishes downloading
+ * while a project is open waits for Home or Settings rather than putting the
+ * installer over the editor: a successful install ends this process at once,
+ * and anything typed and not yet saved would end with it.
  */
 @Composable
 fun LaunchUpdateConfirmations(updates: AppUpdates) {
