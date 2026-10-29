@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.DriveFolderUpload
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -105,10 +106,18 @@ import com.osamu.aide.core.fs.preview
 import com.osamu.aide.core.ui.BrandMark
 import com.osamu.aide.core.ui.fadingEdges
 import com.osamu.aide.core.ui.selectionChipColors
+import com.osamu.aide.core.ui.progressTrackColor
 import com.osamu.aide.ui.util.FileIcons
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.koin.androidx.compose.koinViewModel
+import org.koin.compose.koinInject
+import com.osamu.aide.update.AppRelease
+import com.osamu.aide.update.AppUpdates
+import com.osamu.aide.update.LaunchUpdateConfirmations
+import com.osamu.aide.update.UpdateState
+import com.osamu.aide.update.describe
+import com.osamu.aide.update.openReleasePage
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -133,16 +142,23 @@ fun ProjectsScreen(
     onOpenProject: (File) -> Unit,
     onOpenSettings: () -> Unit,
     viewModel: ProjectsViewModel = koinViewModel(),
+    updates: AppUpdates = koinInject(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val update by updates.state.collectAsStateWithLifecycle()
+    val dismissedUpdate by updates.dismissedTag.collectAsStateWithLifecycle()
     // Reloaded on every return, not only when the view model is made: the
     // list is sorted by when each project was last opened, and coming back
     // from the one just worked in -- or from changing its engine -- has to
     // show that without a restart.
     LifecycleResumeEffect(Unit) {
         viewModel.refresh()
+        // Here rather than at startup: Home is where the answer is shown, and
+        // Application.onCreate also runs in the build process. At most daily.
+        updates.checkIfDue()
         onPauseOrDispose { }
     }
+    LaunchUpdateConfirmations(updates)
     val snackbarHostState = remember { SnackbarHostState() }
     var showCreateDialog by remember { mutableStateOf(false) }
     var showCloneDialog by remember { mutableStateOf(false) }
@@ -212,9 +228,27 @@ fun ProjectsScreen(
                 contentAlignment = Alignment.Center,
             ) { CircularProgressIndicator() }
         } else {
+            val context = LocalContext.current
             ProjectList(
                 state = state,
                 padding = padding,
+                // Only what the user can act on. "Up to date" and "could not
+                // check" are not news on the first screen; About says both.
+                banner = when (val current = update) {
+                    is UpdateState.Available -> current.takeIf { it.release.tag != dismissedUpdate }
+                    is UpdateState.Downloading, is UpdateState.Installing, is UpdateState.Failed -> current
+                    else -> null
+                }?.let { shown ->
+                    {
+                        UpdateBanner(
+                            state = shown,
+                            onUpdate = updates::install,
+                            onLater = updates::dismiss,
+                            onWhatsNew = { release -> context.openReleasePage(release) },
+                            onAllowInstalls = { settings -> context.startActivity(settings) },
+                        )
+                    }
+                },
                 viewModel = viewModel,
                 onOpenProject = onOpenProject,
                 onCreate = { showCreateDialog = true },
@@ -280,6 +314,7 @@ fun ProjectsScreen(
 private fun ProjectList(
     state: ProjectsUiState,
     padding: PaddingValues,
+    banner: (@Composable () -> Unit)?,
     viewModel: ProjectsViewModel,
     onOpenProject: (File) -> Unit,
     onCreate: () -> Unit,
@@ -302,6 +337,8 @@ private fun ProjectList(
                 bottom = padding.calculateBottomPadding() + 32.dp,
             ),
         ) {
+            if (banner != null) item(key = "update") { banner() }
+
             item(key = "actions") {
                 QuickActions(
                     onCreate = onCreate,
@@ -433,6 +470,102 @@ internal fun ProjectCardRow(
             }
         }
         repeat(columns - projects.size) { Spacer(Modifier.weight(1f)) }
+    }
+}
+
+/**
+ * A newer preview, said once at the top of the first screen.
+ *
+ * **In the accent's container, not in green.** An update is news, not success,
+ * and CLAUDE.md records what green has meant here every time it was reached
+ * for. The same block carries the download and the hand-off to the installer,
+ * so the thing tapped is where its progress shows.
+ *
+ * The buttons are a `FlowRow`: three of them beside a long headline is the row
+ * this codebase has squeezed nine times.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun UpdateBanner(
+    state: UpdateState,
+    onUpdate: () -> Unit,
+    onLater: () -> Unit,
+    onWhatsNew: (AppRelease) -> Unit,
+    onAllowInstalls: (android.content.Intent) -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+    ) {
+        Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 8.dp)) {
+            Row(verticalAlignment = Alignment.Top) {
+                Icon(
+                    Icons.Default.SystemUpdate,
+                    contentDescription = null,
+                    modifier = Modifier.padding(top = 2.dp).size(22.dp),
+                )
+                Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                    Text(
+                        text = when (state) {
+                            is UpdateState.Downloading -> "Downloading the update"
+                            is UpdateState.Installing -> "Installing the update"
+                            is UpdateState.Failed -> "The update did not install"
+                            else -> "A newer preview is available"
+                        },
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Text(
+                        text = state.describe(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (state is UpdateState.Failed) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            LocalContentColor.current.copy(alpha = 0.8f)
+                        },
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+            }
+            if (state is UpdateState.Downloading) {
+                LinearProgressIndicator(
+                    progress = { if (state.total > 0) state.bytes.toFloat() / state.total else 0f },
+                    // The banner's own ink, faint: on primaryContainer the
+                    // surface track is nearly the same blue and the bar vanishes.
+                    trackColor = LocalContentColor.current.copy(alpha = 0.2f),
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 6.dp),
+                )
+            }
+            val release = when (state) {
+                is UpdateState.Available -> state.release
+                is UpdateState.Failed -> state.release
+                else -> null
+            }
+            if (release != null) {
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End),
+                ) {
+                    if (state is UpdateState.Available) {
+                        TextButton(onClick = onLater) { Text("Later") }
+                    }
+                    TextButton(onClick = { onWhatsNew(release) }) { Text("What's new") }
+                    // Both, when installing is not allowed yet: the grant is
+                    // made in system Settings, and on return the retry has to
+                    // be here rather than another trip to Settings.
+                    val settings = (state as? UpdateState.Failed)?.settings
+                    if (settings != null) {
+                        TextButton(onClick = { onAllowInstalls(settings) }) { Text("Allow installs") }
+                    }
+                    Button(onClick = onUpdate) {
+                        Text(if (state is UpdateState.Failed) "Try again" else "Update")
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1329,7 +1462,7 @@ private fun CloneProgressDialog(status: String, onCancel: () -> Unit) {
         text = {
             Column {
                 Text(status, modifier = Modifier.semantics { contentDescription = "Clone status" })
-                LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 12.dp))
+                LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 12.dp), trackColor = progressTrackColor())
             }
         },
         confirmButton = {

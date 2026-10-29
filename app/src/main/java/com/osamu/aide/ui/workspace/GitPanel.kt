@@ -51,6 +51,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.osamu.aide.core.ui.theme.CodeTextStyle
+import com.osamu.aide.core.ui.progressTrackColor
 import com.osamu.aide.ui.util.FileIcons
 import java.io.File
 
@@ -379,7 +380,7 @@ private fun Header(
             modifier = Modifier.semantics { contentDescription = "Push" },
         ) { Text("Push") }
     }
-    if (state.isBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
+    if (state.isBusy) LinearProgressIndicator(Modifier.fillMaxWidth(), trackColor = progressTrackColor())
 }
 
 @Composable

@@ -105,9 +105,19 @@ internal fun signingSummary(configured: Boolean?): Summary = when (configured) {
     false -> Summary("No release key yet")
 }
 
-/** The hub's line for About, which is the one place the running version appears. */
-internal fun aboutSummary(version: String): Summary =
-    Summary(if (version.isEmpty()) "GPLv3 · licences and credits" else "Version $version · GPLv3")
+/**
+ * The hub's line for About: the running version, and whether a newer one is out.
+ *
+ * An available update is Attention rather than Problem -- nothing stops
+ * working for want of it -- and it is said here because About is where it is
+ * installed from; Home's banner can be put away, and this line cannot.
+ */
+internal fun aboutSummary(version: String, updateAvailable: Boolean = false): Summary = when {
+    updateAvailable && version.isNotEmpty() -> Summary("Version $version · update available", Tone.ATTENTION)
+    updateAvailable -> Summary("An update is available", Tone.ATTENTION)
+    version.isEmpty() -> Summary("GPLv3 · licences and credits")
+    else -> Summary("Version $version · GPLv3")
+}
 
 /**
  * Bytes as someone reclaiming space reads them.

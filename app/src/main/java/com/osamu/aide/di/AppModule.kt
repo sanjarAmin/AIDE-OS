@@ -41,6 +41,11 @@ import com.osamu.aide.ui.workspace.LogcatViewModel
 import com.osamu.aide.ui.workspace.TerminalViewModel
 import com.osamu.aide.ui.workspace.ProjectDependencies
 import com.osamu.aide.ui.workspace.WorkspaceViewModel
+import com.osamu.aide.BuildConfig
+import com.osamu.aide.update.AppUpdates
+import com.osamu.aide.update.ReleaseFeed
+import okhttp3.OkHttpClient
+import java.util.concurrent.TimeUnit
 import org.koin.core.module.dsl.viewModel
 import org.koin.core.qualifier.named
 import org.koin.dsl.module
@@ -117,6 +122,23 @@ val appModule = module {
     single { ToolchainManager(get(), get()) }
     single { AndroidPlatformProvider(get(), get()) }
     single { ApkInstaller(get(), get()) }
+
+    // The app's own updates. A singleton so a download started on Home is the
+    // same one Settings shows; see AppUpdates for why only the UI creates it.
+    single {
+        AppUpdates(
+            context = get(),
+            feed = ReleaseFeed(
+                client = OkHttpClient.Builder()
+                    .connectTimeout(15, TimeUnit.SECONDS)
+                    .readTimeout(30, TimeUnit.SECONDS)
+                    .build(),
+                userAgent = "AIDE-OS/${BuildConfig.VERSION_NAME}",
+            ),
+            installer = get(),
+            dispatchers = get(),
+        )
+    }
     // The local Maven repository. Cache storage: every file in it can be
     // fetched again, so the system is welcome to reclaim it.
     single { DependencyResolver(File(get<Context>().cacheDir, "maven"), get()) }

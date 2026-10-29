@@ -30,7 +30,8 @@ emulator -avd aideos_test -no-window -no-audio -no-boot-anim -gpu host
 :ai:core             Provider clients, session loop, tools, prompts. Two loops:
                      one Anthropic, one for the rest. FINDINGS.
 :ai:ui               The chat panel. Thin: the decisions live in :ai:core
-:app                 Compose shell — navigation, DI (Koin), screens
+:app                 Compose shell — navigation, DI (Koin), screens, and the app
+                     updating itself from GitHub releases. FINDINGS.
 :core:common         Result types, dispatchers, logging
 :core:fs             Project storage, the file tree, SAF import. FINDINGS.
 :core:ui             Design system, theme, adaptive phone/tablet layout
@@ -309,10 +310,12 @@ failed to load still produces a clean compile.
   §14.
 
   **Material reaches for the green by default, too**, so no name appears in the
-  code at all: a selected `FilterChip`, an active `SegmentedButton` and a
-  `Slider`'s inactive track are all `secondaryContainer`. Every filter and
-  choice in Home and Settings showed its selection as a success state until
-  the redesign. Pass `selectionChipColors()` / `selectionSegmentColors()`
+  code at all: a selected `FilterChip`, an active `SegmentedButton`, a
+  `Slider`'s inactive track and a `LinearProgressIndicator`'s track are all
+  `secondaryContainer`. Every filter and choice in Home and Settings showed its
+  selection as a success state until the redesign, and every progress bar in
+  the app drew a download at 0 MB as a full green bar. Pass
+  `selectionChipColors()` / `selectionSegmentColors()` / `progressTrackColor()`
   (`:core:ui`'s `Selection.kt`) instead of the defaults.
 
 - **A key that is process-local must never be persisted.** Chat entries carry

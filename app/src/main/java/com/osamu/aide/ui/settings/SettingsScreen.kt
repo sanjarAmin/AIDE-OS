@@ -68,6 +68,9 @@ import com.osamu.aide.toolchain.manager.ToolchainManager
 import com.osamu.aide.vcs.git.GitCredentialStore
 import com.osamu.aide.vcs.git.GitIdentityStore
 import kotlinx.coroutines.withContext
+import com.osamu.aide.update.AppUpdates
+import com.osamu.aide.update.LaunchUpdateConfirmations
+import com.osamu.aide.update.UpdateState
 import org.koin.compose.koinInject
 
 /**
@@ -178,6 +181,10 @@ fun SettingsScreen(
     val dispatchers = koinInject<DispatcherProvider>()
     val editorPreferences = koinInject<EditorPreferences>()
     val releaseKeystore = koinInject<ReleaseKeystoreStore>()
+    val updates = koinInject<AppUpdates>()
+    // At the screen, not in About's panel: an update started on Home can
+    // reach its confirmation while any Settings page is showing.
+    LaunchUpdateConfirmations(updates)
 
     var selectedCategory by remember(initialCategory) { mutableStateOf(initialCategory) }
     // **Where Back goes depends on how the page was reached.** Opened from the
@@ -206,6 +213,7 @@ fun SettingsScreen(
             toolchain = toolchain,
             releaseKeystore = releaseKeystore,
             editorPreferences = editorPreferences,
+            updates = updates,
             dispatchers = dispatchers,
         )
 
@@ -231,7 +239,7 @@ fun SettingsScreen(
                     SettingsCategory.SIGNING -> SettingsPanel(Modifier.padding(horizontal = 16.dp)) {
                         SigningSection(releaseKeystore)
                     }
-                    SettingsCategory.ABOUT -> AboutSection()
+                    SettingsCategory.ABOUT -> AboutSection(updates)
                 }
             }
         }
@@ -334,10 +342,12 @@ private fun rememberSummaries(
     toolchain: ToolchainManager,
     releaseKeystore: ReleaseKeystoreStore,
     editorPreferences: EditorPreferences,
+    updates: AppUpdates,
     dispatchers: DispatcherProvider,
 ): Map<SettingsCategory, Summary?> {
     val context = LocalContext.current
     val editor by editorPreferences.settings.collectAsStateWithLifecycle()
+    val update by updates.state.collectAsStateWithLifecycle()
     val version = remember(context) { installedVersion(context) }
 
     val stores by produceState<Triple<Summary, Summary, Summary>?>(null, refreshKey) {
@@ -365,7 +375,7 @@ private fun rememberSummaries(
         SettingsCategory.GIT to stores?.second,
         SettingsCategory.TOOLCHAINS to toolchains,
         SettingsCategory.SIGNING to stores?.third,
-        SettingsCategory.ABOUT to aboutSummary(version),
+        SettingsCategory.ABOUT to aboutSummary(version, updateAvailable = update is UpdateState.Available),
     )
 }
 

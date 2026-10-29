@@ -3,6 +3,48 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+/**
+ * One line of git's output, or null when git is missing or fails.
+ *
+ * Through `providers.exec` so the configuration cache records the answer and
+ * re-asks it each build, rather than baking in whatever HEAD was when the cache
+ * was written.
+ */
+fun git(vararg args: String): String? = runCatching {
+    val run = providers.exec {
+        commandLine("git", *args)
+        isIgnoreExitValue = true
+    }
+    if (run.result.get().exitValue != 0) null else run.standardOutput.asText.get().trim().ifEmpty { null }
+}.getOrNull()
+
+/**
+ * **The version comes from git.** It was `1` / `"1.0"` for nine published
+ * previews, so About said "Version 1.0" on every one of them and a bug report
+ * could not name the build it came from. The commit count only rises along
+ * `main`, which is the one line previews are cut from, so it serves as the
+ * versionCode Android needs to accept an update; the commit itself goes into
+ * BuildConfig, where the update check compares it with what GitHub publishes.
+ *
+ * A source tree without git -- an archive download -- builds as version 1 with
+ * no commit, and the update check then says it cannot tell rather than guess.
+ * A shallow clone would count too few commits, which is why `fetch-depth` has
+ * to be full anywhere a release is built.
+ */
+val commitCount = git("rev-list", "--count", "HEAD")?.toIntOrNull()
+val headCommit = git("rev-parse", "HEAD").orEmpty()
+// Tracked files only: an untracked scratch file is not part of what was built.
+val hasLocalChanges = git("status", "--porcelain", "--untracked-files=no") != null
+
+/**
+ * `-Paide.pretendBuiltFrom=<sha>` builds an APK that believes it is the
+ * pre-versioning preview at <sha>: that commit, versionCode 1. It is the only
+ * way to drive the update path against real releases before a release that
+ * has it exists -- install this, and the app finds the previews published
+ * after <sha> and installs one over itself. Never for anything published.
+ */
+val pretendBuiltFrom = providers.gradleProperty("aide.pretendBuiltFrom").orNull
+
 android {
     namespace = "com.osamu.aide"
     compileSdk {
@@ -13,8 +55,11 @@ android {
         applicationId = "com.osamu.aide"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = if (pretendBuiltFrom != null) 1 else commitCount ?: 1
+        // "0." because these are previews; M13's first real release is 1.0.
+        versionName = if (pretendBuiltFrom != null) "1.0" else commitCount?.let { "0.$it" } ?: "0.0"
+        buildConfigField("String", "GIT_COMMIT", "\"${pretendBuiltFrom ?: headCommit}\"")
+        buildConfigField("boolean", "GIT_LOCAL_CHANGES", "${pretendBuiltFrom == null && hasLocalChanges}")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -44,6 +89,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     // The build engine executes aapt2 (and later clang) from the app's native
@@ -110,6 +156,11 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.core.ktx)
 
+    // Declared rather than borrowed from :ai:core's `api`: the update check
+    // talks to GitHub itself, and should not stop compiling if the AI layer
+    // ever narrows what it exports.
+    implementation(libs.okhttp)
+
     implementation(platform(libs.koin.bom))
     implementation(libs.koin.android)
     implementation(libs.koin.androidx.compose)
@@ -120,6 +171,9 @@ dependencies {
     // The real org.json, as :ai:core's tests use: android.jar's is a stub that
     // throws in a JVM test, and the benchmark's reply classifier parses JSON.
     testImplementation(libs.json)
+    // The update check is tested against a GitHub of our own, so the JSON it
+    // reads and the HTTP statuses it handles are exercised without a network.
+    testImplementation(libs.okhttp.mockwebserver)
     // JGit is `implementation` in :vcs:git, so it does not reach here on its
     // own. These tests read commits back out of the object database, which is
     // the only way to assert a commit was really written.

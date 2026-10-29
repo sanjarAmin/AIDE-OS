@@ -92,6 +92,10 @@ class AppModuleTest {
         // Settings, which is not where anyone would look for it.
         assertNotNull(koin.get<ToolchainManager>())
         assertNotNull(koin.get<DispatcherProvider>())
+        // Home and Settings both inject this directly, so a broken definition
+        // would crash the first screen -- and it is built with no network,
+        // which is what it must tolerate: nothing is fetched until asked.
+        assertNotNull(koin.get<com.osamu.aide.update.AppUpdates>())
         // Resolved rather than assumed because it takes an unqualified `File`,
         // and the module defines two: the workspace root and, under a name, the
         // build output root. Koin picks the unnamed one, which is correct and

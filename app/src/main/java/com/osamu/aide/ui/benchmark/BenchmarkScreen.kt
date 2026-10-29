@@ -41,6 +41,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.osamu.aide.core.ui.theme.CodeTextStyle
+import com.osamu.aide.core.ui.progressTrackColor
 import com.osamu.aide.toolchain.manager.InstallProgress
 import org.koin.androidx.compose.koinViewModel
 
@@ -114,7 +115,7 @@ fun BenchmarkScreen(onNavigateBack: () -> Unit, viewModel: BenchmarkViewModel = 
                                 style = MaterialTheme.typography.bodySmall,
                                 modifier = Modifier.semantics { contentDescription = "Benchmark step" },
                             )
-                            LinearProgressIndicator(Modifier.fillMaxWidth())
+                            LinearProgressIndicator(Modifier.fillMaxWidth(), trackColor = progressTrackColor())
                             Text(
                                 "This can take several minutes on the larger models.",
                                 style = MaterialTheme.typography.bodySmall,
@@ -255,9 +256,9 @@ private fun ComponentCard(
                 is InstallProgress.Downloading -> {
                     val fraction = progress.fraction
                     if (fraction != null) {
-                        LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth())
+                        LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth(), trackColor = progressTrackColor())
                     } else {
-                        LinearProgressIndicator(Modifier.fillMaxWidth())
+                        LinearProgressIndicator(Modifier.fillMaxWidth(), trackColor = progressTrackColor())
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
@@ -269,7 +270,7 @@ private fun ComponentCard(
                     }
                 }
                 InstallProgress.Verifying, InstallProgress.Extracting -> {
-                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                    LinearProgressIndicator(Modifier.fillMaxWidth(), trackColor = progressTrackColor())
                     Text(
                         if (progress == InstallProgress.Verifying) "Verifying…" else "Unpacking…",
                         style = MaterialTheme.typography.bodySmall,

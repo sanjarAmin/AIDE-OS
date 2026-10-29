@@ -28,6 +28,18 @@ fun selectionChipColors(): SelectableChipColors = FilterChipDefaults.filterChipC
 )
 
 /**
+ * The unfilled part of a progress bar, which Material also draws in green.
+ *
+ * `LinearProgressIndicator`'s track defaults to `secondaryContainer`, so a
+ * download at 0 MB drew as a full green bar with a blue sliver at its start --
+ * finished, at a glance, before anything had arrived. Found driving the app's
+ * own update; every bar in the app had it. The track is a surface, as the
+ * editor's slider already says of its own.
+ */
+@Composable
+fun progressTrackColor(): Color = MaterialTheme.colorScheme.surfaceVariant
+
+/**
  * The same correction for a segmented button, which defaults to the same green.
  *
  * The inactive container is transparent so a segment row sits on whatever

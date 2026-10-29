@@ -76,4 +76,12 @@ class SettingsSummariesTest {
         assertEquals("Version 1.2.0 · GPLv3", aboutSummary("1.2.0").text)
         assertEquals("GPLv3 · licences and credits", aboutSummary("").text)
     }
+
+    @Test
+    fun an_available_update_is_said_on_the_about_line_as_attention() {
+        val available = aboutSummary("0.311", updateAvailable = true)
+        assertEquals("Version 0.311 · update available", available.text)
+        assertEquals(Tone.ATTENTION, available.tone)
+        assertEquals(Tone.NEUTRAL, aboutSummary("0.311").tone)
+    }
 }

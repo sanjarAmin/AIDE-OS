@@ -113,6 +113,7 @@ import com.osamu.aide.core.ui.layout.AdaptiveWorkspace
 import com.osamu.aide.core.ui.layout.PaneBreakpoints
 import com.osamu.aide.core.ui.layout.PaneMode
 import com.osamu.aide.core.ui.theme.CodeTextStyle
+import com.osamu.aide.core.ui.progressTrackColor
 import androidx.compose.ui.graphics.Color
 import com.osamu.aide.editor.CodeEditorController
 import com.osamu.aide.editor.CodeEditorView
@@ -1520,10 +1521,11 @@ private fun InstallProgressRow(
             if (fraction != null) {
                 LinearProgressIndicator(
                     progress = { fraction },
+                    trackColor = progressTrackColor(),
                     modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
                 )
             } else {
-                LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 6.dp))
+                LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 6.dp), trackColor = progressTrackColor())
             }
         }
     }

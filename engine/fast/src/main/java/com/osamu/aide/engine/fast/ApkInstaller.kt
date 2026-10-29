@@ -217,12 +217,18 @@ class ApkInstaller(
      * -- "signatures do not match the previously installed version" rather than
      * INSTALL_FAILED_UPDATE_INCOMPATIBLE -- so it is preferred, with the code
      * kept as a fallback for the cases where it sends none.
+     *
+     * **Except a cancel.** Tapping Cancel in the confirmation dialog comes
+     * back as "INSTALL_FAILED_ABORTED: User rejected permissions" on API 34 --
+     * a constant in front of a sentence about permissions the user was never
+     * asked for. Seen driving the app's own update; it was shown in red under
+     * "The update did not install" for what was the user's own choice.
      */
-    private fun describe(status: Int, intent: Intent): String =
-        intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
+    private fun describe(status: Int, intent: Intent): String {
+        if (status == PackageInstaller.STATUS_FAILURE_ABORTED) return "Installation was cancelled."
+        return intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
             ?.takeIf { it.isNotBlank() }
             ?: when (status) {
-                PackageInstaller.STATUS_FAILURE_ABORTED -> "Installation was cancelled."
                 PackageInstaller.STATUS_FAILURE_INVALID -> "The APK is not a valid package."
                 PackageInstaller.STATUS_FAILURE_CONFLICT ->
                     "Another app with the same package name is already installed."
@@ -232,6 +238,7 @@ class ApkInstaller(
                 PackageInstaller.STATUS_FAILURE_BLOCKED -> "The install was blocked."
                 else -> "Installation failed."
             }
+    }
 
     private companion object {
         /** The name a full-install session expects its only APK under. */
